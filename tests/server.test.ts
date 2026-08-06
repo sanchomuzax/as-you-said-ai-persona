@@ -507,7 +507,10 @@ describe('questionnaire versioning', () => {
     })).json().data.id
     const created = await app.inject({
       method: 'POST', url: `/api/questionnaires/${id}/versions`, cookies: cookie,
-      payload: { name: 'Q', questions: [{ text: 'Q1 pontosítva?', options: ['a', 'b', 'c'] }] }
+      payload: {
+        name: 'Q',
+        questions: [{ text: 'Q1 pontosítva?', options: ['a', 'b', 'c'], scaleType: 'single_choice', scaleDirection: 'ascending' }]
+      }
     })
     expect(created.statusCode).toBe(200)
 
@@ -523,7 +526,10 @@ describe('questionnaire versioning', () => {
       method: 'POST', url: '/api/questionnaires', cookies: cookie, payload: { name: 'Q', questions }
     })).json().data.id
     await app.inject({
-      method: 'POST', url: `/api/questionnaires/${id}/versions`, cookies: cookie, payload: { name: 'Q v2', questions }
+      method: 'POST',
+      url: `/api/questionnaires/${id}/versions`,
+      cookies: cookie,
+      payload: { name: 'Q v2', questions: questions.map((q) => ({ ...q, scaleType: 'single_choice', scaleDirection: 'ascending' })) }
     })
     const list = (await app.inject({ method: 'GET', url: '/api/questionnaires', cookies: cookie })).json().data
     expect(list).toHaveLength(1)
@@ -546,7 +552,10 @@ describe('questionnaire versioning', () => {
 
     await app.inject({
       method: 'POST', url: `/api/questionnaires/${questionnaireId}/versions`, cookies: cookie,
-      payload: { name: 'Q', questions: [{ text: 'Teljesen más kérdés?', options: ['x', 'y'] }] }
+      payload: {
+        name: 'Q',
+        questions: [{ text: 'Teljesen más kérdés?', options: ['x', 'y'], scaleType: 'single_choice', scaleDirection: 'ascending' }]
+      }
     })
     await app.inject({
       method: 'POST', url: `/api/personas/${personaId}/versions`, cookies: cookie,
@@ -556,7 +565,7 @@ describe('questionnaire versioning', () => {
     const detail = (await app.inject({ method: 'GET', url: `/api/runs/${runId}`, cookies: cookie })).json().data
     expect(detail.responses[0].question_text).toBe('Q1?')
     // and the run says its inputs have moved on since
-    expect(detail.staleVersions.questionnaire).toBe(true)
+    expect(detail.staleVersions.questionnaire).toEqual({ used: 1, latest: 2 })
     expect(detail.staleVersions.personas).toEqual([{ id: personaId, name: 'P1', version: 1, latestVersion: 2 }])
   })
 })
@@ -594,5 +603,104 @@ describe('provider pinning and provider spread', () => {
     // a run served by two providers is a reproducibility warning
     const detailBefore = (await app.inject({ method: 'GET', url: `/api/runs/${runId}`, cookies: cookie })).json().data
     expect(detailBefore.responses.length).toBeGreaterThan(0)
+  })
+})
+
+describe('version round-trip must not lose experimental settings', () => {
+  it('keeps every question type and scale direction when a version is created', async () => {
+    const created = await app.inject({
+      method: 'POST', url: '/api/questionnaires', cookies: cookie,
+      payload: {
+        name: 'Vegyes',
+        questions: [
+          { text: 'Melyekből?', options: ['a', 'b'], scaleType: 'multi_choice' },
+          { text: 'Milyen gyakran?', options: ['x', 'y'], scaleType: 'frequency', scaleDirection: 'descending' }
+        ]
+      }
+    })
+    const id = created.json().data.id
+    const listed = (await app.inject({ method: 'GET', url: '/api/questionnaires', cookies: cookie })).json().data[0]
+    // the list must expose the settings, otherwise an edit form cannot carry them back
+    expect(listed.questions[0]).toMatchObject({ scaleType: 'multi_choice', scaleDirection: 'ascending' })
+    expect(listed.questions[1]).toMatchObject({ scaleType: 'frequency', scaleDirection: 'descending' })
+
+    const version = await app.inject({
+      method: 'POST', url: `/api/questionnaires/${id}/versions`, cookies: cookie,
+      payload: { name: 'Vegyes', questions: listed.questions }
+    })
+    expect(version.statusCode).toBe(200)
+    const versions = (await app.inject({ method: 'GET', url: `/api/questionnaires/${id}/versions`, cookies: cookie })).json().data
+    expect(versions[1].questions[0]).toMatchObject({ scaleType: 'multi_choice', scaleDirection: 'ascending' })
+    expect(versions[1].questions[1]).toMatchObject({ scaleType: 'frequency', scaleDirection: 'descending' })
+  })
+
+  it('refuses a version whose questions omit the type instead of silently defaulting it', async () => {
+    const id = (await app.inject({
+      method: 'POST', url: '/api/questionnaires', cookies: cookie,
+      payload: { name: 'Q', questions: [{ text: 'Melyekből?', options: ['a', 'b'], scaleType: 'multi_choice' }] }
+    })).json().data.id
+    const res = await app.inject({
+      method: 'POST', url: `/api/questionnaires/${id}/versions`, cookies: cookie,
+      payload: { name: 'Q', questions: [{ text: 'Melyekből?', options: ['a', 'b'] }] }
+    })
+    expect(res.statusCode).toBe(400)
+  })
+
+  it('keeps the rendering style when a persona version omits it', async () => {
+    const projectId = (await app.inject({ method: 'POST', url: '/api/projects', cookies: cookie, payload: { name: 'P' } })).json().data.id
+    const personaId = (await app.inject({
+      method: 'POST', url: '/api/personas', cookies: cookie,
+      payload: { projectId, name: 'A', demographics: {}, renderingStyle: 'natural_language_sentence' }
+    })).json().data.id
+    await app.inject({
+      method: 'POST', url: `/api/personas/${personaId}/versions`, cookies: cookie,
+      payload: { name: 'A', demographics: { kor: '30' } }
+    })
+    const versions = (await app.inject({ method: 'GET', url: `/api/personas/${personaId}/versions`, cookies: cookie })).json().data
+    // inheriting beats defaulting: the rendering style is an experimental variable
+    expect(versions[1].renderingStyle).toBe('natural_language_sentence')
+  })
+})
+
+describe('older versions stay reachable', () => {
+  it('serves a superseded persona by id, flagged as not latest', async () => {
+    const projectId = (await app.inject({ method: 'POST', url: '/api/projects', cookies: cookie, payload: { name: 'P' } })).json().data.id
+    const id = (await app.inject({
+      method: 'POST', url: '/api/personas', cookies: cookie, payload: { projectId, name: 'A', demographics: {} }
+    })).json().data.id
+    await app.inject({ method: 'POST', url: `/api/personas/${id}/versions`, cookies: cookie, payload: { name: 'A', demographics: {} } })
+
+    const res = await app.inject({ method: 'GET', url: `/api/personas/${id}`, cookies: cookie })
+    expect(res.statusCode).toBe(200)
+    expect(res.json().data).toMatchObject({ id, version: 1, isLatest: false })
+  })
+
+  it('serves a superseded questionnaire by id with its own questions', async () => {
+    const id = (await app.inject({
+      method: 'POST', url: '/api/questionnaires', cookies: cookie,
+      payload: { name: 'Q', questions: [{ text: 'Régi?', options: ['a', 'b'], scaleType: 'single_choice' }] }
+    })).json().data.id
+    await app.inject({
+      method: 'POST', url: `/api/questionnaires/${id}/versions`, cookies: cookie,
+      payload: { name: 'Q', questions: [{ text: 'Új?', options: ['a', 'b'], scaleType: 'single_choice', scaleDirection: 'ascending' }] }
+    })
+    const res = await app.inject({ method: 'GET', url: `/api/questionnaires/${id}`, cookies: cookie })
+    expect(res.json().data).toMatchObject({ id, version: 1, isLatest: false })
+    expect(res.json().data.questions[0].text).toBe('Régi?')
+  })
+
+  it('rejects a corrupt lineage instead of creating a second version 1', async () => {
+    const db = createDb(':memory:')
+    db.prepare('INSERT INTO personas (id, name, demographics_json, lineage_id) VALUES (?,?,?,NULL)').run('legacy', 'L', '{}')
+    const server = buildServer({ db, config: testConfig, models: testModels, client: new StubClient() })
+    await server.ready()
+    const c = await login(server)
+    const res = await server.inject({
+      method: 'POST', url: '/api/personas/legacy/versions', cookies: c, payload: { name: 'L', demographics: {} }
+    })
+    expect(res.statusCode).toBe(500)
+    const rows = db.prepare('SELECT COUNT(*) c FROM personas').get() as { c: number }
+    expect(rows.c).toBe(1)
+    await server.close()
   })
 })

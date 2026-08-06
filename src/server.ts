@@ -63,6 +63,40 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
     return row.rotations * row.personas * seeds
   }
 
+  /**
+   * A run always references the exact persona/questionnaire versions that answered.
+   * If those have since been superseded the run stays valid — but the reader must
+   * know they are looking at an earlier state of the design. Computed from indexed
+   * lookups so it can ride along with the frequently polled progress endpoint.
+   */
+  const staleVersionsOf = (
+    runId: string
+  ): {
+    questionnaire: { used: number; latest: number } | null
+    personas: { id: string; name: string; version: number; latestVersion: number }[]
+  } => {
+    const questionnaire = db
+      .prepare(
+        `SELECT used.version AS used,
+                (SELECT MAX(q.version) FROM questionnaires q WHERE q.lineage_id = used.lineage_id) AS latest
+           FROM runs r JOIN questionnaires used ON used.id = r.questionnaire_id
+          WHERE r.id = ?`
+      )
+      .get(runId) as { used: number; latest: number } | undefined
+    const personas = db
+      .prepare(
+        `SELECT used.id, used.name, used.version,
+                (SELECT MAX(v.version) FROM personas v WHERE v.lineage_id = used.lineage_id) AS latestVersion
+           FROM run_personas rp JOIN personas used ON used.id = rp.persona_id
+          WHERE rp.run_id = ?`
+      )
+      .all(runId) as unknown as { id: string; name: string; version: number; latestVersion: number }[]
+    return {
+      questionnaire: questionnaire && questionnaire.latest > questionnaire.used ? questionnaire : null,
+      personas: personas.filter((p) => p.latestVersion > p.version)
+    }
+  }
+
   const runEvaluation = async (runId: string): Promise<{ id: string } > => {
     const run = db.prepare('SELECT * FROM runs WHERE id = ?').get(runId) as
       | { id: string; name: string; config_json: string }
@@ -231,6 +265,19 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
     provenance: z.record(z.unknown()).optional()
   })
 
+  /**
+   * MAX(version) over an empty lineage is NULL, and `null + 1` is 1 in JS — that
+   * would create a SECOND version 1 and corrupt the chain silently. A lineage with
+   * no rows means the data is already broken, so say so instead.
+   */
+  const nextVersionFor = (table: 'personas' | 'questionnaires', lineageId: string): number => {
+    const row = db.prepare(`SELECT MAX(version) v FROM ${table} WHERE lineage_id = ?`).get(lineageId) as {
+      v: number | null
+    }
+    if (row.v === null) throw new Error(`Corrupt lineage: no ${table} rows for lineage_id ${lineageId}`)
+    return row.v + 1
+  }
+
   // Only the newest version of each lineage: older versions stay reachable through
   // the version history, but the working list must not show three "Anna"s.
   const LATEST_PERSONAS = `SELECT p.* FROM personas p
@@ -242,6 +289,20 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
       ? db.prepare(`${LATEST_PERSONAS} AND p.project_id = ? ORDER BY p.created_at DESC`).all(project)
       : db.prepare(`${LATEST_PERSONAS} ORDER BY p.created_at DESC`).all()
     return { success: true, data: (rows as Record<string, unknown>[]).map((r) => ({ ...rowToPersona(r), isLatest: true })) }
+  })
+
+  const isLatestVersion = (table: 'personas' | 'questionnaires', row: Record<string, unknown>): boolean =>
+    (db
+      .prepare(`SELECT MAX(version) v FROM ${table} WHERE lineage_id = ?`)
+      .get(String(row['lineage_id'] ?? row['id'])) as { v: number | null }).v === Number(row['version'])
+
+  // Superseded versions stay addressable: a run points at the exact version that
+  // answered, so a link to it must keep working after an edit.
+  app.get('/api/personas/:id', async (req, reply) => {
+    const { id } = req.params as { id: string }
+    const row = db.prepare('SELECT * FROM personas WHERE id = ?').get(id) as Record<string, unknown> | undefined
+    if (!row) return reply.code(404).send({ success: false, error: 'Persona not found' })
+    return { success: true, data: { ...rowToPersona(row), isLatest: isLatestVersion('personas', row) } }
   })
 
   app.get('/api/personas/:id/versions', async (req, reply) => {
@@ -264,19 +325,23 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
     const { id } = req.params as { id: string }
     const source = db.prepare('SELECT * FROM personas WHERE id = ?').get(id) as Record<string, unknown> | undefined
     if (!source) return reply.code(404).send({ success: false, error: 'Persona not found' })
-    const body = personaSchema.omit({ projectId: true }).safeParse(req.body)
+    const body = personaSchema.omit({ projectId: true, renderingStyle: true })
+      .extend({ renderingStyle: personaSchema.shape.renderingStyle.optional() })
+      .safeParse(req.body)
     if (!body.success) return reply.code(400).send({ success: false, error: body.error.issues[0]?.message })
+    // Rendering style is an experimental variable: an omitted value must inherit
+    // from the source version, never fall back to the schema default.
+    const renderingStyle = body.data.renderingStyle ?? String(source['rendering_style'])
 
     const lineageId = String(source['lineage_id'] ?? source['id'])
-    const nextVersion =
-      (db.prepare('SELECT MAX(version) v FROM personas WHERE lineage_id = ?').get(lineageId) as { v: number }).v + 1
+    const nextVersion = nextVersionFor('personas', lineageId)
     const newId = randomUUID()
     db.prepare(
       `INSERT INTO personas (id, project_id, lineage_id, name, version, demographics_json, biography, rendering_style, provenance_json)
        VALUES (?,?,?,?,?,?,?,?,?)`
     ).run(
       newId, (source['project_id'] as string | null) ?? null, lineageId, body.data.name, nextVersion,
-      JSON.stringify(body.data.demographics), body.data.biography ?? null, body.data.renderingStyle,
+      JSON.stringify(body.data.demographics), body.data.biography ?? null, renderingStyle,
       body.data.provenance ? JSON.stringify(body.data.provenance) : null
     )
     return { success: true, data: { id: newId, version: nextVersion } }
@@ -338,6 +403,8 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
       id: string
       text: string
       options_json: string
+      scale_type: string
+      scale_direction: string
     }[]
     return {
       success: true,
@@ -347,7 +414,15 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
         name: q.name,
         questions: questions
           .filter((x) => x.questionnaire_id === q.id)
-          .map((x) => ({ id: x.id, text: x.text, options: JSON.parse(x.options_json) as string[] }))
+          .map((x) => ({
+            id: x.id,
+            text: x.text,
+            options: JSON.parse(x.options_json) as string[],
+            // carried so an edit can round-trip them: dropping scaleType would
+            // silently re-ask a multi-select question as a sum-to-1 distribution
+            scaleType: x.scale_type,
+            scaleDirection: x.scale_direction
+          }))
       }))
     }
   })
@@ -358,7 +433,32 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
       text: string
       options_json: string
       scale_type: string
-    }[]).map((x) => ({ id: x.id, text: x.text, options: JSON.parse(x.options_json) as string[], scaleType: x.scale_type }))
+      scale_direction: string
+    }[]).map((x) => ({
+      id: x.id,
+      text: x.text,
+      options: JSON.parse(x.options_json) as string[],
+      scaleType: x.scale_type,
+      scaleDirection: x.scale_direction
+    }))
+
+  app.get('/api/questionnaires/:id', async (req, reply) => {
+    const { id } = req.params as { id: string }
+    const row = db.prepare('SELECT * FROM questionnaires WHERE id = ?').get(id) as Record<string, unknown> | undefined
+    if (!row) return reply.code(404).send({ success: false, error: 'Questionnaire not found' })
+    return {
+      success: true,
+      data: {
+        id: row['id'],
+        name: row['name'],
+        projectId: row['project_id'],
+        version: row['version'],
+        createdAt: row['created_at'],
+        isLatest: isLatestVersion('questionnaires', row),
+        questions: questionsOf(id)
+      }
+    }
+  })
 
   app.get('/api/questionnaires/:id/versions', async (req, reply) => {
     const { id } = req.params as { id: string }
@@ -384,16 +484,31 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
 
   // Editing a question after a run would make the recorded answers uninterpretable
   // (the answer would refer to a text nobody was asked), so edits append a version.
+  // A new version must carry every question setting explicitly. Defaulting here
+  // would let a form that simply does not know about scale types rewrite a
+  // multi-select question into a sum-to-1 one without anybody noticing.
+  const questionnaireVersionSchema = questionnaireSchema.omit({ projectId: true }).extend({
+    questions: z
+      .array(
+        z.object({
+          text: z.string().min(1),
+          options: z.array(z.string().min(1)).min(2).max(26),
+          scaleType: z.enum(['single_choice', 'multi_choice', 'frequency', 'ordinal', 'categorical']),
+          scaleDirection: z.enum(['ascending', 'descending'])
+        })
+      )
+      .min(1)
+  })
+
   app.post('/api/questionnaires/:id/versions', async (req, reply) => {
     const { id } = req.params as { id: string }
     const source = db.prepare('SELECT * FROM questionnaires WHERE id = ?').get(id) as Record<string, unknown> | undefined
     if (!source) return reply.code(404).send({ success: false, error: 'Questionnaire not found' })
-    const body = questionnaireSchema.omit({ projectId: true }).safeParse(req.body)
+    const body = questionnaireVersionSchema.safeParse(req.body)
     if (!body.success) return reply.code(400).send({ success: false, error: body.error.issues[0]?.message })
 
     const lineageId = String(source['lineage_id'] ?? source['id'])
-    const nextVersion =
-      (db.prepare('SELECT MAX(version) v FROM questionnaires WHERE lineage_id = ?').get(lineageId) as { v: number }).v + 1
+    const nextVersion = nextVersionFor('questionnaires', lineageId)
     const newId = randomUUID()
     db.exec('BEGIN')
     try {
@@ -516,37 +631,7 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
          WHERE res.run_id = ? ORDER BY res.created_at`
       )
       .all(id)
-    // A run always references the exact persona/questionnaire versions that
-    // answered. If those have since been superseded, the run is still valid — but
-    // the reader must know they are looking at an earlier state of the design.
-    const staleQuestionnaire = db
-      .prepare(
-        `SELECT 1 FROM questionnaires newer
-           JOIN questionnaires used ON used.lineage_id = newer.lineage_id
-          WHERE used.id = ? AND newer.version > used.version LIMIT 1`
-      )
-      .get((run as { questionnaire_id: string }).questionnaire_id) !== undefined
-    const stalePersonas = db
-      .prepare(
-        `SELECT used.id, used.name, used.version,
-                (SELECT MAX(v.version) FROM personas v WHERE v.lineage_id = used.lineage_id) AS latestVersion
-           FROM run_personas rp JOIN personas used ON used.id = rp.persona_id
-          WHERE rp.run_id = ?`
-      )
-      .all(id) as unknown as { id: string; name: string; version: number; latestVersion: number }[]
-
-    return {
-      success: true,
-      data: {
-        run,
-        responses,
-        usage: budget.usage(id),
-        staleVersions: {
-          questionnaire: staleQuestionnaire,
-          personas: stalePersonas.filter((p) => p.latestVersion > p.version)
-        }
-      }
-    }
+    return { success: true, data: { run, responses, usage: budget.usage(id), staleVersions: staleVersionsOf(id) } }
   })
 
   // --- Run control ---
@@ -600,6 +685,7 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
       data: {
         status: run.status,
         providers,
+        staleVersions: staleVersionsOf(id),
         totalCells: totalCells(id),
         done: counts.done,
         invalid: counts.invalid,

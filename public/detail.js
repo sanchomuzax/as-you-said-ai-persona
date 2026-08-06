@@ -215,6 +215,9 @@ function renderQuestionnaireDetail(questionnaire, project, versions) {
 
 /** Version history with a per-version diff, so an edit is auditable, not just visible. */
 function renderVersionHistory(versions) {
+  if (versions === null || versions === undefined) {
+    return '<p class="detail-note detail-note-warning">A verziótörténet nem tölthető be — ez nem jelenti azt, hogy nincs korábbi verzió.</p>';
+  }
   const list = Array.isArray(versions) ? versions : [];
   if (list.length <= 1) return '<p class="detail-note">Egyetlen verzió — még nem szerkesztették.</p>';
 
@@ -223,8 +226,9 @@ function renderVersionHistory(versions) {
       const previous = i > 0 ? list[i - 1] : null;
       const diff = previous ? renderVersionDiff(diffVersions(previous, version)) : '<p class="detail-note">Ez az eredeti verzió.</p>';
       const badge = version.isLatest ? ' <span class="badge badge-kind">legfrissebb</span>' : '';
+      const kind = version.questions ? 'questionnaires' : 'personas';
       return `
-        <div class="version-entry">
+        <div class="version-entry list-item-clickable" data-entity="${kind}" data-entity-id="${escapeHtml(version.id)}" role="button" tabindex="0">
           <div class="version-entry-title">v${escapeHtml(version.version)}${badge}
             <span class="version-entry-date">${escapeHtml(formatDateTime(version.createdAt))}</span>
           </div>
@@ -256,6 +260,14 @@ function personaVersionForm(persona) {
       <div class="form-group">
         <label for="personaVersionProvenance">Provenance / forrás (kulcs: érték, egy sorban)</label>
         <textarea id="personaVersionProvenance" rows="3">${escapeHtml(provenance)}</textarea>
+        <span class="detail-note">Üresen hagyva törli a rögzített forrást.</span>
+      </div>
+      <div class="form-group">
+        <label for="personaVersionStyle" title="${escapeHtml(DETAIL_TOOLTIPS.renderingStyle)}">Renderelési stílus</label>
+        <select id="personaVersionStyle">
+          <option value="bulleted_profile"${persona.renderingStyle === 'bulleted_profile' ? ' selected' : ''}>Felsorolás profil</option>
+          <option value="natural_language_sentence"${persona.renderingStyle === 'natural_language_sentence' ? ' selected' : ''}>Természetes nyelv</option>
+        </select>
       </div>
       <div class="detail-edit-actions">
         <button type="submit" class="btn btn-primary btn-sm">Új verzió mentése</button>
@@ -268,9 +280,7 @@ function personaVersionForm(persona) {
 }
 
 function questionnaireVersionForm(questionnaire) {
-  const text = (questionnaire.questions || [])
-    .map((q) => [q.text].concat((q.options || []).map((o) => '- ' + o)).join('\n'))
-    .join('\n\n');
+  const text = questionsToText(questionnaire.questions);
   return `
     <form class="detail-edit-form" id="questionnaireVersionForm" data-questionnaire-id="${escapeHtml(questionnaire.id)}" style="display: none;">
       <div class="form-group">
@@ -278,7 +288,7 @@ function questionnaireVersionForm(questionnaire) {
         <input type="text" id="questionnaireVersionName" value="${escapeHtml(questionnaire.name)}" required>
       </div>
       <div class="form-group">
-        <label for="questionnaireVersionText">Kérdések (üres sor választ el)</label>
+        <label for="questionnaireVersionText" title="A kérdés végén szögletes zárójelben a kérdés típusa áll (pl. [multi_choice]). Ez dönti el, hogyan kérdezzük meg: többválaszosnál opciónkénti független valószínűséget kérünk. Ha törlöd, a mentés hibát jelez — típus nélkül nem tippelünk.">Kérdések (üres sor választ el; a típus a kérdés végén, szögletes zárójelben)</label>
         <textarea id="questionnaireVersionText" rows="12">${escapeHtml(text)}</textarea>
       </div>
       <div class="detail-edit-actions">

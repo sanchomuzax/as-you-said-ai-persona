@@ -81,6 +81,10 @@ async function refreshRunDetailHeader(runId) {
       progress = state.runProgress[runId] || {};
     }
     renderRunDetailHeader(run, progress);
+    // The notice lives in the header, not in a sub-tab: a reader who only opens the
+    // overview would otherwise never learn the run refers to superseded versions.
+    const staleEl = document.getElementById('runStaleVersions');
+    if (staleEl) staleEl.innerHTML = renderStaleVersionNotice(progress.staleVersions);
   } catch (err) {
     // ignore transient errors
   }
@@ -240,7 +244,7 @@ function answerText(response) {
 function renderStaleVersionNotice(stale) {
   if (!stale) return '';
   const parts = [];
-  if (stale.questionnaire) parts.push('a kérdőívnek azóta újabb verziója készült');
+  if (stale.questionnaire) parts.push(`a kérdőív: v${stale.questionnaire.used} → azóta v${stale.questionnaire.latest}`);
   (stale.personas || []).forEach(p => {
     parts.push(`${p.name}: v${p.version} → azóta v${p.latestVersion}`);
   });
@@ -254,8 +258,7 @@ async function loadResponsesTab(runId) {
   try {
     const runData = await apiCall('GET', '/api/runs/' + runId);
     const responses = runData.responses || [];
-    const staleNotice = document.getElementById('runStaleVersions');
-    if (staleNotice) staleNotice.innerHTML = renderStaleVersionNotice(runData.staleVersions);
+
 
     if (responses.length === 0) {
       tbody.innerHTML = '<tr><td colspan="7" class="placeholder">Nincs válasz.</td></tr>';

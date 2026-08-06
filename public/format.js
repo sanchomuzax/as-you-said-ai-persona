@@ -63,3 +63,15 @@ function answerLabel(parsedAnswer, options, isMultiChoice) {
   });
   return labels.join(' + ');
 }
+
+/** The inverse of the marker parsing above, used to prefill the edit form. */
+function questionsToText(questions) {
+  return (questions || [])
+    .map(q => {
+      const type = q.scaleType || 'categorical';
+      const direction = q.scaleDirection && q.scaleDirection !== 'ascending' ? ', ' + q.scaleDirection : '';
+      const header = q.text + ' [' + type + direction + ']';
+      return [header].concat((q.options || []).map(o => '- ' + o)).join('\n');
+    })
+    .join('\n\n');
+}

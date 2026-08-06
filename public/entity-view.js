@@ -10,9 +10,13 @@ const ENTITY_KIND_LABELS = {
 
 /** Loads the entity fresh from the API: a detail view may be opened straight from a URL. */
 async function fetchEntity(kind, id) {
-  const path = { projects: '/api/projects', personas: '/api/personas', questionnaires: '/api/questionnaires' }[kind];
-  if (!path) return null;
-  const items = await apiCall('GET', path);
+  // Personas and questionnaires have a by-id endpoint that also serves superseded
+  // versions; the list endpoint returns latest-only, so a link to an older version
+  // would otherwise report that an existing row does not exist.
+  if (kind === 'personas' || kind === 'questionnaires') {
+    return await apiCall('GET', `/api/${kind}/${encodeURIComponent(id)}`);
+  }
+  const items = await apiCall('GET', '/api/projects');
   return (items || []).find(item => item.id === id) || null;
 }
 
@@ -46,6 +50,7 @@ async function openEntityDetail(kind, id, updateHash) {
     }
     const body = await buildEntityDetailBody(kind, entity);
     if (isStale()) return;
+    state.currentEntityData = entity;
     titleEl.textContent = entity.name || '';
     bodyEl.innerHTML = body;
     titleEl.focus(); // move focus out of the now-hidden list for keyboard users
@@ -88,21 +93,47 @@ async function loadVersions(kind, id) {
   try {
     return await apiCall('GET', `/api/${kind}/${encodeURIComponent(id)}/versions`);
   } catch {
-    return [];
+    // null, not []: an empty list would read as "never edited", which is a claim
+    // we cannot make when the request failed.
+    return null;
   }
+}
+
+/**
+ * The form renders values as text, so an untouched number would come back as a
+ * string and quietly change the stored record. Where the text still matches the
+ * original, the original (typed) value is kept.
+ */
+function keepTypedValues(parsed, original) {
+  const source = original || {};
+  return Object.fromEntries(
+    Object.entries(parsed).map(([key, value]) =>
+      key in source && String(source[key]) === value ? [key, source[key]] : [key, value]
+    )
+  );
 }
 
 async function saveNewVersion(kind, form) {
   const errorEl = document.getElementById(kind === 'personas' ? 'personaVersionError' : 'questionnaireVersionError');
   errorEl.textContent = '';
+  const source = state.currentEntityData || {};
   try {
     const body =
       kind === 'personas'
         ? {
             name: document.getElementById('personaVersionName').value,
-            demographics: parseDemographics(document.getElementById('personaVersionDemographics').value),
+            demographics: keepTypedValues(
+              parseDemographics(document.getElementById('personaVersionDemographics').value),
+              source.demographics
+            ),
             biography: document.getElementById('personaVersionBiography').value || undefined,
-            provenance: nonEmptyRecord(parseDemographics(document.getElementById('personaVersionProvenance').value))
+            renderingStyle: document.getElementById('personaVersionStyle').value,
+            provenance: nonEmptyRecord(
+              keepTypedValues(
+                parseDemographics(document.getElementById('personaVersionProvenance').value),
+                source.provenance
+              )
+            )
           }
         : {
             name: document.getElementById('questionnaireVersionName').value,

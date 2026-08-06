@@ -31,8 +31,15 @@ function migrate(db: DatabaseSync): void {
   if (!questionnaireCols.some((c) => c.name === 'lineage_id')) {
     db.exec('ALTER TABLE questionnaires ADD COLUMN lineage_id TEXT')
   }
+  // Only touches rows that need it: this runs at every boot, possibly while a run
+  // is executing, and an unconditional UPDATE would take a write lock for nothing.
   db.exec('UPDATE personas SET lineage_id = id WHERE lineage_id IS NULL')
   db.exec('UPDATE questionnaires SET lineage_id = id WHERE lineage_id IS NULL')
+  // One version number per lineage, enforced by the schema rather than by every
+  // query site: a duplicate version would make two rows "latest" at once.
+  db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_personas_lineage_version ON personas(lineage_id, version)')
+  db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_questionnaires_lineage_version ON questionnaires(lineage_id, version)')
+  db.exec('CREATE INDEX IF NOT EXISTS idx_questions_questionnaire ON questions(questionnaire_id)')
   // Left NULL for existing rows on purpose: their elicitation mode is unknown
   // (and wrong for multi-select questions), which the UI has to be able to say.
   const responseCols = db.prepare('PRAGMA table_info(responses)').all() as unknown as { name: string }[]

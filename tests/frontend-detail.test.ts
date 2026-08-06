@@ -5,7 +5,7 @@ const { renderProjectDetail, renderPersonaDetail, renderQuestionnaireDetail } = 
   renderProjectDetail: (p: Record<string, unknown>, ctx: Record<string, unknown[]>) => string
   renderPersonaDetail: (p: Record<string, unknown>, project?: Record<string, unknown> | null) => string
   renderQuestionnaireDetail: (q: Record<string, unknown>, project?: Record<string, unknown> | null) => string
-}>(['format.js', 'metrics.js', 'detail.js'], '{ renderProjectDetail, renderPersonaDetail, renderQuestionnaireDetail }')
+}>(['format.js', 'metrics.js', 'version-diff.js', 'detail.js'], '{ renderProjectDetail, renderPersonaDetail, renderQuestionnaireDetail }')
 
 describe('renderPersonaDetail (Persona Provenance Card)', () => {
   const persona = {
