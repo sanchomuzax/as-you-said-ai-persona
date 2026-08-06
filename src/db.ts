@@ -24,6 +24,15 @@ function migrate(db: DatabaseSync): void {
   if (!questionnaireCols.some((c) => c.name === 'project_id')) {
     db.exec('ALTER TABLE questionnaires ADD COLUMN project_id TEXT REFERENCES projects(id)')
   }
+  // Existing rows are each their own lineage root: they were the only version.
+  if (!personaCols.some((c) => c.name === 'lineage_id')) {
+    db.exec('ALTER TABLE personas ADD COLUMN lineage_id TEXT')
+  }
+  if (!questionnaireCols.some((c) => c.name === 'lineage_id')) {
+    db.exec('ALTER TABLE questionnaires ADD COLUMN lineage_id TEXT')
+  }
+  db.exec('UPDATE personas SET lineage_id = id WHERE lineage_id IS NULL')
+  db.exec('UPDATE questionnaires SET lineage_id = id WHERE lineage_id IS NULL')
   // Left NULL for existing rows on purpose: their elicitation mode is unknown
   // (and wrong for multi-select questions), which the UI has to be able to say.
   const responseCols = db.prepare('PRAGMA table_info(responses)').all() as unknown as { name: string }[]
@@ -63,9 +72,12 @@ CREATE TABLE IF NOT EXISTS projects (
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+-- Personas are immutable snapshots: an edit inserts a NEW row sharing the
+-- lineage_id, so a finished run still points at the exact persona that answered.
 CREATE TABLE IF NOT EXISTS personas (
   id TEXT PRIMARY KEY,
   project_id TEXT REFERENCES projects(id),
+  lineage_id TEXT,
   name TEXT NOT NULL,
   version INTEGER NOT NULL DEFAULT 1,
   demographics_json TEXT NOT NULL,
@@ -75,9 +87,12 @@ CREATE TABLE IF NOT EXISTS personas (
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+-- Same versioning rule as personas: editing a question after a run would make
+-- the recorded answers uninterpretable, so edits create a new version.
 CREATE TABLE IF NOT EXISTS questionnaires (
   id TEXT PRIMARY KEY,
   project_id TEXT REFERENCES projects(id),
+  lineage_id TEXT,
   name TEXT NOT NULL,
   version INTEGER NOT NULL DEFAULT 1,
   created_at TEXT NOT NULL DEFAULT (datetime('now'))

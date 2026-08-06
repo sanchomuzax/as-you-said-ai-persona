@@ -226,12 +226,55 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
     provenance: z.record(z.unknown()).optional()
   })
 
+  // Only the newest version of each lineage: older versions stay reachable through
+  // the version history, but the working list must not show three "Anna"s.
+  const LATEST_PERSONAS = `SELECT p.* FROM personas p
+     WHERE p.version = (SELECT MAX(p2.version) FROM personas p2 WHERE p2.lineage_id = p.lineage_id)`
+
   app.get('/api/personas', async (req) => {
     const { project } = req.query as { project?: string }
     const rows = project
-      ? db.prepare('SELECT * FROM personas WHERE project_id = ? ORDER BY created_at DESC').all(project)
-      : db.prepare('SELECT * FROM personas ORDER BY created_at DESC').all()
-    return { success: true, data: (rows as Record<string, unknown>[]).map(rowToPersona) }
+      ? db.prepare(`${LATEST_PERSONAS} AND p.project_id = ? ORDER BY p.created_at DESC`).all(project)
+      : db.prepare(`${LATEST_PERSONAS} ORDER BY p.created_at DESC`).all()
+    return { success: true, data: (rows as Record<string, unknown>[]).map((r) => ({ ...rowToPersona(r), isLatest: true })) }
+  })
+
+  app.get('/api/personas/:id/versions', async (req, reply) => {
+    const { id } = req.params as { id: string }
+    const persona = db.prepare('SELECT lineage_id FROM personas WHERE id = ?').get(id) as { lineage_id: string } | undefined
+    if (!persona) return reply.code(404).send({ success: false, error: 'Persona not found' })
+    const rows = db
+      .prepare('SELECT * FROM personas WHERE lineage_id = ? ORDER BY version')
+      .all(persona.lineage_id) as unknown as Record<string, unknown>[]
+    const latest = Math.max(...rows.map((r) => Number(r['version'])))
+    return {
+      success: true,
+      data: rows.map((r) => ({ ...rowToPersona(r), isLatest: Number(r['version']) === latest }))
+    }
+  })
+
+  // Editing a persona in place would retroactively change WHO answered a finished
+  // run, so an edit appends a new version and leaves every earlier one untouched.
+  app.post('/api/personas/:id/versions', async (req, reply) => {
+    const { id } = req.params as { id: string }
+    const source = db.prepare('SELECT * FROM personas WHERE id = ?').get(id) as Record<string, unknown> | undefined
+    if (!source) return reply.code(404).send({ success: false, error: 'Persona not found' })
+    const body = personaSchema.omit({ projectId: true }).safeParse(req.body)
+    if (!body.success) return reply.code(400).send({ success: false, error: body.error.issues[0]?.message })
+
+    const lineageId = String(source['lineage_id'] ?? source['id'])
+    const nextVersion =
+      (db.prepare('SELECT MAX(version) v FROM personas WHERE lineage_id = ?').get(lineageId) as { v: number }).v + 1
+    const newId = randomUUID()
+    db.prepare(
+      `INSERT INTO personas (id, project_id, lineage_id, name, version, demographics_json, biography, rendering_style, provenance_json)
+       VALUES (?,?,?,?,?,?,?,?,?)`
+    ).run(
+      newId, (source['project_id'] as string | null) ?? null, lineageId, body.data.name, nextVersion,
+      JSON.stringify(body.data.demographics), body.data.biography ?? null, body.data.renderingStyle,
+      body.data.provenance ? JSON.stringify(body.data.provenance) : null
+    )
+    return { success: true, data: { id: newId, version: nextVersion } }
   })
 
   app.post('/api/personas', async (req, reply) => {
@@ -241,10 +284,11 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
     if (!project) return reply.code(400).send({ success: false, error: 'Unknown project' })
     const id = randomUUID()
     db.prepare(
-      'INSERT INTO personas (id, project_id, name, demographics_json, biography, rendering_style, provenance_json) VALUES (?,?,?,?,?,?,?)'
+      'INSERT INTO personas (id, project_id, lineage_id, name, demographics_json, biography, rendering_style, provenance_json) VALUES (?,?,?,?,?,?,?,?)'
     ).run(
       id,
       body.data.projectId,
+      id, // a new persona is the root of its own lineage
       body.data.name,
       JSON.stringify(body.data.demographics),
       body.data.biography ?? null,
@@ -272,11 +316,14 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
       .min(1)
   })
 
+  const LATEST_QUESTIONNAIRES = `SELECT q.* FROM questionnaires q
+     WHERE q.version = (SELECT MAX(q2.version) FROM questionnaires q2 WHERE q2.lineage_id = q.lineage_id)`
+
   app.get('/api/questionnaires', async (req) => {
     const { project } = req.query as { project?: string }
     const qs = (project
-      ? db.prepare('SELECT * FROM questionnaires WHERE project_id = ? OR project_id IS NULL ORDER BY created_at DESC').all(project)
-      : db.prepare('SELECT * FROM questionnaires ORDER BY created_at DESC').all()) as unknown as {
+      ? db.prepare(`${LATEST_QUESTIONNAIRES} AND (q.project_id = ? OR q.project_id IS NULL) ORDER BY q.created_at DESC`).all(project)
+      : db.prepare(`${LATEST_QUESTIONNAIRES} ORDER BY q.created_at DESC`).all()) as unknown as {
       id: string
       name: string
       project_id: string | null
@@ -300,6 +347,67 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
     }
   })
 
+  const questionsOf = (questionnaireId: string): { id: string; text: string; options: string[]; scaleType: string }[] =>
+    (db.prepare('SELECT * FROM questions WHERE questionnaire_id = ? ORDER BY ord').all(questionnaireId) as unknown as {
+      id: string
+      text: string
+      options_json: string
+      scale_type: string
+    }[]).map((x) => ({ id: x.id, text: x.text, options: JSON.parse(x.options_json) as string[], scaleType: x.scale_type }))
+
+  app.get('/api/questionnaires/:id/versions', async (req, reply) => {
+    const { id } = req.params as { id: string }
+    const row = db.prepare('SELECT lineage_id FROM questionnaires WHERE id = ?').get(id) as { lineage_id: string } | undefined
+    if (!row) return reply.code(404).send({ success: false, error: 'Questionnaire not found' })
+    const versions = db
+      .prepare('SELECT * FROM questionnaires WHERE lineage_id = ? ORDER BY version')
+      .all(row.lineage_id) as unknown as { id: string; name: string; version: number; project_id: string | null; created_at: string }[]
+    const latest = Math.max(...versions.map((v) => v.version))
+    return {
+      success: true,
+      data: versions.map((v) => ({
+        id: v.id,
+        name: v.name,
+        version: v.version,
+        projectId: v.project_id,
+        createdAt: v.created_at,
+        isLatest: v.version === latest,
+        questions: questionsOf(v.id)
+      }))
+    }
+  })
+
+  // Editing a question after a run would make the recorded answers uninterpretable
+  // (the answer would refer to a text nobody was asked), so edits append a version.
+  app.post('/api/questionnaires/:id/versions', async (req, reply) => {
+    const { id } = req.params as { id: string }
+    const source = db.prepare('SELECT * FROM questionnaires WHERE id = ?').get(id) as Record<string, unknown> | undefined
+    if (!source) return reply.code(404).send({ success: false, error: 'Questionnaire not found' })
+    const body = questionnaireSchema.omit({ projectId: true }).safeParse(req.body)
+    if (!body.success) return reply.code(400).send({ success: false, error: body.error.issues[0]?.message })
+
+    const lineageId = String(source['lineage_id'] ?? source['id'])
+    const nextVersion =
+      (db.prepare('SELECT MAX(version) v FROM questionnaires WHERE lineage_id = ?').get(lineageId) as { v: number }).v + 1
+    const newId = randomUUID()
+    db.exec('BEGIN')
+    try {
+      db.prepare('INSERT INTO questionnaires (id, project_id, lineage_id, name, version) VALUES (?,?,?,?,?)').run(
+        newId, (source['project_id'] as string | null) ?? null, lineageId, body.data.name, nextVersion
+      )
+      body.data.questions.forEach((q, ord) => {
+        db.prepare(
+          'INSERT INTO questions (id, questionnaire_id, ord, text, scale_type, options_json, scale_direction) VALUES (?,?,?,?,?,?,?)'
+        ).run(randomUUID(), newId, ord, q.text, q.scaleType, JSON.stringify(q.options), q.scaleDirection)
+      })
+      db.exec('COMMIT')
+    } catch (error) {
+      db.exec('ROLLBACK')
+      throw error
+    }
+    return { success: true, data: { id: newId, version: nextVersion } }
+  })
+
   app.post('/api/questionnaires', async (req, reply) => {
     const body = questionnaireSchema.safeParse(req.body)
     if (!body.success) return reply.code(400).send({ success: false, error: body.error.issues[0]?.message })
@@ -310,7 +418,9 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
     }
     db.exec('BEGIN')
     try {
-      db.prepare('INSERT INTO questionnaires (id, project_id, name) VALUES (?,?,?)').run(id, body.data.projectId ?? null, body.data.name)
+      db.prepare('INSERT INTO questionnaires (id, project_id, lineage_id, name) VALUES (?,?,?,?)').run(
+        id, body.data.projectId ?? null, id, body.data.name
+      )
       body.data.questions.forEach((q, ord) => {
         db.prepare(
           'INSERT INTO questions (id, questionnaire_id, ord, text, scale_type, options_json, scale_direction) VALUES (?,?,?,?,?,?,?)'
@@ -397,7 +507,37 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
          WHERE res.run_id = ? ORDER BY res.created_at`
       )
       .all(id)
-    return { success: true, data: { run, responses, usage: budget.usage(id) } }
+    // A run always references the exact persona/questionnaire versions that
+    // answered. If those have since been superseded, the run is still valid — but
+    // the reader must know they are looking at an earlier state of the design.
+    const staleQuestionnaire = db
+      .prepare(
+        `SELECT 1 FROM questionnaires newer
+           JOIN questionnaires used ON used.lineage_id = newer.lineage_id
+          WHERE used.id = ? AND newer.version > used.version LIMIT 1`
+      )
+      .get((run as { questionnaire_id: string }).questionnaire_id) !== undefined
+    const stalePersonas = db
+      .prepare(
+        `SELECT used.id, used.name, used.version,
+                (SELECT MAX(v.version) FROM personas v WHERE v.lineage_id = used.lineage_id) AS latestVersion
+           FROM run_personas rp JOIN personas used ON used.id = rp.persona_id
+          WHERE rp.run_id = ?`
+      )
+      .all(id) as unknown as { id: string; name: string; version: number; latestVersion: number }[]
+
+    return {
+      success: true,
+      data: {
+        run,
+        responses,
+        usage: budget.usage(id),
+        staleVersions: {
+          questionnaire: staleQuestionnaire,
+          personas: stalePersonas.filter((p) => p.latestVersion > p.version)
+        }
+      }
+    }
   })
 
   // --- Run control ---
@@ -537,6 +677,8 @@ function rowToPersona(r: Record<string, unknown>): Record<string, unknown> {
     id: r['id'],
     projectId: r['project_id'],
     name: r['name'],
+    lineageId: r['lineage_id'],
+    version: r['version'],
     demographics: JSON.parse(String(r['demographics_json'])),
     biography: r['biography'],
     renderingStyle: r['rendering_style'],

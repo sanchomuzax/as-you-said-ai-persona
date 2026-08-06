@@ -12,6 +12,8 @@ const DETAIL_TOOLTIPS = {
   options:
     'A kérdés válaszopciói eredeti sorrendben. A futtatás során az opciók sorrendjét ciklikusan rotáljuk (balanced permutation), hogy a sorrendi torzítás mérhető legyen.',
   questionCount: 'A kérdőív kérdéseinek száma. Egy futtatás cellaszáma: kérdésenkénti opciószám × perszónák × seedek.',
+  versions:
+    'A perszónák és kérdőívek megváltoztathatatlan pillanatképek: a szerkesztés ÚJ verziót hoz létre, a régit érintetlenül hagyja. Egy lefutott kutatás mindig arra a verzióra hivatkozik, amelyik ténylegesen válaszolt — enélkül visszamenőleg megváltozna, „ki" válaszolt.',
   projectRuns:
     'A projekt SAJÁT kérdőívein indított futtatások. A globális (projekthez nem kötött) kérdőíven indított futtatások itt nem jelennek meg — azokat a Futtatások fülön találod.'
 };
@@ -145,10 +147,11 @@ const RENDERING_STYLE_LABELS = {
   natural_language_sentence: 'Természetes nyelv'
 };
 
-function renderPersonaDetail(persona, project) {
+function renderPersonaDetail(persona, project, versions) {
   const base = `
     <div class="detail-grid">
       ${detailField('Név', persona.name)}
+      ${detailField('Verzió', 'v' + (persona.version || 1), DETAIL_TOOLTIPS.versions)}
       ${detailField('Projekt', project ? project.name : '—')}
       ${detailField('Renderelési stílus', RENDERING_STYLE_LABELS[persona.renderingStyle] || persona.renderingStyle, DETAIL_TOOLTIPS.renderingStyle)}
       ${detailField('Létrehozva', formatDateTime(persona.createdAt))}
@@ -171,15 +174,17 @@ function renderPersonaDetail(persona, project) {
     detailSection('Alapadatok', base) +
     detailSection('Demográfia', detailKeyValues(persona.demographics, 'Nincs demográfiai adat.'), DETAIL_TOOLTIPS.demographics) +
     detailSection('Életrajz', biography) +
-    detailSection('Provenance (forrás)', provenance, DETAIL_TOOLTIPS.provenance)
+    detailSection('Provenance (forrás)', provenance, DETAIL_TOOLTIPS.provenance) +
+    detailSection('Verziók', renderVersionHistory(versions) + personaVersionForm(persona), DETAIL_TOOLTIPS.versions)
   );
 }
 
-function renderQuestionnaireDetail(questionnaire, project) {
+function renderQuestionnaireDetail(questionnaire, project, versions) {
   const questions = questionnaire.questions || [];
   const meta = `
     <div class="detail-grid">
       ${detailField('Név', questionnaire.name)}
+      ${detailField('Verzió', 'v' + (questionnaire.version || 1), DETAIL_TOOLTIPS.versions)}
       ${detailField('Projekt', project ? project.name : '(globális kérdőív)')}
       ${detailField('Kérdések száma', questions.length + ' kérdés', DETAIL_TOOLTIPS.questionCount)}
       ${detailField('Azonosító', questionnaire.id)}
@@ -201,5 +206,87 @@ function renderQuestionnaireDetail(questionnaire, project) {
         .join('')
     : '<p class="detail-note">Nincs kérdés ebben a kérdőívben.</p>';
 
-  return detailSection('Kérdőív adatai', meta) + detailSection('Kérdések', body);
+  return (
+    detailSection('Kérdőív adatai', meta) +
+    detailSection('Kérdések', body) +
+    detailSection('Verziók', renderVersionHistory(versions) + questionnaireVersionForm(questionnaire), DETAIL_TOOLTIPS.versions)
+  );
+}
+
+/** Version history with a per-version diff, so an edit is auditable, not just visible. */
+function renderVersionHistory(versions) {
+  const list = Array.isArray(versions) ? versions : [];
+  if (list.length <= 1) return '<p class="detail-note">Egyetlen verzió — még nem szerkesztették.</p>';
+
+  return list
+    .map((version, i) => {
+      const previous = i > 0 ? list[i - 1] : null;
+      const diff = previous ? renderVersionDiff(diffVersions(previous, version)) : '<p class="detail-note">Ez az eredeti verzió.</p>';
+      const badge = version.isLatest ? ' <span class="badge badge-kind">legfrissebb</span>' : '';
+      return `
+        <div class="version-entry">
+          <div class="version-entry-title">v${escapeHtml(version.version)}${badge}
+            <span class="version-entry-date">${escapeHtml(formatDateTime(version.createdAt))}</span>
+          </div>
+          ${diff}
+        </div>
+      `;
+    })
+    .reverse()
+    .join('');
+}
+
+function personaVersionForm(persona) {
+  const demographics = Object.entries(persona.demographics || {}).map(([k, v]) => `${k}: ${v}`).join('\n');
+  const provenance = Object.entries(persona.provenance || {}).map(([k, v]) => `${k}: ${v}`).join('\n');
+  return `
+    <form class="detail-edit-form" id="personaVersionForm" data-persona-id="${escapeHtml(persona.id)}" style="display: none;">
+      <div class="form-group">
+        <label for="personaVersionName">Név *</label>
+        <input type="text" id="personaVersionName" value="${escapeHtml(persona.name)}" required>
+      </div>
+      <div class="form-group">
+        <label for="personaVersionDemographics">Demográfia (kulcs: érték, egy sorban)</label>
+        <textarea id="personaVersionDemographics" rows="6">${escapeHtml(demographics)}</textarea>
+      </div>
+      <div class="form-group">
+        <label for="personaVersionBiography">Életrajz</label>
+        <textarea id="personaVersionBiography" rows="4">${escapeHtml(persona.biography || '')}</textarea>
+      </div>
+      <div class="form-group">
+        <label for="personaVersionProvenance">Provenance / forrás (kulcs: érték, egy sorban)</label>
+        <textarea id="personaVersionProvenance" rows="3">${escapeHtml(provenance)}</textarea>
+      </div>
+      <div class="detail-edit-actions">
+        <button type="submit" class="btn btn-primary btn-sm">Új verzió mentése</button>
+        <button type="button" class="btn btn-secondary btn-sm" data-action="cancel-version-edit">Mégse</button>
+        <span class="error-message" id="personaVersionError"></span>
+      </div>
+    </form>
+    <button type="button" class="btn btn-secondary btn-sm" data-action="edit-persona">Szerkesztés (új verzió)</button>
+  `;
+}
+
+function questionnaireVersionForm(questionnaire) {
+  const text = (questionnaire.questions || [])
+    .map((q) => [q.text].concat((q.options || []).map((o) => '- ' + o)).join('\n'))
+    .join('\n\n');
+  return `
+    <form class="detail-edit-form" id="questionnaireVersionForm" data-questionnaire-id="${escapeHtml(questionnaire.id)}" style="display: none;">
+      <div class="form-group">
+        <label for="questionnaireVersionName">Kérdőív neve *</label>
+        <input type="text" id="questionnaireVersionName" value="${escapeHtml(questionnaire.name)}" required>
+      </div>
+      <div class="form-group">
+        <label for="questionnaireVersionText">Kérdések (üres sor választ el)</label>
+        <textarea id="questionnaireVersionText" rows="12">${escapeHtml(text)}</textarea>
+      </div>
+      <div class="detail-edit-actions">
+        <button type="submit" class="btn btn-primary btn-sm">Új verzió mentése</button>
+        <button type="button" class="btn btn-secondary btn-sm" data-action="cancel-version-edit">Mégse</button>
+        <span class="error-message" id="questionnaireVersionError"></span>
+      </div>
+    </form>
+    <button type="button" class="btn btn-secondary btn-sm" data-action="edit-questionnaire">Szerkesztés (új verzió)</button>
+  `;
 }

@@ -232,12 +232,30 @@ function answerText(response) {
   return answerLabel(response.parsed_answer, options, response.elicitation_mode === 'multi_choice');
 }
 
+/**
+ * A run keeps pointing at the exact versions that answered. Saying so matters:
+ * without it, a researcher comparing this run to the current persona would be
+ * comparing two different subjects without noticing.
+ */
+function renderStaleVersionNotice(stale) {
+  if (!stale) return '';
+  const parts = [];
+  if (stale.questionnaire) parts.push('a kérdőívnek azóta újabb verziója készült');
+  (stale.personas || []).forEach(p => {
+    parts.push(`${p.name}: v${p.version} → azóta v${p.latestVersion}`);
+  });
+  if (parts.length === 0) return '';
+  return `<p class="detail-note detail-note-warning">Ez a futtatás egy korábbi állapotra vonatkozik — ${escapeHtml(parts.join('; '))}. A rögzített válaszok az akkori verziókhoz tartoznak, ezért érvényesek maradnak.</p>`;
+}
+
 async function loadResponsesTab(runId) {
   const tbody = document.getElementById('responsesTableBody');
   tbody.innerHTML = '<tr><td colspan="7" class="placeholder">Betöltés...</td></tr>';
   try {
     const runData = await apiCall('GET', '/api/runs/' + runId);
     const responses = runData.responses || [];
+    const staleNotice = document.getElementById('runStaleVersions');
+    if (staleNotice) staleNotice.innerHTML = renderStaleVersionNotice(runData.staleVersions);
 
     if (responses.length === 0) {
       tbody.innerHTML = '<tr><td colspan="7" class="placeholder">Nincs válasz.</td></tr>';

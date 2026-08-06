@@ -74,10 +74,57 @@ async function buildEntityDetailBody(kind, entity) {
       runs: (runs || []).filter(r => ownIds.has(r.questionnaire_id))
     });
   }
-  const project = entity.projectId ? await loadProject(entity.projectId) : null;
+  const [project, versions] = await Promise.all([
+    entity.projectId ? loadProject(entity.projectId) : Promise.resolve(null),
+    loadVersions(kind, entity.id)
+  ]);
   return kind === 'personas'
-    ? renderPersonaDetail(entity, project)
-    : renderQuestionnaireDetail(entity, project);
+    ? renderPersonaDetail(entity, project, versions)
+    : renderQuestionnaireDetail(entity, project, versions);
+}
+
+/** Version history is informative, not essential: a failure must not blank the page. */
+async function loadVersions(kind, id) {
+  try {
+    return await apiCall('GET', `/api/${kind}/${encodeURIComponent(id)}/versions`);
+  } catch {
+    return [];
+  }
+}
+
+async function saveNewVersion(kind, form) {
+  const errorEl = document.getElementById(kind === 'personas' ? 'personaVersionError' : 'questionnaireVersionError');
+  errorEl.textContent = '';
+  try {
+    const body =
+      kind === 'personas'
+        ? {
+            name: document.getElementById('personaVersionName').value,
+            demographics: parseDemographics(document.getElementById('personaVersionDemographics').value),
+            biography: document.getElementById('personaVersionBiography').value || undefined,
+            provenance: nonEmptyRecord(parseDemographics(document.getElementById('personaVersionProvenance').value))
+          }
+        : {
+            name: document.getElementById('questionnaireVersionName').value,
+            questions: parseQuestions(document.getElementById('questionnaireVersionText').value)
+          };
+    const sourceId = kind === 'personas' ? form.dataset.personaId : form.dataset.questionnaireId;
+    const created = await apiCall('POST', `/api/${kind}/${encodeURIComponent(sourceId)}/versions`, body);
+    // The new version is a different row, so the detail view moves with it.
+    await openEntityDetail(kind, created.id, true);
+    await refreshListsFor(kind);
+  } catch (err) {
+    errorEl.textContent = 'Mentés sikertelen: ' + err.message;
+  }
+}
+
+function nonEmptyRecord(record) {
+  return Object.keys(record).length > 0 ? record : undefined;
+}
+
+async function refreshListsFor(kind) {
+  if (kind === 'personas') await reloadPersonasList();
+  else await reloadQuestionnairesList(state.selectedProjectId);
 }
 
 /** Returns the project, refreshing the cached project list if it is not there yet. */
@@ -137,8 +184,15 @@ async function saveProjectEdit(form) {
 async function handleEntityClick(target) {
   const actionBtn = target.closest('button[data-action]');
   if (actionBtn) {
-    if (actionBtn.dataset.action === 'edit-project') toggleProjectEditForm(true);
-    if (actionBtn.dataset.action === 'cancel-project-edit') toggleProjectEditForm(false);
+    const action = actionBtn.dataset.action;
+    if (action === 'edit-project') toggleProjectEditForm(true);
+    if (action === 'cancel-project-edit') toggleProjectEditForm(false);
+    if (action === 'edit-persona') toggleVersionForm('personaVersionForm', 'edit-persona', true);
+    if (action === 'edit-questionnaire') toggleVersionForm('questionnaireVersionForm', 'edit-questionnaire', true);
+    if (action === 'cancel-version-edit') {
+      toggleVersionForm('personaVersionForm', 'edit-persona', false);
+      toggleVersionForm('questionnaireVersionForm', 'edit-questionnaire', false);
+    }
     return;
   }
   const runRow = target.closest('[data-run]:not(button)');
@@ -154,10 +208,19 @@ async function handleEntityClick(target) {
   await openEntityDetail(row.dataset.entity, row.dataset.entityId, true);
 }
 
+function toggleVersionForm(formId, buttonAction, show) {
+  const form = document.getElementById(formId);
+  const button = document.querySelector(`#entityDetailBody [data-action="${buttonAction}"]`);
+  if (!form || !button) return;
+  form.style.display = show ? 'block' : 'none';
+  button.style.display = show ? 'none' : 'inline-block';
+}
+
 document.getElementById('entityDetailBody')?.addEventListener('submit', (e) => {
-  if (e.target.id !== 'projectEditForm') return;
   e.preventDefault();
-  void saveProjectEdit(e.target);
+  if (e.target.id === 'projectEditForm') void saveProjectEdit(e.target);
+  if (e.target.id === 'personaVersionForm') void saveNewVersion('personas', e.target);
+  if (e.target.id === 'questionnaireVersionForm') void saveNewVersion('questionnaires', e.target);
 });
 
 ['projectsList', 'personasList', 'questionnairesList', 'entityDetailBody'].forEach(id => {

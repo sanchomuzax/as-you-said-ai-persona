@@ -428,3 +428,135 @@ describe('evaluation coverage snapshot', () => {
     await server.close()
   })
 })
+
+describe('persona versioning', () => {
+  async function makePersona(name = 'Anna'): Promise<{ projectId: string; personaId: string }> {
+    const projectId = (await app.inject({ method: 'POST', url: '/api/projects', cookies: cookie, payload: { name: 'P' } })).json().data.id
+    const personaId = (await app.inject({
+      method: 'POST', url: '/api/personas', cookies: cookie,
+      payload: { projectId, name, demographics: { kor: '30' }, biography: 'Régi életrajz' }
+    })).json().data.id
+    return { projectId, personaId }
+  }
+
+  it('creates a new version instead of overwriting the persona a run referenced', async () => {
+    const { personaId } = await makePersona()
+    const created = await app.inject({
+      method: 'POST', url: `/api/personas/${personaId}/versions`, cookies: cookie,
+      payload: { name: 'Anna', demographics: { kor: '31' }, biography: 'Új életrajz' }
+    })
+    expect(created.statusCode).toBe(200)
+    const newId = created.json().data.id
+    expect(newId).not.toBe(personaId)
+
+    const original = (await app.inject({ method: 'GET', url: `/api/personas/${personaId}/versions`, cookies: cookie })).json().data
+    expect(original).toHaveLength(2)
+    expect(original[0]).toMatchObject({ id: personaId, version: 1, demographics: { kor: '30' } })
+    expect(original[1]).toMatchObject({ id: newId, version: 2, demographics: { kor: '31' } })
+  })
+
+  it('lists only the latest version of each persona', async () => {
+    const { projectId, personaId } = await makePersona()
+    await app.inject({
+      method: 'POST', url: `/api/personas/${personaId}/versions`, cookies: cookie,
+      payload: { name: 'Anna', demographics: { kor: '31' } }
+    })
+    const list = (await app.inject({ method: 'GET', url: `/api/personas?project=${projectId}`, cookies: cookie })).json().data
+    expect(list).toHaveLength(1)
+    expect(list[0].version).toBe(2)
+    expect(list[0].isLatest).toBe(true)
+  })
+
+  it('keeps the version chain on the same lineage across several edits', async () => {
+    const { personaId } = await makePersona()
+    const v2 = (await app.inject({
+      method: 'POST', url: `/api/personas/${personaId}/versions`, cookies: cookie, payload: { name: 'Anna', demographics: {} }
+    })).json().data.id
+    await app.inject({
+      method: 'POST', url: `/api/personas/${v2}/versions`, cookies: cookie, payload: { name: 'Anna', demographics: {} }
+    })
+    // asking any version of the lineage returns the whole history
+    const fromFirst = (await app.inject({ method: 'GET', url: `/api/personas/${personaId}/versions`, cookies: cookie })).json().data
+    expect(fromFirst.map((p: { version: number }) => p.version)).toEqual([1, 2, 3])
+  })
+
+  it('reports that an older version is no longer the latest', async () => {
+    const { personaId } = await makePersona()
+    await app.inject({
+      method: 'POST', url: `/api/personas/${personaId}/versions`, cookies: cookie, payload: { name: 'Anna', demographics: {} }
+    })
+    const versions = (await app.inject({ method: 'GET', url: `/api/personas/${personaId}/versions`, cookies: cookie })).json().data
+    expect(versions[0].isLatest).toBe(false)
+    expect(versions[1].isLatest).toBe(true)
+  })
+
+  it('rejects a new version of an unknown persona', async () => {
+    const res = await app.inject({
+      method: 'POST', url: '/api/personas/nope/versions', cookies: cookie, payload: { name: 'X', demographics: {} }
+    })
+    expect(res.statusCode).toBe(404)
+  })
+})
+
+describe('questionnaire versioning', () => {
+  const questions = [{ text: 'Q1?', options: ['a', 'b'] }]
+
+  it('creates a new version with its own copy of the questions', async () => {
+    const id = (await app.inject({
+      method: 'POST', url: '/api/questionnaires', cookies: cookie, payload: { name: 'Q', questions }
+    })).json().data.id
+    const created = await app.inject({
+      method: 'POST', url: `/api/questionnaires/${id}/versions`, cookies: cookie,
+      payload: { name: 'Q', questions: [{ text: 'Q1 pontosítva?', options: ['a', 'b', 'c'] }] }
+    })
+    expect(created.statusCode).toBe(200)
+
+    const versions = (await app.inject({ method: 'GET', url: `/api/questionnaires/${id}/versions`, cookies: cookie })).json().data
+    expect(versions).toHaveLength(2)
+    expect(versions[0].questions[0].text).toBe('Q1?')
+    expect(versions[1].questions[0].text).toBe('Q1 pontosítva?')
+    expect(versions[1].version).toBe(2)
+  })
+
+  it('lists only the latest version', async () => {
+    const id = (await app.inject({
+      method: 'POST', url: '/api/questionnaires', cookies: cookie, payload: { name: 'Q', questions }
+    })).json().data.id
+    await app.inject({
+      method: 'POST', url: `/api/questionnaires/${id}/versions`, cookies: cookie, payload: { name: 'Q v2', questions }
+    })
+    const list = (await app.inject({ method: 'GET', url: '/api/questionnaires', cookies: cookie })).json().data
+    expect(list).toHaveLength(1)
+    expect(list[0].name).toBe('Q v2')
+  })
+
+  it('leaves a finished run pointing at the version it actually used', async () => {
+    const projectId = (await app.inject({ method: 'POST', url: '/api/projects', cookies: cookie, payload: { name: 'P' } })).json().data.id
+    const personaId = (await app.inject({
+      method: 'POST', url: '/api/personas', cookies: cookie, payload: { projectId, name: 'P1', demographics: {} }
+    })).json().data.id
+    const questionnaireId = (await app.inject({
+      method: 'POST', url: '/api/questionnaires', cookies: cookie, payload: { name: 'Q', questions }
+    })).json().data.id
+    const runId = (await app.inject({
+      method: 'POST', url: '/api/runs', cookies: cookie,
+      payload: { name: 'R', questionnaireId, personaIds: [personaId], seeds: [0] }
+    })).json().data.id
+    await new Promise((r) => setTimeout(r, 60))
+
+    await app.inject({
+      method: 'POST', url: `/api/questionnaires/${questionnaireId}/versions`, cookies: cookie,
+      payload: { name: 'Q', questions: [{ text: 'Teljesen más kérdés?', options: ['x', 'y'] }] }
+    })
+    await app.inject({
+      method: 'POST', url: `/api/personas/${personaId}/versions`, cookies: cookie,
+      payload: { name: 'P1', demographics: { kor: '99' } }
+    })
+
+    const detail = (await app.inject({ method: 'GET', url: `/api/runs/${runId}`, cookies: cookie })).json().data
+    expect(detail.responses[0].question_text).toBe('Q1?')
+    // and the run says its inputs have moved on since
+    expect(detail.staleVersions.questionnaire).toBe(true)
+    expect(detail.staleVersions.personas).toEqual([{ id: personaId, name: 'P1', version: 1, latestVersion: 2 }])
+  })
+})

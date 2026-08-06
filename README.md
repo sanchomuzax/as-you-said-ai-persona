@@ -23,6 +23,9 @@ recorded with full experimental metadata so runs are reproducible and auditable.
   ```bash
   npx tsx scripts/seed.ts seeds/example-project.json
   ```
+- **Versioned personas and questionnaires**: editing creates a new version instead of
+  overwriting, so a finished run always refers to the subject and wording that actually
+  answered. The detail view shows the version history with a per-version diff.
 - **Detail views**: projects, personas and questionnaires open on click. The persona
   page is a **Persona Provenance Card** — full demographics, biography and the recorded
   source of the demographic anchor core (a missing source is stated, not hidden).

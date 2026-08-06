@@ -29,6 +29,11 @@ narrow hypotheses; conclusions require validation on real human samples.
 - Optional **VoC/RAG grounding** when the research targets an existing population:
   personas backed by vectorized real customer feedback.
 - Every persona is versioned; a run always references an immutable persona snapshot.
+  Editing a persona or a questionnaire inserts a NEW row sharing the `lineage_id`
+  and incrementing `version`; earlier versions are never modified or deleted, so a
+  finished run still points at the exact subject and wording that produced its
+  answers. Lists show the latest version of each lineage; the run detail says when
+  the inputs of that run have since been superseded.
 
 ### 2.2 Elicitation protocol
 
