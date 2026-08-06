@@ -48,6 +48,7 @@ describe('schema migration', () => {
 
     const path = join(mkdtempSync(join(tmpdir(), 'asys-migrate-all-')), 'db.sqlite')
     const before = createDb(path)
+    before.exec('DROP INDEX IF EXISTS idx_responses_cell')
     for (const drop of [
       'ALTER TABLE responses DROP COLUMN elicitation_mode',
       'ALTER TABLE responses DROP COLUMN cached_tokens',
@@ -86,6 +87,7 @@ describe('schema migration', () => {
 
     const path = join(mkdtempSync(join(tmpdir(), 'asys-migrate-')), 'db.sqlite')
     const before = createDb(path)
+    before.exec('DROP INDEX IF EXISTS idx_responses_cell')
     before.exec('ALTER TABLE responses DROP COLUMN elicitation_mode')
     expect(
       (before.prepare('PRAGMA table_info(responses)').all() as unknown as { name: string }[])
@@ -101,5 +103,58 @@ describe('schema migration', () => {
     // idempotent: opening again must not throw
     createDb(path).close()
     after.close()
+  })
+})
+
+describe('cell uniqueness', () => {
+  it('rejects a second row for the same experimental cell', async () => {
+    const { createDb, cellIndexPresent } = await import('../src/db.js')
+    const db = createDb(':memory:')
+    expect(cellIndexPresent(db)).toBe(true)
+    db.prepare('INSERT INTO questionnaires (id, name) VALUES (?,?)').run('q', 'Q')
+    db.prepare('INSERT INTO questions (id, questionnaire_id, ord, text, options_json) VALUES (?,?,0,?,?)').run('qq', 'q', 'Q?', '["a","b"]')
+    db.prepare('INSERT INTO personas (id, name, demographics_json) VALUES (?,?,?)').run('p', 'P', '{}')
+    db.prepare("INSERT INTO runs (id, questionnaire_id, name, config_json) VALUES ('run','q','R','{}')").run()
+    const insert = (id: string): void => {
+      db.prepare(
+        `INSERT OR IGNORE INTO responses (id, run_id, persona_id, question_id, model_requested, temperature, seed,
+           permutation_json, prompt_rendered, raw_response, is_valid, abstained)
+         VALUES (?, 'run','p','qq','m',1,0,'[0,1]','p','r',1,0)`
+      ).run(id)
+    }
+    insert('first')
+    insert('second')
+    const rows = db.prepare("SELECT COUNT(*) c FROM responses WHERE run_id='run'").get() as { c: number }
+    expect(rows.c).toBe(1)
+  })
+
+  it('opens a database that already contains duplicates, without the index', async () => {
+    const { createDb, cellIndexPresent } = await import('../src/db.js')
+    const { mkdtempSync } = await import('node:fs')
+    const { tmpdir } = await import('node:os')
+    const { join } = await import('node:path')
+    const path = join(mkdtempSync(join(tmpdir(), 'asys-dup-')), 'db.sqlite')
+
+    const db = createDb(path)
+    db.exec('DROP INDEX idx_responses_cell')
+    db.prepare('INSERT INTO questionnaires (id, name) VALUES (?,?)').run('q', 'Q')
+    db.prepare('INSERT INTO questions (id, questionnaire_id, ord, text, options_json) VALUES (?,?,0,?,?)').run('qq', 'q', 'Q?', '["a","b"]')
+    db.prepare('INSERT INTO personas (id, name, demographics_json) VALUES (?,?,?)').run('p', 'P', '{}')
+    db.prepare("INSERT INTO runs (id, questionnaire_id, name, config_json) VALUES ('run','q','R','{}')").run()
+    for (const id of ['a', 'b']) {
+      db.prepare(
+        `INSERT INTO responses (id, run_id, persona_id, question_id, model_requested, temperature, seed,
+           permutation_json, prompt_rendered, raw_response, is_valid, abstained)
+         VALUES (?, 'run','p','qq','m',1,0,'[0,1]','p','r',1,0)`
+      ).run(id)
+    }
+    db.close()
+
+    // the duplicates are historical measurements: opening must not fail or delete them
+    const reopened = createDb(path)
+    expect(cellIndexPresent(reopened)).toBe(false)
+    const rows = reopened.prepare('SELECT COUNT(*) c FROM responses').get() as { c: number }
+    expect(rows.c).toBe(2)
+    reopened.close()
   })
 })

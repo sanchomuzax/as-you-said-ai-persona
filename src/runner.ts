@@ -19,6 +19,19 @@ export interface RunConfig {
 /** In-memory control signals; checked between cells. */
 const controls = new Map<string, 'pause' | 'stop'>()
 
+/**
+ * Runs with a live execution loop. Auto-resume at boot, a manual Folytatás and a
+ * second restart all call execute() for the same run; without this every loop
+ * snapshots the finished cells at ITS start and then re-runs what the others are
+ * doing — the teszt-1 run collected 336 duplicated cells that way, and the budget
+ * hard stop leaked because each loop checked it independently.
+ */
+const activeRuns = new Set<string>()
+
+export function isRunning(runId: string): boolean {
+  return activeRuns.has(runId)
+}
+
 export function requestPause(runId: string): void {
   controls.set(runId, 'pause')
 }
@@ -78,6 +91,16 @@ export class SurveyRunner {
   ) {}
 
   async execute(runId: string): Promise<void> {
+    if (activeRuns.has(runId)) return
+    activeRuns.add(runId)
+    try {
+      await this.executeLocked(runId)
+    } finally {
+      activeRuns.delete(runId)
+    }
+  }
+
+  private async executeLocked(runId: string): Promise<void> {
     const run = this.db.prepare('SELECT * FROM runs WHERE id = ?').get(runId) as
       | { id: string; questionnaire_id: string; config_json: string; status: string }
       | undefined
@@ -134,6 +157,9 @@ export class SurveyRunner {
             for (const seed of config.seeds) {
               const control = controls.get(runId)
               if (control) {
+                // Safe now that exactly one loop can be active per run (activeRuns):
+                // with several loops the first one to read the signal used to clear
+                // it and the others kept going.
                 controls.delete(runId)
                 this.setStatus(runId, control === 'stop' ? 'stopped' : 'paused')
                 return
@@ -198,9 +224,9 @@ export class SurveyRunner {
           ? toOptionIndex(parsed.topChoice)
           : null
 
-    this.db
+    const written = this.db
       .prepare(
-        `INSERT INTO responses (
+        `INSERT OR IGNORE INTO responses (
           id, run_id, persona_id, question_id, model_requested, model_version,
           temperature, seed, prompt_style, elicitation_mode, permutation_json, label_style,
           prompt_rendered, raw_response, parsed_distribution_json, parsed_answer,
@@ -217,12 +243,22 @@ export class SurveyRunner {
         result.costUsd, toAmount(result.cacheDiscountUsd),
         result.latencyMs, result.requestId, result.provider ?? null
       )
+    // The tokens were spent either way, so they are always recorded — but a row
+    // that OR IGNORE rejected (a racing loop, or a constraint) must be said out
+    // loud, not left as a run that quietly ends with fewer rows than cells.
     this.budget.record(runId, {
       promptTokens: result.promptTokens,
       completionTokens: result.completionTokens,
       cachedTokens: toCount(result.cachedTokens),
       costUsd: result.costUsd
     })
+    if (written.changes === 0) {
+      runEvents.emit('status', {
+        runId,
+        discardedResponse: { questionId: question.id, personaId, seed, rotation }
+      })
+      return
+    }
     runEvents.emit('response', {
       runId,
       personaId,

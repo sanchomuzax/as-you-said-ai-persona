@@ -58,9 +58,9 @@ describe('computeRunResults', () => {
   })
 
   it('excludes invalid and abstained rows from distributions but counts them', () => {
-    insertResponse({ dist: { '0': 1, '1': 0 } })
-    insertResponse({ dist: null, answer: null, valid: false })
-    insertResponse({ dist: null, answer: null, abstained: true })
+    insertResponse({ dist: { '0': 1, '1': 0 }, seed: 0 })
+    insertResponse({ dist: null, answer: null, valid: false, seed: 1 })
+    insertResponse({ dist: null, answer: null, abstained: true, rotation: [1, 0], seed: 0 })
     const r = computeRunResults(db, runId)
     expect(r.questions[0]!.aggregated[0]).toBeCloseTo(1)
     expect(r.questions[0]!.invalidCount).toBe(1)
@@ -200,6 +200,7 @@ describe('buildEvaluationPrompt — no fabricated numbers', () => {
   it('says there is nothing to evaluate instead of printing zeros', () => {
     const prompt = buildEvaluationPrompt('R', {
       totalResponses: 3,
+      duplicateResponseCount: 0,
       invalidRate: 0,
       abstainRate: 0,
       questions: [
@@ -225,5 +226,70 @@ describe('buildEvaluationPrompt — no fabricated numbers', () => {
     expect(prompt).not.toContain('Aggregált eloszlás')
     expect(prompt).not.toContain('Opciónkénti támogatottság')
     expect(prompt).toContain('3')
+  })
+})
+
+describe('computeRunResults — duplicated cells', () => {
+  // A database recorded before issue #16 was fixed: the unique index cannot exist
+  // there, and the duplicates are kept as the genuine repeated measurements they are.
+  beforeEach(() => {
+    db.exec('DROP INDEX IF EXISTS idx_responses_cell')
+  })
+
+  it('counts a duplicated cell once and reports how many duplicates it found', () => {
+    // the same cell recorded twice (parallel runner loops, issue #16)
+    insertResponse({ dist: { '0': 1, '1': 0 }, rotation: [0, 1], seed: 0 })
+    insertResponse({ dist: { '0': 0, '1': 1 }, rotation: [0, 1], seed: 0 })
+    insertResponse({ dist: { '0': 1, '1': 0 }, rotation: [1, 0], seed: 0 })
+
+    const r = computeRunResults(db, runId)
+    const q = r.questions[0]!
+    // two unique cells, not three: the first recording of a cell wins
+    expect(q.aggregatedResponseCount).toBe(2)
+    expect(q.aggregated[0]).toBeCloseTo(1)
+    expect(r.duplicateResponseCount).toBe(1)
+  })
+
+  it('does not treat a re-elicited cell as a duplicate of its legacy row', () => {
+    // The shape of ALL 336 "duplicate" pairs in the live database: a multi-select
+    // question answered before the elicitation fix (mode NULL) and re-elicited
+    // afterwards. A naive 5-tuple key would call this a duplicate, keep the
+    // wrongly-normalized legacy row and discard the corrected one.
+    const multiQid = randomUUID()
+    const questionnaireId = (db.prepare('SELECT questionnaire_id q FROM runs WHERE id = ?').get(runId) as { q: string }).q
+    db.prepare(
+      'INSERT INTO questions (id, questionnaire_id, ord, text, scale_type, options_json) VALUES (?,?,5,?,?,?)'
+    ).run(multiQid, questionnaireId, 'Melyekből?', 'multi_choice', JSON.stringify(['a', 'b']))
+    const insertPair = (mode: string | null, dist: Record<string, number>): void => {
+      db.prepare(
+        `INSERT INTO responses (id, run_id, persona_id, question_id, model_requested, temperature, seed,
+           permutation_json, prompt_rendered, raw_response, parsed_distribution_json, parsed_answer,
+           is_valid, abstained, elicitation_mode)
+         VALUES (?,?,?,?,'m',1,0,?,'p','r',?,'0',1,0,?)`
+      ).run(randomUUID(), runId, p1, multiQid, JSON.stringify([0, 1]), JSON.stringify(dist), mode)
+    }
+    insertPair(null, { '0': 0.7, '1': 0.3 })
+    insertPair('multi_choice', { '0': 0.9, '1': 0.8 })
+
+    const r = computeRunResults(db, runId)
+    const q = r.questions.find((x) => x.questionId === multiQid)!
+    expect(r.duplicateResponseCount).toBe(0)
+    expect(q.aggregatedResponseCount).toBe(1)
+    expect(q.aggregated[0]).toBeCloseTo(0.9) // the corrected row, not the legacy one
+    expect(q.legacyElicitationCount).toBe(1)
+  })
+
+  it('reports zero duplicates for clean data', () => {
+    insertResponse({ dist: { '0': 1, '1': 0 }, rotation: [0, 1], seed: 0 })
+    insertResponse({ dist: { '0': 1, '1': 0 }, rotation: [0, 1], seed: 1 })
+    expect(computeRunResults(db, runId).duplicateResponseCount).toBe(0)
+  })
+
+  it('does not let a duplicate inflate the stability metrics', () => {
+    // same cell twice with DIFFERENT answers: counting both would fake instability
+    insertResponse({ dist: { '0': 1, '1': 0 }, answer: '0', rotation: [0, 1], seed: 0 })
+    insertResponse({ dist: { '0': 0, '1': 1 }, answer: '1', rotation: [0, 1], seed: 0 })
+    const q = computeRunResults(db, runId).questions[0]!
+    expect(q.positionConsistency).toBe(1)
   })
 })

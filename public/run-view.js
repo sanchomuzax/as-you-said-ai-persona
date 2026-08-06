@@ -203,6 +203,7 @@ async function loadOverviewTab(runId) {
         <span class="stat-chip" title="${escapeHtml(TOOLTIPS.totalResponses)}">Összes válasz: ${formatNumber(results.totalResponses || 0)}</span>
         <span class="stat-chip ${((results.invalidRate || 0) * 100) > 10 ? 'stat-chip-danger' : ''}" title="${escapeHtml(TOOLTIPS.invalidRate)}">Érvénytelen arány: ${formatMetric((results.invalidRate || 0) * 100)}%</span>
         <span class="stat-chip" title="${escapeHtml(TOOLTIPS.abstainRate)}">Tartózkodási arány: ${formatMetric((results.abstainRate || 0) * 100)}%</span>
+        ${renderDuplicateNotice(results)}
       </div>
     `;
 

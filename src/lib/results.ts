@@ -34,9 +34,17 @@ export interface RunResults {
   invalidRate: number
   abstainRate: number
   totalResponses: number
+  /**
+   * Rows that repeat an already-recorded cell (issue #16: parallel runner loops).
+   * They are kept in the append-only log — they are genuine repeated measurements —
+   * but counted once here, or a duplicated cell would weigh twice in the aggregate
+   * and a differing duplicate would fake instability.
+   */
+  duplicateResponseCount: number
 }
 
 interface ResponseRow {
+  id: string
   question_id: string
   elicitation_mode: string | null
   persona_id: string
@@ -63,14 +71,17 @@ export function computeRunResults(db: Db, runId: string): RunResults {
     )
     .all(runId) as unknown as { id: string; text: string; options_json: string; scale_type: string }[]
 
-  const responses = db
+  const allResponses = db
     .prepare(
-      `SELECT res.question_id, res.persona_id, p.name AS persona_name, res.permutation_json,
+      `SELECT res.id, res.question_id, res.persona_id, p.name AS persona_name, res.permutation_json,
               res.seed, res.parsed_distribution_json, res.parsed_answer, res.is_valid, res.abstained,
               res.elicitation_mode
-       FROM responses res JOIN personas p ON p.id = res.persona_id WHERE res.run_id = ?`
+       FROM responses res JOIN personas p ON p.id = res.persona_id WHERE res.run_id = ?
+       ORDER BY res.rowid`
     )
     .all(runId) as unknown as ResponseRow[]
+
+  const { unique: responses, duplicates: duplicateResponseCount } = dedupeCells(allResponses)
 
   const results = questions.map((q) => {
     const options = JSON.parse(q.options_json) as string[]
@@ -79,8 +90,11 @@ export function computeRunResults(db: Db, runId: string): RunResults {
     const parsable = rows.filter((r) => r.is_valid === 1 && r.abstained === 0 && r.parsed_distribution_json)
     // A normalized answer to a multi-select question measures something else
     // entirely, so it cannot be averaged together with independent probabilities.
-    const usable =
-      mode === 'multi_choice' ? parsable.filter((r) => r.elicitation_mode === 'multi_choice') : parsable
+    // Generic on purpose: with a hardcoded multi_choice check, a third mode would
+    // let a stale row survive dedupe and then average into the aggregate.
+    const usable = parsable.filter(
+      (r) => r.elicitation_mode === mode || (r.elicitation_mode === null && mode === 'single_choice')
+    )
     const legacyElicitationCount = parsable.length - usable.length
     const valid = usable
 
@@ -119,9 +133,23 @@ export function computeRunResults(db: Db, runId: string): RunResults {
   return {
     questions: results,
     totalResponses: total,
+    duplicateResponseCount,
     invalidRate: total ? responses.filter((r) => r.is_valid === 0).length / total : 0,
     abstainRate: total ? responses.filter((r) => r.abstained === 1).length / total : 0
   }
+}
+
+/** One row per experimental cell; the first recording of a cell wins. */
+function dedupeCells(rows: ResponseRow[]): { unique: ResponseRow[]; duplicates: number } {
+  const seen = new Set<string>()
+  const unique: ResponseRow[] = []
+  for (const row of rows) {
+    const key = `${row.question_id}|${row.persona_id}|${row.permutation_json}|${row.seed}|${row.elicitation_mode ?? ''}`
+    if (seen.has(key)) continue
+    seen.add(key)
+    unique.push(row)
+  }
+  return { unique, duplicates: rows.length - unique.length }
 }
 
 function meanDistribution(rows: ResponseRow[], optionCount: number): number[] {

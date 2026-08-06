@@ -68,7 +68,11 @@ FONTOS SZABÁLYOK:
 - Ahol a pozíció-konzisztencia (PC) 0.7 alatt van, ott az adott kérdés eredményét KÖTELEZŐ megbízhatatlannak jelölnöd (a válasz a felsorolás sorrendjétől függött).
 - A perszónák közti éles különbségeket fenntartással kezeld: az LLM-ek a csoportkülönbségeket tipikusan 2-4x felnagyítják (spurious split kockázat).
 - Az abstain nem hiba, hanem bizonyítékhézag: jelezd, mely témákban nem volt a perszónáknak megalapozott válasza.
-${providerNote}
+${providerNote}${
+    results.duplicateResponseCount > 0
+      ? `\n- FIGYELEM: ${results.duplicateResponseCount} válasz ugyanazt a cellát ismételte meg (adatgyűjtési anomália). Az aggregátum cellánként egy mérést használ, de a gyűjtés nem volt tiszta — ezt az értelmezésnél jelezd.`
+      : ''
+  }
 - A többválaszos kérdések számai opciónkénti FÜGGETLEN támogatottságok: ezeket tilos egyválaszos kérdések eloszlásaival közvetlenül összehasonlítani, és nem összegződnek 100%-ra. Ott a PC/RS a kiválasztott opció-HALMAZOK átfedését méri (nem egyetlen topválasz egyezését), tehát szigorúbb mutató — ezt vedd figyelembe az értelmezésnél.
 - Ahol az adat "nincs értékelhető válasz", ott TILOS bármilyen tartalmi állítást tenni a kérdésről; csak a hiányt nevezd meg.
 

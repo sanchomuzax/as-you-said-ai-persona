@@ -110,6 +110,12 @@ runs(id, questionnaire_id, name, status, config_json, token_budget, created_at)
      -- config_json: models, temperature, elicitation style, permutation plan, seeds,
      --              transparency-checklist fields
 run_personas(run_id, persona_id)
+-- one row per experimental cell, enforced by a unique index on
+-- (run_id, question_id, persona_id, permutation_json, COALESCE(elicitation_mode,'')):
+-- re-eliciting a cell under a NEW mode is a second measurement and is allowed,
+-- a repeat under the SAME mode is the parallel-loop bug (issue #16). Databases
+-- recorded before the fix may carry duplicates; those rows are kept and the
+-- analysis counts each cell once (duplicateResponseCount reports how many).
 responses(id, run_id, persona_id, question_id,
           model_requested, model_version,   -- model PINNING: exact version returned
                                             -- by the API, not just the alias

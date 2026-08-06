@@ -4,7 +4,7 @@ import fastifyStatic from '@fastify/static'
 import { fileURLToPath } from 'node:url'
 import { randomUUID } from 'node:crypto'
 import { z } from 'zod'
-import type { Db } from './db.js'
+import { cellIndexPresent, type Db } from './db.js'
 import type { AppConfig, ModelsConfig } from './config.js'
 import type { ChatClient } from './openrouter.js'
 import { BudgetTracker } from './lib/budget.js'
@@ -721,7 +721,13 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
     const { id } = req.params as { id: string }
     const run = db.prepare('SELECT id FROM runs WHERE id = ?').get(id)
     if (!run) return reply.code(404).send({ success: false, error: 'Run not found' })
-    return { success: true, data: computeRunResults(db, id) }
+    return {
+      success: true,
+      // Whether the database can still enforce one-row-per-cell: on a database
+      // carrying pre-fix duplicates the index cannot exist, and then the analysis
+      // dedupe is the ONLY protection — the reader has to know which state this is.
+      data: { ...computeRunResults(db, id), cellIndexPresent: cellIndexPresent(db) }
+    }
   })
 
   app.get('/api/runs/:id/evaluations', async (req) => {

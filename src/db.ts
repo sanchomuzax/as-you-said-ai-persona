@@ -68,6 +68,42 @@ function migrate(db: DatabaseSync): void {
       db.exec(`ALTER TABLE run_evaluations ADD COLUMN ${column}`)
     }
   }
+  // Last: the index keys on elicitation_mode, so it can only be created once every
+  // column exists. Created earlier, the first boot after an upgrade would silently
+  // run with no database-level protection at all.
+  createCellUniqueIndex(db)
+}
+
+/**
+ * One row per experimental cell, enforced by the database itself — the second line
+ * of defence behind the runner's per-run lock (issue #16). Databases recorded
+ * before the fix may already contain duplicates; those rows are genuine repeated
+ * measurements and are NOT deleted, so the index simply cannot be created there.
+ * `cellIndexPresent` lets the API report which of the two states a database is in
+ * instead of leaving it invisible.
+ */
+function createCellUniqueIndex(db: DatabaseSync): void {
+  try {
+    db.exec(
+      // The elicitation mode is part of the key on purpose: re-eliciting a cell
+      // under a NEW mode (v0.6.0) legitimately adds a second row for the same
+      // cell, while a repeat under the SAME mode is the duplication bug.
+      // COALESCE makes NULL (pre-v0.6 rows) comparable — SQLite treats bare NULLs
+      // as distinct, which would let the old duplicates through.
+      `CREATE UNIQUE INDEX IF NOT EXISTS idx_responses_cell
+         ON responses(run_id, question_id, persona_id, permutation_json, seed, COALESCE(elicitation_mode, ''))`
+    )
+  } catch (error) {
+    // Pre-fix duplicates are expected and tolerated; anything else is a real fault
+    // and must not be hidden behind the same silence.
+    const message = error instanceof Error ? error.message : String(error)
+    if (!message.includes('UNIQUE constraint failed')) throw error
+  }
+}
+
+export function cellIndexPresent(db: DatabaseSync): boolean {
+  const rows = db.prepare("PRAGMA index_list('responses')").all() as unknown as { name: string }[]
+  return rows.some((r) => r.name === 'idx_responses_cell')
 }
 
 const SCHEMA = `

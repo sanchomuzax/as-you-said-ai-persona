@@ -34,13 +34,14 @@ const api = loadPublicScript<{
   }) => string
   renderModelCell: (response: ResponseLike) => string
   renderProviderChip: (providers: { provider: string; count: number }[]) => string
+  renderDuplicateNotice: (results: Record<string, number>) => string
   TOOLTIPS: Record<string, string>
 }>(
   ['format.js', 'metrics.js'],
-  '{ escapeHtml, formatNumber, formatMetric, formatDateTime, statusLabel, statusTooltip, renderMetricChips, runStatChips, renderLegacyOnlyNotice, renderCacheChip, renderPartialEvaluationChip, renderModelCell, renderProviderChip, TOOLTIPS }'
+  '{ escapeHtml, formatNumber, formatMetric, formatDateTime, statusLabel, statusTooltip, renderMetricChips, runStatChips, renderLegacyOnlyNotice, renderCacheChip, renderPartialEvaluationChip, renderModelCell, renderProviderChip, renderDuplicateNotice, TOOLTIPS }'
 )
 
-const { escapeHtml, formatNumber, formatMetric, formatDateTime, statusLabel, statusTooltip, renderMetricChips, runStatChips, renderLegacyOnlyNotice, renderCacheChip, renderPartialEvaluationChip, renderModelCell, renderProviderChip, TOOLTIPS } = api
+const { escapeHtml, formatNumber, formatMetric, formatDateTime, statusLabel, statusTooltip, renderMetricChips, runStatChips, renderLegacyOnlyNotice, renderCacheChip, renderPartialEvaluationChip, renderModelCell, renderProviderChip, renderDuplicateNotice, TOOLTIPS } = api
 
 describe('escapeHtml', () => {
   it('escapes every character that could break out of text or attribute context', () => {
@@ -359,5 +360,18 @@ describe('renderProviderChip', () => {
     expect(html).toContain('stat-chip-danger')
     expect(html).toContain(escapeHtml('DeepInfra (7), Venice (5)'))
     expect(html).not.toMatch(/title="[^"]*"[^ =>]/)
+  })
+})
+
+describe('renderDuplicateNotice', () => {
+  it('stays silent for clean data', () => {
+    expect(renderDuplicateNotice({ duplicateResponseCount: 0 })).toBe('')
+    expect(renderDuplicateNotice(undefined as unknown as Record<string, number>)).toBe('')
+  })
+
+  it('names the repeated cells and explains what was done with them', () => {
+    const html = renderDuplicateNotice({ duplicateResponseCount: 336 })
+    expect(html).toContain('336')
+    expect(html).toContain(escapeHtml(TOOLTIPS.duplicateCells))
   })
 })

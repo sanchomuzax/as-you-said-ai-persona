@@ -341,12 +341,13 @@ describe('evaluation coverage snapshot', () => {
       'run', 'q', 'R', JSON.stringify({ model: 'm', temperature: 1, seeds: [0] })
     )
     db.prepare('INSERT INTO run_personas (run_id, persona_id) VALUES (?,?)').run('run', 'p')
+    let cellSeed = 0
     const insertResponse = (id: string): void => {
       db.prepare(
         `INSERT INTO responses (id, run_id, persona_id, question_id, model_requested, temperature, seed,
            permutation_json, prompt_rendered, raw_response, parsed_distribution_json, parsed_answer, is_valid, abstained)
-         VALUES (?,'run','p','qq','m',1,0,?,'p','r','{"0":0.6,"1":0.4}','0',1,0)`
-      ).run(id, JSON.stringify([0, 1]))
+         VALUES (?,'run','p','qq','m',1,?,?,'p','r','{"0":0.6,"1":0.4}','0',1,0)`
+      ).run(id, cellSeed++, JSON.stringify([0, 1]))
     }
     insertResponse('first')
 

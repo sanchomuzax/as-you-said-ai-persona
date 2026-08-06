@@ -66,6 +66,8 @@ const TOOLTIPS = {
   providerSpread:
     'Ezt a futtatást több szolgáltató szolgálta ki ugyanazzal a modell-azonosítóval. A szolgáltatók eltérő kvantálással futtatják a modellt, ezért a válaszok közti eltérés egy része routingból ered, nem a perszónából vagy a seedből — az ismétlési stabilitást (RS) ez rontja. Új futtatásnál a szolgáltató rögzíthető.',
   providerSingle: 'A futtatást végig ugyanaz a szolgáltató szolgálta ki, tehát a modellverzió mellett a futtatókörnyezet is állandó volt.',
+  duplicateCells:
+    'Ismételten rögzített cellák: párhuzamos futtató-hurkok miatt ugyanaz a cella (perszóna × kérdés × rotáció × seed) többször is lefutott. Az elemzés cellánként az első rögzítést használja, a többi megmarad a naplóban ismételt mérésként — az aggregátumot tehát nem torzítják, de a nyers sorszám nagyobb az egyedi celláknál.',
   support:
     'Opciónkénti támogatottság: az adott opció átlagos kiválasztási valószínűsége a perszónák válaszaiban. Többválaszos kérdésnél az értékek összege meghaladhatja a 100%-ot.',
   cache:
@@ -230,4 +232,11 @@ function renderProviderChip(providers) {
     '⚠ ' + formatNumber(list.length) + ' szolgáltató',
     TOOLTIPS.providerSpread + ' Megoszlás: ' + names + '.'
   );
+}
+
+/** Duplicated cells are a data-collection anomaly: name it where results are read. */
+function renderDuplicateNotice(results) {
+  const duplicates = (results && results.duplicateResponseCount) || 0;
+  if (duplicates === 0) return '';
+  return chip('stat-chip stat-chip-danger', '⚠ ismételt cella: ' + formatNumber(duplicates), TOOLTIPS.duplicateCells);
 }

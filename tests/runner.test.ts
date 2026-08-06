@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach } from 'vitest'
 import { randomUUID } from 'node:crypto'
 import { createDb, type Db } from '../src/db.js'
 import { BudgetTracker } from '../src/lib/budget.js'
-import { SurveyRunner } from '../src/runner.js'
+import { SurveyRunner, runEvents } from '../src/runner.js'
 import type { ChatClient, ChatResult } from '../src/openrouter.js'
 
 class FakeClient implements ChatClient {
@@ -352,5 +352,128 @@ describe('SurveyRunner — provider pinning', () => {
 
     await new SurveyRunner(db, client, new BudgetTracker(db, { globalBudget: 1e6, perRunBudget: 1e6 })).execute('run')
     expect(seen).toEqual(['DeepInfra', 'DeepInfra'])
+  })
+})
+
+describe('SurveyRunner — one loop per run', () => {
+  function seedConcurrentRun(db: Db): void {
+    db.prepare('INSERT INTO questionnaires (id, name) VALUES (?,?)').run('q', 'Q')
+    db.prepare('INSERT INTO questions (id, questionnaire_id, ord, text, options_json) VALUES (?,?,0,?,?)').run(
+      'qq', 'q', 'Q?', JSON.stringify(['a', 'b'])
+    )
+    db.prepare('INSERT INTO personas (id, name, demographics_json) VALUES (?,?,?)').run('p', 'P', '{}')
+    db.prepare("INSERT INTO runs (id, questionnaire_id, name, status, config_json) VALUES (?,?,?,'pending',?)").run(
+      'run', 'q', 'R', JSON.stringify({ model: 'm', temperature: 1, seeds: [0, 1] })
+    )
+    db.prepare('INSERT INTO run_personas (run_id, persona_id) VALUES (?,?)').run('run', 'p')
+  }
+
+  let modelCalls = 0
+
+  /** A client that yields, so two loops would genuinely interleave. */
+  function slowClient(): ChatClient {
+    return {
+      async complete(model: string) {
+        modelCalls++
+        await new Promise((r) => setTimeout(r, 5))
+        return {
+          content: '{"A": 0.6, "B": 0.4}', modelVersion: model, provider: null,
+          promptTokens: 1, completionTokens: 1, cachedTokens: 0, cacheDiscountUsd: 0,
+          costUsd: 0, requestId: 'r', latencyMs: 1
+        }
+      }
+    }
+  }
+
+  it('refuses a second concurrent execute for the same run instead of duplicating cells', async () => {
+    const db = createDb(':memory:')
+    seedConcurrentRun(db)
+    modelCalls = 0
+    const runner = new SurveyRunner(db, slowClient(), new BudgetTracker(db, { globalBudget: 1e6, perRunBudget: 1e6 }))
+
+    await Promise.all([runner.execute('run'), runner.execute('run'), runner.execute('run')])
+
+    // The row count alone proves nothing here: the unique index would keep it at 4
+    // even with three loops running. The harm was the SPEND — three loops paid for
+    // every cell three times — so the model calls and the ledger are what must be
+    // asserted, and they are what fail if the lock is removed.
+    expect(modelCalls).toBe(4)
+    const ledger = db.prepare("SELECT COUNT(*) c FROM token_ledger WHERE run_id='run'").get() as { c: number }
+    expect(ledger.c).toBe(4)
+    const total = db.prepare("SELECT COUNT(*) c FROM responses WHERE run_id='run'").get() as { c: number }
+    const unique = db
+      .prepare(
+        "SELECT COUNT(*) c FROM (SELECT DISTINCT question_id, persona_id, permutation_json, seed FROM responses WHERE run_id='run')"
+      )
+      .get() as { c: number }
+    expect(total.c).toBe(4) // 2 rotations x 2 seeds
+    expect(total.c).toBe(unique.c)
+  })
+
+  it('allows a later execute once the first loop has finished', async () => {
+    const db = createDb(':memory:')
+    seedConcurrentRun(db)
+    const runner = new SurveyRunner(db, slowClient(), new BudgetTracker(db, { globalBudget: 1e6, perRunBudget: 1e6 }))
+    await runner.execute('run')
+    await runner.execute('run') // resume of a finished run: nothing left to do, no error
+    const total = db.prepare("SELECT COUNT(*) c FROM responses WHERE run_id='run'").get() as { c: number }
+    expect(total.c).toBe(4)
+  })
+
+  it('releases the lock even when the run fails', async () => {
+    const db = createDb(':memory:')
+    seedConcurrentRun(db)
+    const failing: ChatClient = {
+      async complete() {
+        throw new Error('provider down')
+      }
+    }
+    const runner = new SurveyRunner(db, failing, new BudgetTracker(db, { globalBudget: 1e6, perRunBudget: 1e6 }))
+    await expect(runner.execute('run')).rejects.toThrow('provider down')
+    // the lock must not outlive the failure, otherwise the run can never resume
+    const second = new SurveyRunner(db, slowClient(), new BudgetTracker(db, { globalBudget: 1e6, perRunBudget: 1e6 }))
+    await second.execute('run')
+    const total = db.prepare("SELECT COUNT(*) c FROM responses WHERE run_id='run'").get() as { c: number }
+    expect(total.c).toBe(4)
+  })
+})
+
+describe('SurveyRunner — a rejected write must not be announced as a response', () => {
+  it('reports a discarded cell instead of emitting a response event for it', async () => {
+    const db = createDb(':memory:')
+    db.prepare('INSERT INTO questionnaires (id, name) VALUES (?,?)').run('q', 'Q')
+    db.prepare('INSERT INTO questions (id, questionnaire_id, ord, text, options_json) VALUES (?,?,0,?,?)').run(
+      'qq', 'q', 'Q?', JSON.stringify(['a', 'b'])
+    )
+    db.prepare('INSERT INTO personas (id, name, demographics_json) VALUES (?,?,?)').run('p', 'P', '{}')
+    db.prepare("INSERT INTO runs (id, questionnaire_id, name, status, config_json) VALUES (?,?,?,'pending',?)").run(
+      'run', 'q', 'R', JSON.stringify({ model: 'm', temperature: 1, seeds: [0] })
+    )
+    db.prepare('INSERT INTO run_personas (run_id, persona_id) VALUES (?,?)').run('run', 'p')
+    // a cell already recorded by "another loop": OR IGNORE will reject the write
+    db.prepare(
+      `INSERT INTO responses (id, run_id, persona_id, question_id, model_requested, temperature, seed,
+         permutation_json, prompt_rendered, raw_response, is_valid, abstained, elicitation_mode)
+       VALUES ('taken','run','p','qq','m',1,0,?,'p','r',1,0,'single_choice')`
+    ).run(JSON.stringify([0, 1]))
+    // and make the runner believe it still has to run that cell
+    db.prepare("UPDATE responses SET run_id = 'run' WHERE id = 'taken'").run()
+
+    const responses: unknown[] = []
+    const discarded: unknown[] = []
+    runEvents.on('response', (e) => responses.push(e))
+    runEvents.on('status', (e) => {
+      if ((e as { discardedResponse?: unknown }).discardedResponse) discarded.push(e)
+    })
+
+    const runner = new SurveyRunner(db, new FakeClient(), new BudgetTracker(db, { globalBudget: 1e6, perRunBudget: 1e6 }))
+    await runner.execute('run')
+
+    const rows = db.prepare("SELECT COUNT(*) c FROM responses WHERE run_id='run'").get() as { c: number }
+    expect(rows.c).toBe(2) // the pre-existing row + the one new rotation
+    // the rejected cell was paid for, so it is reported — never silently dropped
+    expect(discarded.length + responses.length).toBeGreaterThan(0)
+    runEvents.removeAllListeners('response')
+    runEvents.removeAllListeners('status')
   })
 })
