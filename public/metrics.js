@@ -63,6 +63,9 @@ const TOOLTIPS = {
     'Egyválaszos kérdés: az opciók kizárják egymást, a valószínűségek 100%-ra összegződnek (Style C eloszlás).',
   legacyElicitation:
     'Régi elicitationnal készült válaszok: ezek a többválaszos kérdést is 100%-ra normalizált eloszlásként kérdezték le, ezért mást mérnek. Az aggregátumból kihagyva — az összehasonlíthatóság érdekében a kérdést újra kell futtatni.',
+  providerSpread:
+    'Ezt a futtatást több szolgáltató szolgálta ki ugyanazzal a modell-azonosítóval. A szolgáltatók eltérő kvantálással futtatják a modellt, ezért a válaszok közti eltérés egy része routingból ered, nem a perszónából vagy a seedből — az ismétlési stabilitást (RS) ez rontja. Új futtatásnál a szolgáltató rögzíthető.',
+  providerSingle: 'A futtatást végig ugyanaz a szolgáltató szolgálta ki, tehát a modellverzió mellett a futtatókörnyezet is állandó volt.',
   support:
     'Opciónkénti támogatottság: az adott opció átlagos kiválasztási valószínűsége a perszónák válaszaiban. Többválaszos kérdésnél az értékek összege meghaladhatja a 100%-ot.',
   cache:
@@ -211,4 +214,20 @@ function renderPartialEvaluationChip(evaluation) {
     tooltip = `A futtatás még nem fejeződött be a kiértékelés készítésekor: ${formatNumber(evaluation.total_cells)} cellából ${formatNumber(evaluation.done_cells)} válasz volt rögzítve. A stabilitási mutatók (PC/RS) és az arányok még változhatnak.`;
   }
   return chip('metric-chip metric-chip-warning', '⚠ Részeredmény', tooltip);
+}
+
+/**
+ * Routing spread is a reproducibility signal, not a cost one: one model id served
+ * by several providers means several implementations answered the same question.
+ */
+function renderProviderChip(providers) {
+  const list = Array.isArray(providers) ? providers : [];
+  if (list.length === 0) return '';
+  if (list.length === 1) return chip('stat-chip', 'szolgáltató: ' + list[0].provider, TOOLTIPS.providerSingle);
+  const names = list.map(p => p.provider + ' (' + formatNumber(p.count) + ')').join(', ');
+  return chip(
+    'stat-chip stat-chip-danger',
+    '⚠ ' + formatNumber(list.length) + ' szolgáltató',
+    TOOLTIPS.providerSpread + ' Megoszlás: ' + names + '.'
+  );
 }

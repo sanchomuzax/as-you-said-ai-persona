@@ -33,13 +33,14 @@ const api = loadPublicScript<{
     total_cells?: number | null
   }) => string
   renderModelCell: (response: ResponseLike) => string
+  renderProviderChip: (providers: { provider: string; count: number }[]) => string
   TOOLTIPS: Record<string, string>
 }>(
   ['format.js', 'metrics.js'],
-  '{ escapeHtml, formatNumber, formatMetric, formatDateTime, statusLabel, statusTooltip, renderMetricChips, runStatChips, renderLegacyOnlyNotice, renderCacheChip, renderPartialEvaluationChip, renderModelCell, TOOLTIPS }'
+  '{ escapeHtml, formatNumber, formatMetric, formatDateTime, statusLabel, statusTooltip, renderMetricChips, runStatChips, renderLegacyOnlyNotice, renderCacheChip, renderPartialEvaluationChip, renderModelCell, renderProviderChip, TOOLTIPS }'
 )
 
-const { escapeHtml, formatNumber, formatMetric, formatDateTime, statusLabel, statusTooltip, renderMetricChips, runStatChips, renderLegacyOnlyNotice, renderCacheChip, renderPartialEvaluationChip, renderModelCell, TOOLTIPS } = api
+const { escapeHtml, formatNumber, formatMetric, formatDateTime, statusLabel, statusTooltip, renderMetricChips, runStatChips, renderLegacyOnlyNotice, renderCacheChip, renderPartialEvaluationChip, renderModelCell, renderProviderChip, TOOLTIPS } = api
 
 describe('escapeHtml', () => {
   it('escapes every character that could break out of text or attribute context', () => {
@@ -333,6 +334,30 @@ describe('renderModelCell', () => {
 
   it('never emits unescaped tooltip quotes', () => {
     const html = renderModelCell({ model_version: 'v1', provider: 'TestProvider' })
+    expect(html).not.toMatch(/title="[^"]*"[^ =>]/)
+  })
+})
+
+describe('renderProviderChip', () => {
+  it('says nothing when no provider was recorded', () => {
+    expect(renderProviderChip([])).toBe('')
+    expect(renderProviderChip(undefined as unknown as [])).toBe('')
+  })
+
+  it('names the single provider that served the whole run', () => {
+    const html = renderProviderChip([{ provider: 'DeepInfra', count: 12 }])
+    expect(html).toContain('DeepInfra')
+    expect(html).not.toContain('⚠')
+  })
+
+  it('warns when several providers served one run, and lists the split', () => {
+    const html = renderProviderChip([
+      { provider: 'DeepInfra', count: 7 },
+      { provider: 'Venice', count: 5 }
+    ])
+    expect(html).toContain('2 szolgáltató')
+    expect(html).toContain('stat-chip-danger')
+    expect(html).toContain(escapeHtml('DeepInfra (7), Venice (5)'))
     expect(html).not.toMatch(/title="[^"]*"[^ =>]/)
   })
 })

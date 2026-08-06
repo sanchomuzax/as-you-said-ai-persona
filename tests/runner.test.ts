@@ -325,3 +325,32 @@ describe('SurveyRunner — malformed usage numbers', () => {
     expect(row.cache_discount_usd).toBe(0)
   })
 })
+
+describe('SurveyRunner — provider pinning', () => {
+  it('passes the pinned provider from the run config to every call', async () => {
+    const db = createDb(':memory:')
+    const seen: (string | undefined)[] = []
+    const client: ChatClient = {
+      async complete(model, _prompt, opts) {
+        seen.push(opts.provider)
+        return {
+          content: '{"A": 0.6, "B": 0.4}', modelVersion: model, provider: opts.provider ?? null,
+          promptTokens: 1, completionTokens: 1, cachedTokens: 0, cacheDiscountUsd: 0,
+          costUsd: 0, requestId: 'r', latencyMs: 1
+        }
+      }
+    }
+    db.prepare('INSERT INTO questionnaires (id, name) VALUES (?,?)').run('q', 'Q')
+    db.prepare('INSERT INTO questions (id, questionnaire_id, ord, text, options_json) VALUES (?,?,0,?,?)').run(
+      'qq', 'q', 'Q?', JSON.stringify(['a', 'b'])
+    )
+    db.prepare('INSERT INTO personas (id, name, demographics_json) VALUES (?,?,?)').run('p', 'P', '{}')
+    db.prepare("INSERT INTO runs (id, questionnaire_id, name, status, config_json) VALUES (?,?,?,'pending',?)").run(
+      'run', 'q', 'R', JSON.stringify({ model: 'm', temperature: 1, seeds: [0], provider: 'DeepInfra' })
+    )
+    db.prepare('INSERT INTO run_personas (run_id, persona_id) VALUES (?,?)').run('run', 'p')
+
+    await new SurveyRunner(db, client, new BudgetTracker(db, { globalBudget: 1e6, perRunBudget: 1e6 })).execute('run')
+    expect(seen).toEqual(['DeepInfra', 'DeepInfra'])
+  })
+})

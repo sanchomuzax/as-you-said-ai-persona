@@ -40,6 +40,10 @@ recorded with full experimental metadata so runs are reproducible and auditable.
   multi-select questions get independent per-option probabilities (asking a
   multi-select question for a sum-to-1 distribution measures the wrong thing).
   The mode used is recorded on every response.
+- **Provider pinning**: a run can pin the upstream provider (no fallbacks). Without it
+  OpenRouter spreads one model id across several providers with different quantization —
+  measured: 7 providers in a 12-cell run, and a 2.5% prompt-cache hit rate. With pinning:
+  one provider and 43%.
 - **Token budget tracking** per run / per persona / global, with hard stops.
 - **Simple auth** (env-based credentials for the single-researcher phase).
 

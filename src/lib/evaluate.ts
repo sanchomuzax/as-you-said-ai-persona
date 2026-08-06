@@ -8,7 +8,20 @@ import type { RunResults } from './results.js'
  * position-consistency questions as unreliable, and must close with the TSTR
  * caveat that synthetic results are hypotheses requiring human validation.
  */
-export function buildEvaluationPrompt(runName: string, results: RunResults): string {
+export function buildEvaluationPrompt(
+  runName: string,
+  results: RunResults,
+  context: { providers?: { provider: string; count: number }[] } = {}
+): string {
+  const providers = context.providers ?? []
+  // Several providers for one model id means several implementations answered:
+  // part of the run-to-run variation is routing, not the persona or the seed.
+  const providerNote =
+    providers.length > 1
+      ? `\n- FIGYELEM: ezt a futtatást ${providers.length} különböző szolgáltató szolgálta ki ugyanazzal a modell-azonosítóval (${providers
+          .map((p) => `${p.provider}: ${p.count}`)
+          .join(', ')}). A szolgáltatók eltérő kvantálással futtatják a modellt, ezért az ismétlési stabilitás (RS) romlásának egy része ROUTINGBÓL ered, nem a perszónából vagy a seedből — ezt az értelmezésnél kötelező jelezned.`
+      : ''
   const lines = results.questions.map((q) => {
     const multi = q.elicitationMode === 'multi_choice'
     const legacyNote =
@@ -55,6 +68,7 @@ FONTOS SZABÁLYOK:
 - Ahol a pozíció-konzisztencia (PC) 0.7 alatt van, ott az adott kérdés eredményét KÖTELEZŐ megbízhatatlannak jelölnöd (a válasz a felsorolás sorrendjétől függött).
 - A perszónák közti éles különbségeket fenntartással kezeld: az LLM-ek a csoportkülönbségeket tipikusan 2-4x felnagyítják (spurious split kockázat).
 - Az abstain nem hiba, hanem bizonyítékhézag: jelezd, mely témákban nem volt a perszónáknak megalapozott válasza.
+${providerNote}
 - A többválaszos kérdések számai opciónkénti FÜGGETLEN támogatottságok: ezeket tilos egyválaszos kérdések eloszlásaival közvetlenül összehasonlítani, és nem összegződnek 100%-ra. Ott a PC/RS a kiválasztott opció-HALMAZOK átfedését méri (nem egyetlen topválasz egyezését), tehát szigorúbb mutató — ezt vedd figyelembe az értelmezésnél.
 - Ahol az adat "nincs értékelhető válasz", ott TILOS bármilyen tartalmi állítást tenni a kérdésről; csak a hiányt nevezd meg.
 

@@ -681,6 +681,7 @@ document.getElementById('runForm')?.addEventListener('submit', async (e) => {
       personaIds,
       model: document.getElementById('runModel').value,
       temperature: parseFloat(document.getElementById('runTemperature').value),
+      provider: document.getElementById('runProvider').value.trim() || undefined,
       projectId: state.selectedProjectId,
       autoEvaluate: document.getElementById('runAutoEvaluate').checked
     };

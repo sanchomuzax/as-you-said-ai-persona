@@ -70,7 +70,12 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
     if (!run) throw new Error('Run not found')
     const results = computeRunResults(db, runId)
     if (results.totalResponses === 0) throw new Error('No responses to evaluate')
-    const prompt = buildEvaluationPrompt(run.name, results)
+    const evaluationProviders = (
+      db
+        .prepare('SELECT provider, COUNT(*) c FROM responses WHERE run_id = ? AND provider IS NOT NULL GROUP BY provider')
+        .all(runId) as unknown as { provider: string; c: number }[]
+    ).map((r) => ({ provider: r.provider, count: r.c }))
+    const prompt = buildEvaluationPrompt(run.name, results, { providers: evaluationProviders })
     const model = (JSON.parse(run.config_json) as RunConfig).model
 
     // Coverage snapshot, taken BEFORE the model call: the run keeps recording
@@ -442,7 +447,10 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
     model: z.string().default(models.default),
     temperature: z.number().min(0).max(2).default(1.0),
     seeds: z.array(z.number().int()).min(1).default([0, 1]),
-    autoEvaluate: z.boolean().default(false)
+    autoEvaluate: z.boolean().default(false),
+    // Pinning the upstream provider makes a run reproducible: the same model id
+    // is otherwise served by several providers with different quantization.
+    provider: z.string().min(1).optional()
   })
 
   app.post('/api/runs', async (req, reply) => {
@@ -455,7 +463,8 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
       model: body.data.model,
       temperature: body.data.temperature,
       seeds: body.data.seeds,
-      autoEvaluate: body.data.autoEvaluate
+      autoEvaluate: body.data.autoEvaluate,
+      ...(body.data.provider ? { provider: body.data.provider } : {})
     }
     const id = randomUUID()
     db.exec('BEGIN')
@@ -576,10 +585,21 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
     const counts = db
       .prepare('SELECT COUNT(*) done, COALESCE(SUM(is_valid=0),0) invalid, COALESCE(SUM(abstained),0) abstained, COALESCE(AVG(latency_ms),0) avgLatency FROM responses WHERE run_id = ?')
       .get(id) as { done: number; invalid: number; abstained: number; avgLatency: number }
+    // Which providers actually served this run: more than one means the answers
+    // came from different implementations of the "same" model.
+    const providers = (
+      db
+        .prepare(
+          'SELECT provider, COUNT(*) c FROM responses WHERE run_id = ? AND provider IS NOT NULL GROUP BY provider ORDER BY c DESC'
+        )
+        .all(id) as unknown as { provider: string; c: number }[]
+    ).map((r) => ({ provider: r.provider, count: r.c }))
+
     return {
       success: true,
       data: {
         status: run.status,
+        providers,
         totalCells: totalCells(id),
         done: counts.done,
         invalid: counts.invalid,

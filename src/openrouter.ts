@@ -12,8 +12,20 @@ export interface ChatResult {
   latencyMs: number
 }
 
+/**
+ * `provider` pins the upstream provider. OpenRouter otherwise routes the same
+ * model id to whichever provider is free, which breaks both prompt caching and
+ * model pinning: providers differ in quantization and settings, so a run spread
+ * across seven of them is not the single-model experiment it claims to be.
+ */
+export interface ChatOptions {
+  temperature: number
+  seed: number
+  provider?: string | undefined
+}
+
 export interface ChatClient {
-  complete(model: string, prompt: string, opts: { temperature: number; seed: number }): Promise<ChatResult>
+  complete(model: string, prompt: string, opts: ChatOptions): Promise<ChatResult>
 }
 
 /** Thin OpenRouter chat-completions client with retry/backoff. */
@@ -24,11 +36,7 @@ export class OpenRouterClient implements ChatClient {
     private readonly fetchFn: typeof fetch = fetch
   ) {}
 
-  async complete(
-    model: string,
-    prompt: string,
-    opts: { temperature: number; seed: number }
-  ): Promise<ChatResult> {
+  async complete(model: string, prompt: string, opts: ChatOptions): Promise<ChatResult> {
     const maxAttempts = 3
     let lastError: unknown
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
@@ -44,11 +52,7 @@ export class OpenRouterClient implements ChatClient {
     throw new Error(`OpenRouter call failed after ${maxAttempts} attempts: ${String(lastError)}`)
   }
 
-  private async callOnce(
-    model: string,
-    prompt: string,
-    opts: { temperature: number; seed: number }
-  ): Promise<ChatResult> {
+  private async callOnce(model: string, prompt: string, opts: ChatOptions): Promise<ChatResult> {
     const started = Date.now()
     const res = await this.fetchFn(`${this.baseUrl}/chat/completions`, {
       method: 'POST',
@@ -61,7 +65,10 @@ export class OpenRouterClient implements ChatClient {
         messages: [{ role: 'user', content: prompt }],
         temperature: opts.temperature,
         seed: opts.seed,
-        usage: { include: true }
+        usage: { include: true },
+        // allow_fallbacks: false — a silent fallback to another provider would
+        // reintroduce exactly the routing spread this option exists to remove.
+        ...(opts.provider ? { provider: { order: [opts.provider], allow_fallbacks: false } } : {})
       })
     })
     if (!res.ok) {

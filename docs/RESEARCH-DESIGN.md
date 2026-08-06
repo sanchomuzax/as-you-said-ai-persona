@@ -113,6 +113,12 @@ run_personas(run_id, persona_id)
 responses(id, run_id, persona_id, question_id,
           model_requested, model_version,   -- model PINNING: exact version returned
                                             -- by the API, not just the alias
+          provider,                         -- and WHICH provider served it: one model
+                                            -- id is served by several providers with
+                                            -- different quantization, so the version
+                                            -- string alone does not pin the model.
+                                            -- A run may pin the provider
+                                            -- (config.provider, no fallbacks).
           temperature, top_p, seed,         -- seed mandatory: run-to-run stability
           prompt_style,                     -- style_a | style_c
           permutation_json, label_style,    -- exact option order + letters|numbers

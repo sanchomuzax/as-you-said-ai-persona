@@ -122,3 +122,34 @@ describe('OpenRouterClient', () => {
     expect(result.costUsd).toBe(0)
   })
 })
+
+describe('OpenRouterClient — provider pinning', () => {
+  it('sends no provider routing block when the run does not pin one', async () => {
+    let sentBody: Record<string, unknown> = {}
+    const fetchFn = (async (_url: string, init: { body: string }) => {
+      sentBody = JSON.parse(init.body) as Record<string, unknown>
+      return {
+        ok: true,
+        json: async () => ({ id: 'r', model: 'm', choices: [{ message: { content: '{}' } }], usage: {} })
+      }
+    }) as unknown as typeof fetch
+    const client = new OpenRouterClient('k', 'https://x', fetchFn)
+    await client.complete('m', 'p', { temperature: 1, seed: 0 })
+    expect(sentBody['provider']).toBeUndefined()
+  })
+
+  it('pins the provider and forbids fallback when the run asks for it', async () => {
+    let sentBody: Record<string, unknown> = {}
+    const fetchFn = (async (_url: string, init: { body: string }) => {
+      sentBody = JSON.parse(init.body) as Record<string, unknown>
+      return {
+        ok: true,
+        json: async () => ({ id: 'r', model: 'm', provider: 'DeepInfra', choices: [{ message: { content: '{}' } }], usage: {} })
+      }
+    }) as unknown as typeof fetch
+    const client = new OpenRouterClient('k', 'https://x', fetchFn)
+    await client.complete('m', 'p', { temperature: 1, seed: 0, provider: 'DeepInfra' })
+    // routing must be deterministic: one provider, no silent fallback to another
+    expect(sentBody['provider']).toEqual({ order: ['DeepInfra'], allow_fallbacks: false })
+  })
+})

@@ -12,6 +12,8 @@ export interface RunConfig {
   temperature: number
   seeds: number[]
   autoEvaluate?: boolean
+  /** Pinned upstream provider; part of the experimental configuration. */
+  provider?: string
 }
 
 /** In-memory control signals; checked between cells. */
@@ -168,7 +170,8 @@ export class SurveyRunner {
     const { prompt, keyMap, keys } = buildStyleCPrompt(persona, { text: question.text, options }, rotation, mode)
     const result = await this.client.complete(config.model, prompt, {
       temperature: config.temperature,
-      seed
+      seed,
+      provider: config.provider
     })
     const parsed = parseDistribution(result.content, keys, mode)
 

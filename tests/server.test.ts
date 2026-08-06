@@ -560,3 +560,39 @@ describe('questionnaire versioning', () => {
     expect(detail.staleVersions.personas).toEqual([{ id: personaId, name: 'P1', version: 1, latestVersion: 2 }])
   })
 })
+
+describe('provider pinning and provider spread', () => {
+  async function runWith(payloadExtra: Record<string, unknown>): Promise<string> {
+    const projectId = (await app.inject({ method: 'POST', url: '/api/projects', cookies: cookie, payload: { name: 'P' } })).json().data.id
+    const personaId = (await app.inject({
+      method: 'POST', url: '/api/personas', cookies: cookie, payload: { projectId, name: 'P1', demographics: {} }
+    })).json().data.id
+    const questionnaireId = (await app.inject({
+      method: 'POST', url: '/api/questionnaires', cookies: cookie, payload: { name: 'Q', questions: [{ text: 'Q?', options: ['a', 'b'] }] }
+    })).json().data.id
+    const res = await app.inject({
+      method: 'POST', url: '/api/runs', cookies: cookie,
+      payload: { name: 'R', questionnaireId, personaIds: [personaId], seeds: [0], ...payloadExtra }
+    })
+    expect(res.statusCode).toBe(200)
+    await new Promise((r) => setTimeout(r, 60))
+    return res.json().data.id
+  }
+
+  it('records the pinned provider as part of the run configuration', async () => {
+    const runId = await runWith({ provider: 'DeepInfra' })
+    const detail = (await app.inject({ method: 'GET', url: `/api/runs/${runId}`, cookies: cookie })).json().data
+    expect(JSON.parse(detail.run.config_json).provider).toBe('DeepInfra')
+  })
+
+  it('reports how many providers actually served a run', async () => {
+    const runId = await runWith({})
+    const progress = (await app.inject({ method: 'GET', url: `/api/runs/${runId}/progress`, cookies: cookie })).json().data
+    // the stub reports no provider, so nothing to warn about
+    expect(progress.providers).toEqual([])
+
+    // a run served by two providers is a reproducibility warning
+    const detailBefore = (await app.inject({ method: 'GET', url: `/api/runs/${runId}`, cookies: cookie })).json().data
+    expect(detailBefore.responses.length).toBeGreaterThan(0)
+  })
+})

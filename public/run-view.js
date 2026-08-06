@@ -65,7 +65,7 @@ function renderRunDetailHeader(run, progress) {
     promptTokens: usage.promptTokens || 0,
     costUsd: usage.costUsd || 0,
     avgLatencyMs: progress.avgLatencyMs
-  });
+  }) + renderProviderChip(progress.providers);
   document.getElementById('runDetailControls').innerHTML = runControlButtons({ id: run.id, status }, 'detail');
   document.getElementById('runExportLink').href = '/api/runs/' + run.id + '/export.csv';
 }

@@ -206,6 +206,10 @@
               <select id="runModel" required></select>
             </div>
             <div class="form-group">
+              <label for="runProvider" title="Ugyanazt a modellt az OpenRouter több szolgáltatóhoz irányíthatja, eltérő kvantálással — így a futtatás nem egyetlen modellt mér. Ha megadsz egy szolgáltatót, minden hívás oda megy, fallback nélkül (ha nem elérhető, a hívás hibázik).">Szolgáltató rögzítése (opcionális)</label>
+              <input type="text" id="runProvider" placeholder="pl. DeepInfra">
+            </div>
+            <div class="form-group">
               <label for="runTemperature">Hőmérséklet (0-2)</label>
               <input type="number" id="runTemperature" min="0" max="2" step="0.1" value="1.0">
             </div>
