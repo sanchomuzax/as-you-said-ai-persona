@@ -37,10 +37,14 @@ export class BudgetTracker {
   }
 
   canSpend(runId: string): boolean {
-    return (
-      this.usage(runId).totalTokens < this.config.perRunBudget &&
+    // A budget of 0 disables the hard stop for that scope.
+    const runOk =
+      this.config.perRunBudget === 0 ||
+      this.usage(runId).totalTokens < this.config.perRunBudget
+    const globalOk =
+      this.config.globalBudget === 0 ||
       this.globalUsage().totalTokens < this.config.globalBudget
-    )
+    return runOk && globalOk
   }
 
   usage(runId: string): Usage {

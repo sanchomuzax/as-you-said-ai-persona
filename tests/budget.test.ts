@@ -24,6 +24,12 @@ describe('BudgetTracker', () => {
     expect(t.canSpend('run2')).toBe(false)
   })
 
+  it('treats a budget of 0 as unlimited (hard stop disabled)', () => {
+    const t = new BudgetTracker(db, { globalBudget: 0, perRunBudget: 0 })
+    t.record('run1', { promptTokens: 1e9, completionTokens: 1e9, costUsd: 1 })
+    expect(t.canSpend('run1')).toBe(true)
+  })
+
   it('reports usage totals', () => {
     const t = new BudgetTracker(db, { globalBudget: 1000, perRunBudget: 500 })
     t.record('run1', { promptTokens: 10, completionTokens: 5, costUsd: 0.002 })

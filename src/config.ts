@@ -8,8 +8,9 @@ const envSchema = z.object({
   AUTH_USERNAME: z.string().min(1),
   AUTH_PASSWORD: z.string().min(8, 'AUTH_PASSWORD must be at least 8 characters'),
   SESSION_SECRET: z.string().min(16, 'SESSION_SECRET must be at least 16 characters'),
-  TOKEN_BUDGET_GLOBAL: z.coerce.number().int().positive().default(5_000_000),
-  TOKEN_BUDGET_PER_RUN: z.coerce.number().int().positive().default(500_000),
+  // 0 means "no limit" — the budget hard stop is disabled for that scope
+  TOKEN_BUDGET_GLOBAL: z.coerce.number().int().nonnegative().default(5_000_000),
+  TOKEN_BUDGET_PER_RUN: z.coerce.number().int().nonnegative().default(500_000),
   PORT: z.coerce.number().int().default(3555),
   DATABASE_PATH: z.string().default('./data/asys.sqlite')
 })

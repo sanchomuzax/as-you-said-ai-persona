@@ -463,15 +463,18 @@ function updateBudgetBar() {
   apiCall('GET', '/api/budget')
     .then(data => {
       const used = data.global.totalTokens || 0;
-      const limit = data.limits.globalBudget || 1;
-      const pct = Math.min((used / limit) * 100, 100);
+      const limit = data.limits.globalBudget;
+      // limit 0 = a hard stop ki van kapcsolva
+      const unlimited = !limit;
+      const pct = unlimited ? 0 : Math.min((used / limit) * 100, 100);
 
       document.getElementById('budgetTokens').textContent = formatNumber(used);
-      document.getElementById('budgetLimit').textContent = formatNumber(limit);
+      document.getElementById('budgetLimit').textContent = unlimited ? '∞' : formatNumber(limit);
       document.getElementById('budgetCost').textContent = formatCost(data.global.costUsd || 0);
       document.getElementById('budgetProgress').style.width = pct + '%';
-      document.querySelector('.budget-widget').title =
-        TOOLTIPS.budgetBar + ' Jelenleg: ' + formatMetric(pct) + '% (' + formatNumber(used) + ' / ' + formatNumber(limit) + ' token).';
+      document.querySelector('.budget-widget').title = unlimited
+        ? TOOLTIPS.budgetBar + ' A keret-korlát jelenleg KI van kapcsolva (limit=0); a fogyás: ' + formatNumber(used) + ' token.'
+        : TOOLTIPS.budgetBar + ' Jelenleg: ' + formatMetric(pct) + '% (' + formatNumber(used) + ' / ' + formatNumber(limit) + ' token).';
     })
     .catch(() => {
       document.getElementById('budgetTokens').textContent = '—';
