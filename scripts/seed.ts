@@ -4,7 +4,8 @@
  *
  * Usage: npx tsx scripts/seed.ts <path-to-seed.json>
  * JSON shape: { project: {name, applicationDomain?, targetPopulation?},
- *               personas: [{name, demographics, biography?, renderingStyle?, provenance?}] }
+ *               personas?: [{name, demographics, biography?, renderingStyle?, provenance?}],
+ *               questionnaires?: [{name, questions: [{text, options, scaleType?, scaleDirection?}]}] }
  */
 import 'dotenv/config'
 import { readFileSync } from 'node:fs'
@@ -18,15 +19,34 @@ const seedSchema = z.object({
     applicationDomain: z.string().optional(),
     targetPopulation: z.string().optional()
   }),
-  personas: z.array(
-    z.object({
-      name: z.string().min(1),
-      demographics: z.record(z.unknown()),
-      biography: z.string().optional(),
-      renderingStyle: z.enum(['bulleted_profile', 'natural_language_sentence']).default('bulleted_profile'),
-      provenance: z.record(z.unknown()).optional()
-    })
-  )
+  personas: z
+    .array(
+      z.object({
+        name: z.string().min(1),
+        demographics: z.record(z.unknown()),
+        biography: z.string().optional(),
+        renderingStyle: z.enum(['bulleted_profile', 'natural_language_sentence']).default('bulleted_profile'),
+        provenance: z.record(z.unknown()).optional()
+      })
+    )
+    .default([]),
+  questionnaires: z
+    .array(
+      z.object({
+        name: z.string().min(1),
+        questions: z
+          .array(
+            z.object({
+              text: z.string().min(1),
+              options: z.array(z.string().min(1)).min(2).max(26),
+              scaleType: z.string().default('categorical'),
+              scaleDirection: z.enum(['ascending', 'descending']).default('ascending')
+            })
+          )
+          .min(1)
+      })
+    )
+    .default([])
 })
 
 const seedPath = process.argv[2]
@@ -67,3 +87,27 @@ for (const persona of seed.personas) {
   created++
 }
 process.stdout.write(`Personas: ${created} created, ${seed.personas.length - created} already present\n`)
+
+let qCreated = 0
+for (const questionnaire of seed.questionnaires) {
+  const exists = db
+    .prepare('SELECT id FROM questionnaires WHERE project_id = ? AND name = ?')
+    .get(projectId, questionnaire.name)
+  if (exists) continue
+  const qid = randomUUID()
+  db.exec('BEGIN')
+  try {
+    db.prepare('INSERT INTO questionnaires (id, project_id, name) VALUES (?,?,?)').run(qid, projectId, questionnaire.name)
+    questionnaire.questions.forEach((q, ord) => {
+      db.prepare(
+        'INSERT INTO questions (id, questionnaire_id, ord, text, scale_type, options_json, scale_direction) VALUES (?,?,?,?,?,?,?)'
+      ).run(randomUUID(), qid, ord, q.text, q.scaleType, JSON.stringify(q.options), q.scaleDirection)
+    })
+    db.exec('COMMIT')
+  } catch (error) {
+    db.exec('ROLLBACK')
+    throw error
+  }
+  qCreated++
+}
+process.stdout.write(`Questionnaires: ${qCreated} created, ${seed.questionnaires.length - qCreated} already present\n`)

@@ -20,6 +20,10 @@ function migrate(db: DatabaseSync): void {
   if (!personaCols.some((c) => c.name === 'project_id')) {
     db.exec('ALTER TABLE personas ADD COLUMN project_id TEXT REFERENCES projects(id)')
   }
+  const questionnaireCols = db.prepare('PRAGMA table_info(questionnaires)').all() as unknown as { name: string }[]
+  if (!questionnaireCols.some((c) => c.name === 'project_id')) {
+    db.exec('ALTER TABLE questionnaires ADD COLUMN project_id TEXT REFERENCES projects(id)')
+  }
 }
 
 const SCHEMA = `
@@ -45,6 +49,7 @@ CREATE TABLE IF NOT EXISTS personas (
 
 CREATE TABLE IF NOT EXISTS questionnaires (
   id TEXT PRIMARY KEY,
+  project_id TEXT REFERENCES projects(id),
   name TEXT NOT NULL,
   version INTEGER NOT NULL DEFAULT 1,
   created_at TEXT NOT NULL DEFAULT (datetime('now'))

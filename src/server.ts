@@ -153,6 +153,7 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
 
   // --- Questionnaires ---
   const questionnaireSchema = z.object({
+    projectId: z.string().min(1).optional(),
     name: z.string().min(1),
     questions: z
       .array(
@@ -166,10 +167,14 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
       .min(1)
   })
 
-  app.get('/api/questionnaires', async () => {
-    const qs = db.prepare('SELECT * FROM questionnaires ORDER BY created_at DESC').all() as {
+  app.get('/api/questionnaires', async (req) => {
+    const { project } = req.query as { project?: string }
+    const qs = (project
+      ? db.prepare('SELECT * FROM questionnaires WHERE project_id = ? OR project_id IS NULL ORDER BY created_at DESC').all(project)
+      : db.prepare('SELECT * FROM questionnaires ORDER BY created_at DESC').all()) as unknown as {
       id: string
       name: string
+      project_id: string | null
     }[]
     const questions = db.prepare('SELECT * FROM questions ORDER BY ord').all() as {
       questionnaire_id: string
@@ -181,6 +186,7 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
       success: true,
       data: qs.map((q) => ({
         id: q.id,
+        projectId: q.project_id,
         name: q.name,
         questions: questions
           .filter((x) => x.questionnaire_id === q.id)
@@ -193,9 +199,13 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
     const body = questionnaireSchema.safeParse(req.body)
     if (!body.success) return reply.code(400).send({ success: false, error: body.error.issues[0]?.message })
     const id = randomUUID()
+    if (body.data.projectId) {
+      const project = db.prepare('SELECT id FROM projects WHERE id = ?').get(body.data.projectId)
+      if (!project) return reply.code(400).send({ success: false, error: 'Unknown project' })
+    }
     db.exec('BEGIN')
     try {
-      db.prepare('INSERT INTO questionnaires (id, name) VALUES (?,?)').run(id, body.data.name)
+      db.prepare('INSERT INTO questionnaires (id, project_id, name) VALUES (?,?,?)').run(id, body.data.projectId ?? null, body.data.name)
       body.data.questions.forEach((q, ord) => {
         db.prepare(
           'INSERT INTO questions (id, questionnaire_id, ord, text, scale_type, options_json, scale_direction) VALUES (?,?,?,?,?,?,?)'

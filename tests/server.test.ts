@@ -124,6 +124,18 @@ describe('projects', () => {
     expect(res.json().error).toContain('Unknown project')
   })
 
+  it('filters questionnaires by project, including unscoped ones', async () => {
+    const p1 = (await app.inject({ method: 'POST', url: '/api/projects', cookies: cookie, payload: { name: 'A' } })).json().data.id
+    const p2 = (await app.inject({ method: 'POST', url: '/api/projects', cookies: cookie, payload: { name: 'B' } })).json().data.id
+    const q = { questions: [{ text: 'Q?', options: ['a', 'b'] }] }
+    await app.inject({ method: 'POST', url: '/api/questionnaires', cookies: cookie, payload: { name: 'inA', projectId: p1, ...q } })
+    await app.inject({ method: 'POST', url: '/api/questionnaires', cookies: cookie, payload: { name: 'inB', projectId: p2, ...q } })
+    await app.inject({ method: 'POST', url: '/api/questionnaires', cookies: cookie, payload: { name: 'global', ...q } })
+    const filtered = await app.inject({ method: 'GET', url: `/api/questionnaires?project=${p1}`, cookies: cookie })
+    const names = filtered.json().data.map((x: { name: string }) => x.name).sort()
+    expect(names).toEqual(['global', 'inA'])
+  })
+
   it('filters personas by project', async () => {
     const p1 = (await app.inject({ method: 'POST', url: '/api/projects', cookies: cookie, payload: { name: 'A' } })).json().data.id
     const p2 = (await app.inject({ method: 'POST', url: '/api/projects', cookies: cookie, payload: { name: 'B' } })).json().data.id

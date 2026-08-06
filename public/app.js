@@ -141,7 +141,8 @@ function renderProjectsList() {
 function updateProjectDropdowns() {
   const selects = [
     document.getElementById('personaProjectSelect'),
-    document.getElementById('runProjectSelect')
+    document.getElementById('runProjectSelect'),
+    document.getElementById('questionnaireProjectSelect')
   ];
 
   selects.forEach(select => {
@@ -197,11 +198,16 @@ function renderQuestionnairesList() {
 
   container.innerHTML = state.questionnaires.map(q => {
     const qCount = (q.questions || []).length;
+    let projectLabel = '(globális)';
+    if (q.projectId) {
+      const project = state.projects.find(p => p.id === q.projectId);
+      projectLabel = project ? escapeHtml(project.name) : '(ismeretlen projekt)';
+    }
     return `
       <div class="list-item">
         <div>
           <div class="list-item-title">${escapeHtml(q.name)}</div>
-          <div class="list-item-meta">${qCount} kérdés</div>
+          <div class="list-item-meta">${qCount} kérdés | ${projectLabel}</div>
         </div>
       </div>
     `;
@@ -411,9 +417,22 @@ document.getElementById('runProjectSelect')?.addEventListener('change', async (e
   state.selectedProjectId = projectId;
   if (projectId) {
     await reloadPersonasList();
+    await reloadQuestionnairesList(projectId);
   } else {
     state.personas = [];
     renderPersonasCheckboxes();
+    state.questionnaires = [];
+    renderQuestionnairesList();
+  }
+});
+
+document.getElementById('questionnaireProjectSelect')?.addEventListener('change', async (e) => {
+  const projectId = e.target.value;
+  if (projectId) {
+    await reloadQuestionnairesList(projectId);
+  } else {
+    state.questionnaires = [];
+    renderQuestionnairesList();
   }
 });
 
@@ -428,6 +447,19 @@ async function reloadPersonasList() {
     renderPersonasCheckboxes();
   } catch (err) {
     alert('Perszónák betöltése sikertelen: ' + err.message);
+  }
+}
+
+async function reloadQuestionnairesList(projectId) {
+  try {
+    const url = projectId
+      ? `/api/questionnaires?project=${projectId}`
+      : '/api/questionnaires';
+    const questionnaires = await apiCall('GET', url);
+    state.questionnaires = questionnaires;
+    renderQuestionnairesList();
+  } catch (err) {
+    alert('Kérdőívek betöltése sikertelen: ' + err.message);
   }
 }
 
@@ -483,13 +515,18 @@ document.getElementById('questionnaireForm')?.addEventListener('submit', async (
   e.preventDefault();
   try {
     const questions = parseQuestions(document.getElementById('questionsText').value);
+    const projectId = document.getElementById('questionnaireProjectSelect').value;
     const body = {
       name: document.getElementById('questionnaireName').value,
       questions
     };
+    if (projectId) {
+      body.projectId = projectId;
+    }
     await apiCall('POST', '/api/questionnaires', body);
     document.getElementById('questionnaireForm').reset();
-    const questionnaires = await apiCall('GET', '/api/questionnaires');
+    const url = projectId ? `/api/questionnaires?project=${projectId}` : '/api/questionnaires';
+    const questionnaires = await apiCall('GET', url);
     state.questionnaires = questionnaires;
     renderQuestionnairesList();
   } catch (err) {
