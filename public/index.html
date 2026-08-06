@@ -229,6 +229,15 @@
       </div>
     </main>
 
+    <!-- Response provenance panel -->
+    <aside id="provenancePanel" class="provenance-panel" style="display: none;" aria-label="Válasz proveniencia">
+      <div class="provenance-panel-header">
+        <h3>Válasz proveniencia</h3>
+        <button id="provenanceCloseBtn" class="btn btn-secondary btn-sm">Bezárás</button>
+      </div>
+      <div id="provenanceBody"></div>
+    </aside>
+
     <!-- Entity Detail View (projekt / perszóna / kérdőív) -->
     <section id="entityDetailView" class="entity-detail-view" style="display: none;">
       <div class="run-detail-header">
@@ -265,6 +274,7 @@
       <nav class="subtabs">
         <button class="subtab-btn active" data-subtab="overview">Áttekintés</button>
         <button class="subtab-btn" data-subtab="responses">Válaszok</button>
+        <button class="subtab-btn" data-subtab="transcript">Kérdés–válasz napló</button>
         <button class="subtab-btn" data-subtab="evaluation">Kiértékelés</button>
       </nav>
 
@@ -292,6 +302,10 @@
         </div>
       </div>
 
+      <div id="subtab-transcript" class="subtab-pane">
+        <div id="transcriptContent"><p class="placeholder">Betöltés...</p></div>
+      </div>
+
       <div id="subtab-evaluation" class="subtab-pane">
         <div class="evaluation-actions">
           <button id="runEvaluateBtn" class="btn btn-primary">Kiértékelés futtatása</button>
@@ -309,6 +323,7 @@
   <script src="metrics.js"></script>
   <script src="routing.js"></script>
   <script src="detail.js"></script>
+  <script src="provenance.js"></script>
   <script src="app.js"></script>
   <script src="entity-view.js"></script>
   <script src="run-view.js"></script>

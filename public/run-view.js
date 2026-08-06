@@ -8,6 +8,7 @@ function findRunById(runId) {
 
 async function openRunDetail(runId, updateHash) {
   state.currentRunId = runId;
+  closeProvenancePanel();
   closeEntityDetail(false); // one teardown path, so the two views cannot both be open
   document.querySelector('.tab-content').style.display = 'none';
   document.getElementById('runDetailView').style.display = 'block';
@@ -98,6 +99,9 @@ document.querySelectorAll('.subtab-btn').forEach(btn => {
 
 async function loadSubtab(name) {
   state.currentSubtab = name;
+  // The panel is pinned to one response; leaving its context must not leave it
+  // hovering over a different run's data.
+  closeProvenancePanel();
   document.querySelectorAll('.subtab-btn').forEach(b => b.classList.remove('active'));
   document.querySelector(`.subtab-btn[data-subtab="${name}"]`)?.classList.add('active');
   document.querySelectorAll('.subtab-pane').forEach(p => p.classList.remove('active'));
@@ -109,6 +113,8 @@ async function loadSubtab(name) {
     await loadOverviewTab(state.currentRunId);
   } else if (name === 'responses') {
     await loadResponsesTab(state.currentRunId);
+  } else if (name === 'transcript') {
+    await loadTranscriptTab(state.currentRunId);
   } else if (name === 'evaluation') {
     await loadEvaluationTab(state.currentRunId);
   }
@@ -275,7 +281,7 @@ async function loadResponsesTab(runId) {
       const distHtml = typeof dist === 'string' ? dist : dist.outerHTML;
 
       return `
-        <tr>
+        <tr data-response-id="${escapeHtml(r.id)}" class="response-row" role="button" tabindex="0" title="Kattints a válasz provenienciájáért: a pontos prompt, a nyers kimenet és a kísérleti beállítások.">
           <td>${escapeHtml(r.persona_name)}</td>
           <td>${escapeHtml(r.question_text)}</td>
           <td>${escapeHtml(answerText(r))}</td>
@@ -290,6 +296,63 @@ async function loadResponsesTab(runId) {
     tbody.innerHTML = `<tr><td colspan="7" class="error-message">Válaszok betöltése sikertelen: ${escapeHtml(err.message)}</td></tr>`;
   }
 }
+
+async function loadTranscriptTab(runId) {
+  const container = document.getElementById('transcriptContent');
+  container.innerHTML = '<p class="placeholder">Betöltés...</p>';
+  try {
+    const runData = await apiCall('GET', '/api/runs/' + runId);
+    container.innerHTML = renderTranscript(runData.responses || []);
+  } catch (err) {
+    container.innerHTML = `<p class="error-message">Átirat betöltése sikertelen: ${escapeHtml(err.message)}</p>`;
+  }
+}
+
+/** One row = one model call; the panel shows exactly what produced it. */
+async function openProvenancePanel(runId, responseId) {
+  const panel = document.getElementById('provenancePanel');
+  const body = document.getElementById('provenanceBody');
+  panel.style.display = 'block';
+  body.innerHTML = '<p class="placeholder">Betöltés...</p>';
+  try {
+    const response = await apiCall(
+      'GET',
+      `/api/runs/${encodeURIComponent(runId)}/responses/${encodeURIComponent(responseId)}`
+    );
+    body.innerHTML = renderResponseProvenance(response);
+  } catch (err) {
+    body.innerHTML = `<p class="error-message">Proveniencia betöltése sikertelen: ${escapeHtml(err.message)}</p>`;
+  }
+}
+
+document.getElementById('provenanceCloseBtn')?.addEventListener('click', closeProvenancePanel);
+
+function wireProvenanceOpening(containerId) {
+  const container = document.getElementById(containerId);
+  if (!container) return;
+  const open = (target) => {
+    const row = target.closest('[data-response-id]');
+    if (row && state.currentRunId) void openProvenancePanel(state.currentRunId, row.dataset.responseId);
+  };
+  container.addEventListener('click', (e) => open(e.target));
+  container.addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter' && e.key !== ' ') return;
+    if (!e.target.closest('[data-response-id]')) return;
+    e.preventDefault();
+    open(e.target);
+  });
+}
+
+['responsesTableBody', 'transcriptContent'].forEach(wireProvenanceOpening);
+
+function closeProvenancePanel() {
+  const panel = document.getElementById('provenancePanel');
+  if (panel) panel.style.display = 'none';
+}
+
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') closeProvenancePanel();
+});
 
 function renderEvaluationCard(ev) {
   const created = formatDateTime(ev.created_at);

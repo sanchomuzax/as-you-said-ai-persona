@@ -32,6 +32,10 @@ recorded with full experimental metadata so runs are reproducible and auditable.
 - **Self-explaining metrics**: every research indicator (PC, RS, abstention, invalid rate,
   run status, token budget) carries a hover explanation, and abstention is labelled as
   what it is — an evidentiary gap, never an error.
+- **Response provenance**: any answer opens a panel with the exact prompt that was
+  sent, the raw model output, the option order, seed, model version and serving
+  provider, tokens and cost. A per-persona question/answer log shows the exchanges as
+  what they are — independent single-turn calls, never a conversation thread.
 - **Full response recording**: every model call is stored with prompt, permutation,
   model parameters, raw output and token usage.
 - **Bias mitigation built in**: balanced permutation of answer options, Style C

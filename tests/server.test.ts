@@ -704,3 +704,57 @@ describe('older versions stay reachable', () => {
     await server.close()
   })
 })
+
+describe('response provenance', () => {
+  async function makeRunWithResponse(): Promise<{ runId: string; responseId: string }> {
+    const projectId = (await app.inject({ method: 'POST', url: '/api/projects', cookies: cookie, payload: { name: 'P' } })).json().data.id
+    const personaId = (await app.inject({
+      method: 'POST', url: '/api/personas', cookies: cookie, payload: { projectId, name: 'P1', demographics: { kor: '30' } }
+    })).json().data.id
+    const questionnaireId = (await app.inject({
+      method: 'POST', url: '/api/questionnaires', cookies: cookie, payload: { name: 'Q', questions: [{ text: 'Q?', options: ['a', 'b'] }] }
+    })).json().data.id
+    const runId = (await app.inject({
+      method: 'POST', url: '/api/runs', cookies: cookie,
+      payload: { name: 'R', questionnaireId, personaIds: [personaId], seeds: [0] }
+    })).json().data.id
+    await new Promise((r) => setTimeout(r, 60))
+    const detail = (await app.inject({ method: 'GET', url: `/api/runs/${runId}`, cookies: cookie })).json().data
+    return { runId, responseId: detail.responses[0].id }
+  }
+
+  it('serves the exact prompt and raw output for one response', async () => {
+    const { runId, responseId } = await makeRunWithResponse()
+    const res = await app.inject({ method: 'GET', url: `/api/runs/${runId}/responses/${responseId}`, cookies: cookie })
+    expect(res.statusCode).toBe(200)
+    const data = res.json().data
+    expect(data.prompt_rendered).toContain('kor: 30') // the persona as the model saw it
+    expect(data.raw_response).toBe('{"A": 0.7, "B": 0.3}')
+    expect(data.permutation_json).toBeTruthy()
+    expect(data.temperature).toBeDefined()
+    expect(data.question_text).toBe('Q?')
+    expect(data.options_json).toBe(JSON.stringify(['a', 'b']))
+    expect(data.persona_name).toBe('P1')
+  })
+
+  it('keeps the heavy fields out of the run response list', async () => {
+    const { runId } = await makeRunWithResponse()
+    const detail = (await app.inject({ method: 'GET', url: `/api/runs/${runId}`, cookies: cookie })).json().data
+    // the list is polled during a run; prompts and raw outputs are fetched per row
+    expect(detail.responses[0].prompt_rendered).toBeUndefined()
+    expect(detail.responses[0].raw_response).toBeUndefined()
+  })
+
+  it('404s for a response that does not belong to the run', async () => {
+    const { runId } = await makeRunWithResponse()
+    const other = await makeRunWithResponse()
+    const res = await app.inject({ method: 'GET', url: `/api/runs/${runId}/responses/${other.responseId}`, cookies: cookie })
+    expect(res.statusCode).toBe(404)
+  })
+
+  it('requires a session', async () => {
+    const { runId, responseId } = await makeRunWithResponse()
+    const res = await app.inject({ method: 'GET', url: `/api/runs/${runId}/responses/${responseId}` })
+    expect(res.statusCode).toBe(401)
+  })
+})

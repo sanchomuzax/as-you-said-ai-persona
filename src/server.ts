@@ -663,6 +663,27 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
   })
 
   // --- Progress / results / evaluation ---
+  /**
+   * Everything that produced one answer: the exact prompt, the raw output and the
+   * experimental settings. Kept out of the run's response list on purpose — that
+   * list is polled while a run executes, and prompts are large.
+   */
+  app.get('/api/runs/:runId/responses/:id', async (req, reply) => {
+    const { runId, id } = req.params as { runId: string; id: string }
+    const row = db
+      .prepare(
+        `SELECT ${CSV_COLUMNS.map((c) => 'res.' + c).join(', ')},
+                p.name AS persona_name, q.text AS question_text, q.options_json, q.scale_type
+           FROM responses res
+           JOIN personas p ON p.id = res.persona_id
+           JOIN questions q ON q.id = res.question_id
+          WHERE res.id = ? AND res.run_id = ?`
+      )
+      .get(id, runId)
+    if (!row) return reply.code(404).send({ success: false, error: 'Response not found' })
+    return { success: true, data: row }
+  })
+
   app.get('/api/runs/:id/progress', async (req, reply) => {
     const { id } = req.params as { id: string }
     const run = db.prepare('SELECT status FROM runs WHERE id = ?').get(id) as { status: string } | undefined
