@@ -16,6 +16,9 @@ class FakeClient implements ChatClient {
       modelVersion: `${model}-20260801`,
       promptTokens: 100,
       completionTokens: 20,
+      cachedTokens: 0,
+      cacheDiscountUsd: 0,
+      provider: null,
       costUsd: 0.0001,
       requestId: 'req-' + this.calls.length,
       latencyMs: 5
@@ -120,6 +123,9 @@ describe('SurveyRunner — elicitation modes', () => {
           modelVersion: model,
           promptTokens: 1,
           completionTokens: 1,
+          cachedTokens: 0,
+          cacheDiscountUsd: 0,
+          provider: null,
           costUsd: 0,
           requestId: 'r',
           latencyMs: 1
@@ -216,5 +222,106 @@ describe('SurveyRunner — resuming across the elicitation fix', () => {
 
     const total = db.prepare("SELECT COUNT(*) c FROM responses WHERE run_id='run'").get() as { c: number }
     expect(total.c).toBe(2) // 1 legacy kept + 1 newly run rotation
+  })
+})
+
+describe('SurveyRunner — prompt cache accounting', () => {
+  it('records cached prompt tokens per response and in the ledger', async () => {
+    const db = createDb(':memory:')
+    const client: ChatClient = {
+      async complete(model: string) {
+        return {
+          content: '{"A": 0.6, "B": 0.4}',
+          modelVersion: model,
+          promptTokens: 100,
+          completionTokens: 10,
+          cachedTokens: 64,
+          cacheDiscountUsd: 0.002,
+          provider: 'DeepInfra',
+          costUsd: 0.001,
+          requestId: 'r',
+          latencyMs: 2
+        }
+      }
+    }
+    db.prepare('INSERT INTO questionnaires (id, name) VALUES (?,?)').run('q', 'Q')
+    db.prepare('INSERT INTO questions (id, questionnaire_id, ord, text, options_json) VALUES (?,?,0,?,?)').run(
+      'qq', 'q', 'Q?', JSON.stringify(['a', 'b'])
+    )
+    db.prepare('INSERT INTO personas (id, name, demographics_json) VALUES (?,?,?)').run('p', 'P', '{}')
+    db.prepare("INSERT INTO runs (id, questionnaire_id, name, status, config_json) VALUES (?,?,?,'pending',?)").run(
+      'run', 'q', 'R', JSON.stringify({ model: 'm', temperature: 1, seeds: [0] })
+    )
+    db.prepare('INSERT INTO run_personas (run_id, persona_id) VALUES (?,?)').run('run', 'p')
+
+    const budget = new BudgetTracker(db, { globalBudget: 1e6, perRunBudget: 1e6 })
+    await new SurveyRunner(db, client, budget).execute('run')
+
+    const row = db.prepare("SELECT cached_tokens FROM responses WHERE run_id='run' LIMIT 1").get() as { cached_tokens: number }
+    expect(row.cached_tokens).toBe(64)
+    expect(budget.usage('run').cachedTokens).toBe(128) // two rotations
+  })
+})
+
+describe('SurveyRunner — provider recording', () => {
+  it('records which provider served each call, since model pinning alone is not enough', async () => {
+    const db = createDb(':memory:')
+    const client: ChatClient = {
+      async complete(model: string) {
+        return {
+          content: '{"A": 0.6, "B": 0.4}', modelVersion: model, provider: 'DeepInfra',
+          promptTokens: 10, completionTokens: 2, cachedTokens: 0, cacheDiscountUsd: 0,
+          costUsd: 0, requestId: 'r', latencyMs: 1
+        }
+      }
+    }
+    db.prepare('INSERT INTO questionnaires (id, name) VALUES (?,?)').run('q', 'Q')
+    db.prepare('INSERT INTO questions (id, questionnaire_id, ord, text, options_json) VALUES (?,?,0,?,?)').run(
+      'qq', 'q', 'Q?', JSON.stringify(['a', 'b'])
+    )
+    db.prepare('INSERT INTO personas (id, name, demographics_json) VALUES (?,?,?)').run('p', 'P', '{}')
+    db.prepare("INSERT INTO runs (id, questionnaire_id, name, status, config_json) VALUES (?,?,?,'pending',?)").run(
+      'run', 'q', 'R', JSON.stringify({ model: 'm', temperature: 1, seeds: [0] })
+    )
+    db.prepare('INSERT INTO run_personas (run_id, persona_id) VALUES (?,?)').run('run', 'p')
+    await new SurveyRunner(db, client, new BudgetTracker(db, { globalBudget: 1e6, perRunBudget: 1e6 })).execute('run')
+    const row = db.prepare("SELECT provider FROM responses WHERE run_id='run' LIMIT 1").get() as { provider: string }
+    expect(row.provider).toBe('DeepInfra')
+  })
+})
+
+describe('SurveyRunner — malformed usage numbers', () => {
+  it('keeps the answer when the provider reports NaN usage instead of failing the run', async () => {
+    const db = createDb(':memory:')
+    const client: ChatClient = {
+      async complete(model: string) {
+        return {
+          content: '{"A": 0.6, "B": 0.4}', modelVersion: model, provider: 'X',
+          promptTokens: 10, completionTokens: 2,
+          cachedTokens: Number.NaN, cacheDiscountUsd: Number.NaN,
+          costUsd: 0, requestId: 'r', latencyMs: 1
+        }
+      }
+    }
+    db.prepare('INSERT INTO questionnaires (id, name) VALUES (?,?)').run('q', 'Q')
+    db.prepare('INSERT INTO questions (id, questionnaire_id, ord, text, options_json) VALUES (?,?,0,?,?)').run(
+      'qq', 'q', 'Q?', JSON.stringify(['a', 'b'])
+    )
+    db.prepare('INSERT INTO personas (id, name, demographics_json) VALUES (?,?,?)').run('p', 'P', '{}')
+    db.prepare("INSERT INTO runs (id, questionnaire_id, name, status, config_json) VALUES (?,?,?,'pending',?)").run(
+      'run', 'q', 'R', JSON.stringify({ model: 'm', temperature: 1, seeds: [0] })
+    )
+    db.prepare('INSERT INTO run_personas (run_id, persona_id) VALUES (?,?)').run('run', 'p')
+
+    await new SurveyRunner(db, client, new BudgetTracker(db, { globalBudget: 1e6, perRunBudget: 1e6 })).execute('run')
+
+    const run = db.prepare("SELECT status FROM runs WHERE id='run'").get() as { status: string }
+    expect(run.status).toBe('completed')
+    const row = db.prepare("SELECT cached_tokens, cache_discount_usd FROM responses WHERE run_id='run' LIMIT 1").get() as {
+      cached_tokens: number
+      cache_discount_usd: number
+    }
+    expect(row.cached_tokens).toBe(0)
+    expect(row.cache_discount_usd).toBe(0)
   })
 })

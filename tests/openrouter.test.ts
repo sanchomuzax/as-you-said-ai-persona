@@ -54,4 +54,71 @@ describe('OpenRouterClient', () => {
     const client = new OpenRouterClient('key', 'https://example.test/v1', fetchFn as typeof fetch)
     await expect(client.complete('m', 'p', { temperature: 1, seed: 0 })).rejects.toThrow(/missing content/)
   }, 15_000)
+
+  it('includes cachedTokens and cacheDiscountUsd when present in usage', async () => {
+    const bodyWithCache = {
+      id: 'gen-124',
+      model: 'deepseek/deepseek-v4-flash-20260801',
+      choices: [{ message: { content: 'cached response' } }],
+      usage: {
+        prompt_tokens: 50,
+        completion_tokens: 10,
+        cost: 0.0001,
+        prompt_tokens_details: { cached_tokens: 20 },
+        cache_discount: -0.00005
+      }
+    }
+    const fetchFn = vi.fn(async () => okResponse(bodyWithCache))
+    const client = new OpenRouterClient('key', 'https://example.test/v1', fetchFn as typeof fetch)
+    const result = await client.complete('m', 'p', { temperature: 1, seed: 0 })
+
+    expect(result.cachedTokens).toBe(20)
+    expect(result.cacheDiscountUsd).toBeCloseTo(-0.00005)
+  })
+
+  it('defaults cachedTokens and cacheDiscountUsd to 0 when absent', async () => {
+    const fetchFn = vi.fn(async () => okResponse(successBody))
+    const client = new OpenRouterClient('key', 'https://example.test/v1', fetchFn as typeof fetch)
+    const result = await client.complete('m', 'p', { temperature: 1, seed: 0 })
+
+    expect(result.cachedTokens).toBe(0)
+    expect(result.cacheDiscountUsd).toBe(0)
+  })
+
+  it('defaults cachedTokens to 0 when prompt_tokens_details is present but cached_tokens is missing', async () => {
+    const bodyWithPartialDetails = {
+      id: 'gen-125',
+      model: 'deepseek/deepseek-v4-flash-20260801',
+      choices: [{ message: { content: 'response' } }],
+      usage: {
+        prompt_tokens: 42,
+        completion_tokens: 7,
+        cost: 0.00012,
+        prompt_tokens_details: {} // present but empty
+      }
+    }
+    const fetchFn = vi.fn(async () => okResponse(bodyWithPartialDetails))
+    const client = new OpenRouterClient('key', 'https://example.test/v1', fetchFn as typeof fetch)
+    const result = await client.complete('m', 'p', { temperature: 1, seed: 0 })
+
+    expect(result.cachedTokens).toBe(0)
+    expect(result.cacheDiscountUsd).toBe(0)
+  })
+
+  it('handles null/undefined in usage gracefully', async () => {
+    const bodyWithNullUsage = {
+      id: 'gen-126',
+      model: 'deepseek/deepseek-v4-flash-20260801',
+      choices: [{ message: { content: 'response' } }],
+      usage: null
+    }
+    const fetchFn = vi.fn(async () => okResponse(bodyWithNullUsage))
+    const client = new OpenRouterClient('key', 'https://example.test/v1', fetchFn as typeof fetch)
+    const result = await client.complete('m', 'p', { temperature: 1, seed: 0 })
+
+    expect(result.cachedTokens).toBe(0)
+    expect(result.cacheDiscountUsd).toBe(0)
+    expect(result.promptTokens).toBe(0)
+    expect(result.costUsd).toBe(0)
+  })
 })

@@ -52,7 +52,10 @@ const TOOLTIPS = {
   distribution:
     'Style C elicitáció: a perszóna nem egy választ ad, hanem valószínűség-eloszlást az opciókra. Az oszlopok az átlagolt eloszlást mutatják.',
   seed: 'A modellhíváshoz használt seed. Ugyanaz a kérdés több seeddel megy ki, így mérhető az ismétlési stabilitás.',
-  modelVersion: 'A szolgáltató által ténylegesen kiszolgáló modellverzió (model pinning ellenőrzéshez rögzítjük).',
+  modelVersion:
+    'A ténylegesen kiszolgáló modellverzió és szolgáltató (model pinning). Ugyanazt a modellt az OpenRouter több szolgáltatóhoz is irányíthatja, eltérő kvantálással és cache-viselkedéssel — ezért a szolgáltatót is rögzítjük.',
+  evaluationModel:
+    'A kiértékelést készítő modell verziója.',
   validFlag: '✓ érvényes válasz · — tartózkodás (bizonyítékhézag) · ✗ nem értelmezhető kimenet',
   multiChoice:
     'Többválaszos kérdés: az opciók függetlenek, mindegyikhez külön 0–1 kiválasztási valószínűség tartozik. A számok NEM összegződnek 100%-ra, és nem hasonlíthatók közvetlenül egyválaszos kérdés eloszlásához.',
@@ -61,7 +64,11 @@ const TOOLTIPS = {
   legacyElicitation:
     'Régi elicitationnal készült válaszok: ezek a többválaszos kérdést is 100%-ra normalizált eloszlásként kérdezték le, ezért mást mérnek. Az aggregátumból kihagyva — az összehasonlíthatóság érdekében a kérdést újra kell futtatni.',
   support:
-    'Opciónkénti támogatottság: az adott opció átlagos kiválasztási valószínűsége a perszónák válaszaiban. Többválaszos kérdésnél az értékek összege meghaladhatja a 100%-ot.'
+    'Opciónkénti támogatottság: az adott opció átlagos kiválasztási valószínűsége a perszónák válaszaiban. Többválaszos kérdésnél az értékek összege meghaladhatja a 100%-ot.',
+  cache:
+    'Prompt-gyorsítótár (prompt cache): a prompt-tokenek ekkora része a szolgáltató gyorsítótárából érkezett, a normál ár nagyjából tizedéért — a tényleges költség tehát alacsonyabb, mint amit a nyers tokenszám sugall. A cache automatikusan épül fel az azonos prompt-előtaggal ismételt hívásoknál.',
+  partialEvaluation:
+    'Részeredmény: a futtatás még nem fejeződött be a kiértékelés készítésekor. A stabilitási mutatók (PC/RS) és az arányok még változhatnak.'
 };
 
 function statusLabel(status) {
@@ -139,6 +146,8 @@ function runStatChips(stats) {
     chips.push(chip('stat-chip', 'Tartózkodás: ' + formatNumber(stats.abstained), TOOLTIPS.abstain));
   }
   chips.push(chip('stat-chip', formatNumber(stats.totalTokens) + ' token', TOOLTIPS.tokens));
+  const cacheChip = renderCacheChip(stats);
+  if (cacheChip) chips.push(cacheChip);
   chips.push(chip('stat-chip', formatCost(stats.costUsd) + ' USD', TOOLTIPS.cost));
   if (stats.avgLatencyMs) {
     chips.push(chip('stat-chip', formatNumber(Math.round(stats.avgLatencyMs)) + ' ms/válasz', TOOLTIPS.latency));
@@ -155,4 +164,51 @@ function renderLegacyOnlyNotice(question) {
   const legacy = question.legacyElicitationCount || 0;
   if (legacy === 0 || (question.aggregatedResponseCount || 0) > 0) return '';
   return `<p class="detail-note detail-note-warning">Ehhez a kérdéshez csak a régi, hibás elicitationnal készült válasz van (${formatNumber(legacy)} db), ezért nincs mit aggregálni. A számokhoz a kérdést újra kell futtatni — a régi válaszok megmaradnak a naplóban.</p>`;
+}
+
+/**
+ * Prompt cache hit indicator. Shows percentage and token count only when
+ * both cachedTokens and promptTokens are present and truthy (zero cache is noise).
+ */
+function renderCacheChip(stats) {
+  if (!stats.cachedTokens || !stats.promptTokens) return '';
+  const percent = Math.round((stats.cachedTokens / stats.promptTokens) * 100);
+  const label = `⚡ cache: ${percent}% (${formatNumber(stats.cachedTokens)} token)`;
+  return chip('stat-chip', label, TOOLTIPS.cache);
+}
+
+/**
+ * Renders a responses table model cell with version and optional provider tag.
+ * Escapes all output to prevent injection via model_version or provider names.
+ */
+function renderModelCell(response) {
+  if (!response) return escapeHtml('—');
+  const modelVersion = response.model_version || '—';
+  const provider = response.provider;
+  const tooltipText = provider
+    ? `Kiszolgáló szolgáltató: ${provider}`
+    : 'A szolgáltató nincs rögzítve ennél a válasznál.';
+  const providerHtml = provider ? ` <span class="provider-tag">${escapeHtml(provider)}</span>` : '';
+  return `<span title="${escapeHtml(tooltipText)}">${escapeHtml(modelVersion)}${providerHtml}</span>`;
+}
+
+/**
+ * Marks an evaluation produced while the run was still incomplete.
+ * Returns empty string when run_status is missing or 'completed'.
+ * When done_cells/total_cells are both present and valid, includes them in the tooltip.
+ * Falls back to generic tooltip if counts are falsy, null/undefined, or contradictory.
+ */
+function renderPartialEvaluationChip(evaluation) {
+  if (!evaluation.run_status || evaluation.run_status === 'completed') return '';
+  let tooltip = TOOLTIPS.partialEvaluation;
+  // Both counts must exist, be non-null, finite, non-negative, and logically consistent
+  if (
+    evaluation.done_cells != null && evaluation.total_cells != null &&
+    Number.isFinite(evaluation.done_cells) && Number.isFinite(evaluation.total_cells) &&
+    evaluation.total_cells > 0 && evaluation.done_cells >= 0 &&
+    evaluation.done_cells <= evaluation.total_cells
+  ) {
+    tooltip = `A futtatás még nem fejeződött be a kiértékelés készítésekor: ${formatNumber(evaluation.total_cells)} cellából ${formatNumber(evaluation.done_cells)} válasz volt rögzítve. A stabilitási mutatók (PC/RS) és az arányok még változhatnak.`;
+  }
+  return chip('metric-chip metric-chip-warning', '⚠ Részeredmény', tooltip);
 }

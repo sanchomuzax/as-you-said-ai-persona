@@ -61,6 +61,8 @@ function renderRunDetailHeader(run, progress) {
     abstained,
     invPct,
     totalTokens: usage.totalTokens || 0,
+    cachedTokens: usage.cachedTokens || 0,
+    promptTokens: usage.promptTokens || 0,
     costUsd: usage.costUsd || 0,
     avgLatencyMs: progress.avgLatencyMs
   });
@@ -259,7 +261,7 @@ async function loadResponsesTab(runId) {
           <td>${distHtml}</td>
           <td><span class="${validClass}" title="${escapeHtml(validTitle)}">${validText}</span></td>
           <td>${escapeHtml(r.seed != null ? String(r.seed) : '—')}</td>
-          <td>${escapeHtml(r.model_version || '—')}</td>
+          <td>${renderModelCell(r)}</td>
         </tr>
       `;
     }).join('');
@@ -273,7 +275,8 @@ function renderEvaluationCard(ev) {
   return `
     <div class="evaluation-card">
       <div class="evaluation-card-header">
-        <span class="evaluation-model" title="${escapeHtml(TOOLTIPS.modelVersion)}">${escapeHtml(ev.model || '—')}</span>
+        <span class="evaluation-model" title="${escapeHtml(TOOLTIPS.evaluationModel)}">${escapeHtml(ev.model || '—')}</span>
+        ${renderPartialEvaluationChip(ev)}
         <span class="evaluation-date">${escapeHtml(created)}</span>
       </div>
       <div class="evaluation-content">${renderMarkdown(ev.content || '')}</div>

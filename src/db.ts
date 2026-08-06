@@ -30,6 +30,28 @@ function migrate(db: DatabaseSync): void {
   if (!responseCols.some((c) => c.name === 'elicitation_mode')) {
     db.exec('ALTER TABLE responses ADD COLUMN elicitation_mode TEXT')
   }
+  if (!responseCols.some((c) => c.name === 'cached_tokens')) {
+    db.exec('ALTER TABLE responses ADD COLUMN cached_tokens INTEGER NOT NULL DEFAULT 0')
+  }
+  if (!responseCols.some((c) => c.name === 'provider')) {
+    db.exec('ALTER TABLE responses ADD COLUMN provider TEXT')
+  }
+  if (!responseCols.some((c) => c.name === 'cache_discount_usd')) {
+    db.exec('ALTER TABLE responses ADD COLUMN cache_discount_usd REAL')
+  }
+  const ledgerCols = db.prepare('PRAGMA table_info(token_ledger)').all() as unknown as { name: string }[]
+  if (!ledgerCols.some((c) => c.name === 'cached_tokens')) {
+    db.exec('ALTER TABLE token_ledger ADD COLUMN cached_tokens INTEGER NOT NULL DEFAULT 0')
+  }
+  // Older evaluations have no coverage snapshot; NULL means "unknown", which the
+  // UI shows as an unmarked evaluation rather than claiming it was complete.
+  const evaluationCols = db.prepare('PRAGMA table_info(run_evaluations)').all() as unknown as { name: string }[]
+  for (const column of ['run_status TEXT', 'done_cells INTEGER', 'total_cells INTEGER']) {
+    const name = column.split(' ')[0]!
+    if (!evaluationCols.some((c) => c.name === name)) {
+      db.exec(`ALTER TABLE run_evaluations ADD COLUMN ${column}`)
+    }
+  }
 }
 
 const SCHEMA = `
@@ -111,9 +133,18 @@ CREATE TABLE IF NOT EXISTS responses (
   abstained INTEGER NOT NULL DEFAULT 0,
   prompt_tokens INTEGER,
   completion_tokens INTEGER,
+  -- prompt tokens served from the provider's prompt cache (~10% of the price).
+  -- 0 for rows recorded before this was measured: a provider that reports nothing
+  -- is indistinguishable from a cache miss anyway, so 0 loses no information.
+  cached_tokens INTEGER NOT NULL DEFAULT 0,
   cost_usd REAL,
+  -- saving reported by OpenRouter for the cached part of the prompt
+  cache_discount_usd REAL,
   latency_ms INTEGER,
   openrouter_request_id TEXT,
+  -- the same model id is served by several providers with different quantization
+  -- and caching behaviour, so model pinning is only complete with the provider
+  provider TEXT,
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -122,6 +153,7 @@ CREATE TABLE IF NOT EXISTS token_ledger (
   run_id TEXT NOT NULL,
   prompt_tokens INTEGER NOT NULL,
   completion_tokens INTEGER NOT NULL,
+  cached_tokens INTEGER NOT NULL DEFAULT 0,
   cost_usd REAL NOT NULL DEFAULT 0,
   ts TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -135,6 +167,11 @@ CREATE TABLE IF NOT EXISTS run_evaluations (
   prompt_tokens INTEGER,
   completion_tokens INTEGER,
   cost_usd REAL,
+  -- coverage at the moment of evaluation: an evaluation of an unfinished run
+  -- describes partial data and must be labelled as such
+  run_status TEXT,
+  done_cells INTEGER,
+  total_cells INTEGER,
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 

@@ -18,6 +18,9 @@ class SlowClient implements ChatClient {
       modelVersion: model,
       promptTokens: 10,
       completionTokens: 5,
+      cachedTokens: 0,
+      cacheDiscountUsd: 0,
+      provider: null,
       costUsd: 0,
       requestId: null,
       latencyMs: 5

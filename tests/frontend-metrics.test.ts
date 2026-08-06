@@ -10,6 +10,11 @@ interface QuestionLike {
   invalidCount?: number
 }
 
+interface ResponseLike {
+  model_version?: string
+  provider?: string
+}
+
 const api = loadPublicScript<{
   escapeHtml: (t: unknown) => string
   formatNumber: (n: unknown) => string
@@ -20,13 +25,21 @@ const api = loadPublicScript<{
   renderMetricChips: (q: QuestionLike) => string
   runStatChips: (s: Record<string, number>) => string
   renderLegacyOnlyNotice: (q: { legacyElicitationCount?: number; aggregatedResponseCount?: number }) => string
+  renderCacheChip: (stats: { cachedTokens?: number; promptTokens?: number }) => string
+  renderPartialEvaluationChip: (evaluation: {
+    run_status?: string
+    // SQLite hands back NULL for an unset column — the chip must survive that
+    done_cells?: number | null
+    total_cells?: number | null
+  }) => string
+  renderModelCell: (response: ResponseLike) => string
   TOOLTIPS: Record<string, string>
 }>(
   ['format.js', 'metrics.js'],
-  '{ escapeHtml, formatNumber, formatMetric, formatDateTime, statusLabel, statusTooltip, renderMetricChips, runStatChips, renderLegacyOnlyNotice, TOOLTIPS }'
+  '{ escapeHtml, formatNumber, formatMetric, formatDateTime, statusLabel, statusTooltip, renderMetricChips, runStatChips, renderLegacyOnlyNotice, renderCacheChip, renderPartialEvaluationChip, renderModelCell, TOOLTIPS }'
 )
 
-const { escapeHtml, formatNumber, formatMetric, formatDateTime, statusLabel, statusTooltip, renderMetricChips, runStatChips, renderLegacyOnlyNotice, TOOLTIPS } = api
+const { escapeHtml, formatNumber, formatMetric, formatDateTime, statusLabel, statusTooltip, renderMetricChips, runStatChips, renderLegacyOnlyNotice, renderCacheChip, renderPartialEvaluationChip, renderModelCell, TOOLTIPS } = api
 
 describe('escapeHtml', () => {
   it('escapes every character that could break out of text or attribute context', () => {
@@ -170,5 +183,156 @@ describe('renderLegacyOnlyNotice', () => {
   it('stays out of the way when there is something to aggregate', () => {
     expect(renderLegacyOnlyNotice({ legacyElicitationCount: 336, aggregatedResponseCount: 12 })).toBe('')
     expect(renderLegacyOnlyNotice({ legacyElicitationCount: 0, aggregatedResponseCount: 0 })).toBe('')
+  })
+})
+
+describe('renderCacheChip', () => {
+  it('returns empty string when cachedTokens is falsy', () => {
+    expect(renderCacheChip({ cachedTokens: 0, promptTokens: 100 })).toBe('')
+    expect(renderCacheChip({ cachedTokens: undefined, promptTokens: 100 })).toBe('')
+    expect(renderCacheChip({ cachedTokens: null as unknown as number, promptTokens: 100 })).toBe('')
+  })
+
+  it('returns empty string when promptTokens is falsy', () => {
+    expect(renderCacheChip({ cachedTokens: 50, promptTokens: 0 })).toBe('')
+    expect(renderCacheChip({ cachedTokens: 50, promptTokens: undefined })).toBe('')
+    expect(renderCacheChip({ cachedTokens: 50, promptTokens: null as unknown as number })).toBe('')
+  })
+
+  it('renders a cache chip with percentage and token count', () => {
+    const html = renderCacheChip({ cachedTokens: 4000, promptTokens: 10000 })
+    expect(html).toContain('⚡')
+    expect(html).toContain('cache')
+    expect(html).toContain('40%')
+    // formatNumber may vary locale-dependent; check for the core digits
+    expect(html).toMatch(/40%.*4.*0+.*token/)
+  })
+
+  it('rounds the percentage to a whole number', () => {
+    const html = renderCacheChip({ cachedTokens: 333, promptTokens: 1000 })
+    expect(html).toContain('33%')
+  })
+
+  it('includes a tooltip explaining cache pricing benefit', () => {
+    const html = renderCacheChip({ cachedTokens: 4000, promptTokens: 10000 })
+    expect(html).toContain(escapeHtml(TOOLTIPS.cache))
+    expect(html).not.toMatch(/title="[^"]*"[^ =>]/)
+  })
+})
+
+describe('renderPartialEvaluationChip', () => {
+  it('returns empty string when run_status is missing', () => {
+    expect(renderPartialEvaluationChip({})).toBe('')
+  })
+
+  it('returns empty string when run_status is "completed"', () => {
+    expect(renderPartialEvaluationChip({ run_status: 'completed', done_cells: 50, total_cells: 50 })).toBe('')
+  })
+
+  it('renders a warning chip for incomplete runs with valid cell counts', () => {
+    const html = renderPartialEvaluationChip({ run_status: 'running', done_cells: 78, total_cells: 232 })
+    expect(html).toContain('⚠')
+    expect(html).toContain('Részeredmény')
+    expect(html).toContain('metric-chip-warning')
+    expect(html).toContain('78')
+    expect(html).toContain('232')
+    // Check for reworded tooltip mentioning responses
+    expect(html).toContain('válasz volt rögzítve')
+  })
+
+  it('falls back to generic tooltip when done_cells is null', () => {
+    const html = renderPartialEvaluationChip({ run_status: 'running', done_cells: null, total_cells: 232 })
+    expect(html).toContain('⚠')
+    expect(html).toContain('Részeredmény')
+    expect(html).toContain(escapeHtml(TOOLTIPS.partialEvaluation))
+    expect(html).not.toContain('cellából')
+  })
+
+  it('falls back to generic tooltip when total_cells is null', () => {
+    const html = renderPartialEvaluationChip({ run_status: 'running', done_cells: 78, total_cells: null })
+    expect(html).toContain('⚠')
+    expect(html).toContain(escapeHtml(TOOLTIPS.partialEvaluation))
+    expect(html).not.toContain('válasz volt rögzítve')
+  })
+
+  it('falls back to generic tooltip when total_cells is zero', () => {
+    const html = renderPartialEvaluationChip({ run_status: 'running', done_cells: 0, total_cells: 0 })
+    expect(html).toContain(escapeHtml(TOOLTIPS.partialEvaluation))
+    expect(html).not.toContain('cellából')
+  })
+
+  it('falls back to generic tooltip when done_cells > total_cells', () => {
+    const html = renderPartialEvaluationChip({ run_status: 'running', done_cells: 300, total_cells: 232 })
+    expect(html).toContain(escapeHtml(TOOLTIPS.partialEvaluation))
+    expect(html).not.toContain('300 válasz')
+  })
+
+  it('falls back to generic tooltip when counts are undefined', () => {
+    const html = renderPartialEvaluationChip({ run_status: 'paused' })
+    expect(html).toContain('⚠')
+    expect(html).toContain('Részeredmény')
+    expect(html).toContain(escapeHtml(TOOLTIPS.partialEvaluation))
+    expect(html).not.toContain('cellából')
+  })
+
+  it('never emits an unescaped tooltip quote', () => {
+    expect(renderPartialEvaluationChip({ run_status: 'running', done_cells: 78, total_cells: 232 })).not.toMatch(
+      /title="[^"]*"[^ =>]/
+    )
+  })
+})
+
+describe('runStatChips — cache', () => {
+  it('shows the cache chip inside the run summary when there were cache hits', () => {
+    const html = runStatChips({
+      done: 4, totalCells: 8, invalid: 0, abstained: 0, totalTokens: 1000, costUsd: 0,
+      cachedTokens: 400, promptTokens: 800
+    })
+    expect(html).toContain('cache: 50%')
+  })
+
+  it('omits it when the provider reported no cache hits', () => {
+    const html = runStatChips({ done: 4, totalCells: 8, invalid: 0, abstained: 0, totalTokens: 1000, costUsd: 0, cachedTokens: 0, promptTokens: 800 })
+    expect(html).not.toContain('cache')
+  })
+})
+
+describe('renderModelCell', () => {
+  it('renders model version alone when provider is missing', () => {
+    const html = renderModelCell({ model_version: 'claude-3-opus-20250219' })
+    expect(html).toContain('claude-3-opus-20250219')
+    expect(html).not.toContain('provider-tag')
+    expect(html).toContain('A szolgáltató nincs rögzítve')
+  })
+
+  it('renders model version with provider tag when provider is present', () => {
+    const html = renderModelCell({ model_version: 'claude-3-opus-20250219', provider: 'Anthropic' })
+    expect(html).toContain('claude-3-opus-20250219')
+    expect(html).toContain('provider-tag')
+    expect(html).toContain('Anthropic')
+    expect(html).toContain('Kiszolgáló szolgáltató')
+  })
+
+  it('escapes special characters in model_version to prevent injection', () => {
+    const html = renderModelCell({ model_version: '<img src=x onerror=alert(1)>' })
+    expect(html).not.toContain('<img')
+    expect(html).toContain('&lt;img')
+    expect(html).not.toMatch(/<img/)
+  })
+
+  it('escapes special characters in provider to prevent injection', () => {
+    const html = renderModelCell({ model_version: 'claude', provider: '"><script>alert(1)</script><span class="' })
+    expect(html).not.toContain('<script>')
+    expect(html).toContain('&quot;')
+    expect(html).toContain('&lt;')
+  })
+
+  it('handles null/undefined response gracefully', () => {
+    expect(renderModelCell(null as unknown as ResponseLike)).toBe('—')
+  })
+
+  it('never emits unescaped tooltip quotes', () => {
+    const html = renderModelCell({ model_version: 'v1', provider: 'TestProvider' })
+    expect(html).not.toMatch(/title="[^"]*"[^ =>]/)
   })
 })

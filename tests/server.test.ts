@@ -29,6 +29,9 @@ class StubClient implements ChatClient {
       modelVersion: model,
       promptTokens: 10,
       completionTokens: 5,
+      cachedTokens: 0,
+      cacheDiscountUsd: 0,
+      provider: null,
       costUsd: 0,
       requestId: 'r1',
       latencyMs: 1
@@ -323,5 +326,105 @@ describe('questionnaire validation', () => {
       })
       expect(res.statusCode, scaleType).toBe(200)
     }
+  })
+})
+
+describe('evaluation coverage snapshot', () => {
+  it('snapshots coverage BEFORE the model call, not after it', async () => {
+    const db = createDb(':memory:')
+    db.prepare('INSERT INTO questionnaires (id, name) VALUES (?,?)').run('q', 'Q')
+    db.prepare('INSERT INTO questions (id, questionnaire_id, ord, text, options_json) VALUES (?,?,0,?,?)').run(
+      'qq', 'q', 'Q?', JSON.stringify(['a', 'b'])
+    )
+    db.prepare('INSERT INTO personas (id, name, demographics_json) VALUES (?,?,?)').run('p', 'P', '{}')
+    db.prepare("INSERT INTO runs (id, questionnaire_id, name, status, config_json) VALUES (?,?,?,'paused',?)").run(
+      'run', 'q', 'R', JSON.stringify({ model: 'm', temperature: 1, seeds: [0] })
+    )
+    db.prepare('INSERT INTO run_personas (run_id, persona_id) VALUES (?,?)').run('run', 'p')
+    const insertResponse = (id: string): void => {
+      db.prepare(
+        `INSERT INTO responses (id, run_id, persona_id, question_id, model_requested, temperature, seed,
+           permutation_json, prompt_rendered, raw_response, parsed_distribution_json, parsed_answer, is_valid, abstained)
+         VALUES (?,'run','p','qq','m',1,0,?,'p','r','{"0":0.6,"1":0.4}','0',1,0)`
+      ).run(id, JSON.stringify([0, 1]))
+    }
+    insertResponse('first')
+
+    // The run keeps working while the judge call is in flight: by the time it
+    // returns, the run is finished. The snapshot must describe what was evaluated.
+    const racingClient: ChatClient = {
+      async complete(model: string): Promise<ChatResult> {
+        insertResponse('second')
+        db.prepare("UPDATE runs SET status = 'completed' WHERE id = 'run'").run()
+        return {
+          content: 'ok', modelVersion: model, provider: null, promptTokens: 1, completionTokens: 1,
+          cachedTokens: 0, cacheDiscountUsd: 0, costUsd: 0, requestId: null, latencyMs: 1
+        }
+      }
+    }
+    const server = buildServer({ db, config: testConfig, models: testModels, client: racingClient })
+    await server.ready()
+    const c = await login(server)
+    await server.inject({ method: 'POST', url: '/api/runs/run/evaluate', cookies: c })
+
+    const ev = (await server.inject({ method: 'GET', url: '/api/runs/run/evaluations', cookies: c })).json().data[0]
+    expect(ev.run_status).toBe('paused')
+    expect(ev.done_cells).toBe(1)
+    await server.close()
+  })
+
+  async function makeRun(): Promise<string> {
+    const projectId = (await app.inject({ method: 'POST', url: '/api/projects', cookies: cookie, payload: { name: 'P' } })).json().data.id
+    const personaId = (await app.inject({
+      method: 'POST', url: '/api/personas', cookies: cookie, payload: { projectId, name: 'P1', demographics: {} }
+    })).json().data.id
+    const questionnaireId = (await app.inject({
+      method: 'POST', url: '/api/questionnaires', cookies: cookie,
+      payload: { name: 'Q', questions: [{ text: 'Q?', options: ['a', 'b'] }] }
+    })).json().data.id
+    const runId = (await app.inject({
+      method: 'POST', url: '/api/runs', cookies: cookie,
+      payload: { name: 'R', questionnaireId, personaIds: [personaId], seeds: [0] }
+    })).json().data.id
+    await new Promise((r) => setTimeout(r, 60))
+    return runId
+  }
+
+  it('records how much of the run the evaluation actually covered', async () => {
+    const runId = await makeRun()
+    await app.inject({ method: 'POST', url: `/api/runs/${runId}/evaluate`, cookies: cookie })
+    const evaluations = (await app.inject({ method: 'GET', url: `/api/runs/${runId}/evaluations`, cookies: cookie })).json().data
+    expect(evaluations[0].run_status).toBe('completed')
+    expect(evaluations[0].total_cells).toBe(2)
+    expect(evaluations[0].done_cells).toBe(2)
+  })
+
+  it('marks an evaluation made while the run was still unfinished', async () => {
+    const db = createDb(':memory:')
+    db.prepare('INSERT INTO questionnaires (id, name) VALUES (?,?)').run('q', 'Q')
+    db.prepare('INSERT INTO questions (id, questionnaire_id, ord, text, options_json) VALUES (?,?,0,?,?)').run(
+      'qq', 'q', 'Q?', JSON.stringify(['a', 'b'])
+    )
+    db.prepare('INSERT INTO personas (id, name, demographics_json) VALUES (?,?,?)').run('p', 'P', '{}')
+    db.prepare("INSERT INTO runs (id, questionnaire_id, name, status, config_json) VALUES (?,?,?,'paused',?)").run(
+      'run', 'q', 'R', JSON.stringify({ model: 'm', temperature: 1, seeds: [0] })
+    )
+    db.prepare('INSERT INTO run_personas (run_id, persona_id) VALUES (?,?)').run('run', 'p')
+    db.prepare(
+      `INSERT INTO responses (id, run_id, persona_id, question_id, model_requested, temperature, seed,
+         permutation_json, prompt_rendered, raw_response, parsed_distribution_json, parsed_answer, is_valid, abstained)
+       VALUES ('x','run','p','qq','m',1,0,?,'p','r','{"0":0.6,"1":0.4}','0',1,0)`
+    ).run(JSON.stringify([0, 1]))
+
+    const server = buildServer({ db, config: testConfig, models: testModels, client: new StubClient() })
+    await server.ready()
+    const partialCookie = await login(server)
+    await server.inject({ method: 'POST', url: '/api/runs/run/evaluate', cookies: partialCookie })
+
+    const evaluations = (await server.inject({ method: 'GET', url: '/api/runs/run/evaluations', cookies: partialCookie })).json().data
+    expect(evaluations[0].run_status).toBe('paused')
+    expect(evaluations[0].done_cells).toBe(1)
+    expect(evaluations[0].total_cells).toBe(2)
+    await server.close()
   })
 })

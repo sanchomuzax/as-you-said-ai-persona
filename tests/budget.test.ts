@@ -34,3 +34,26 @@ describe('BudgetTracker', () => {
     expect(t.globalUsage().totalTokens).toBe(30)
   })
 })
+
+describe('BudgetTracker — prompt cache accounting', () => {
+  it('records cached prompt tokens and reports them in usage', () => {
+    const db = createDb(':memory:')
+    const tracker = new BudgetTracker(db, { globalBudget: 1000, perRunBudget: 1000 })
+    tracker.record('r1', { promptTokens: 100, completionTokens: 20, costUsd: 0.01, cachedTokens: 80 })
+    tracker.record('r1', { promptTokens: 100, completionTokens: 20, costUsd: 0.01 })
+
+    const usage = tracker.usage('r1')
+    expect(usage.promptTokens).toBe(200)
+    expect(usage.cachedTokens).toBe(80)
+    expect(tracker.globalUsage().cachedTokens).toBe(80)
+  })
+
+  it('counts cached tokens towards the budget: they are billed, only cheaper', () => {
+    const db = createDb(':memory:')
+    const tracker = new BudgetTracker(db, { globalBudget: 150, perRunBudget: 150 })
+    tracker.record('r1', { promptTokens: 100, completionTokens: 20, costUsd: 0, cachedTokens: 100 })
+    expect(tracker.canSpend('r1')).toBe(true)
+    tracker.record('r1', { promptTokens: 100, completionTokens: 20, costUsd: 0, cachedTokens: 100 })
+    expect(tracker.canSpend('r1')).toBe(false)
+  })
+})

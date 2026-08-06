@@ -34,6 +34,20 @@ export function isResumable(status: string): boolean {
 export const runEvents = new EventEmitter()
 runEvents.setMaxListeners(100) // each SSE client adds 2 listeners
 
+/**
+ * Usage numbers come from an external API: NaN or a negative value would fail the
+ * NOT NULL column bind and lose an otherwise good model answer, so they are
+ * normalised at the boundary instead.
+ */
+function toCount(value: unknown): number {
+  return Number.isFinite(value) ? Math.max(0, Math.trunc(value as number)) : 0
+}
+
+/** Same reasoning for monetary amounts, which are fractional. */
+function toAmount(value: unknown): number {
+  return Number.isFinite(value) ? Math.max(0, value as number) : 0
+}
+
 interface PersonaRow {
   id: string
   name: string
@@ -187,21 +201,23 @@ export class SurveyRunner {
           id, run_id, persona_id, question_id, model_requested, model_version,
           temperature, seed, prompt_style, elicitation_mode, permutation_json, label_style,
           prompt_rendered, raw_response, parsed_distribution_json, parsed_answer,
-          is_valid, abstained, prompt_tokens, completion_tokens, cost_usd,
-          latency_ms, openrouter_request_id
-        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+          is_valid, abstained, prompt_tokens, completion_tokens, cached_tokens, cost_usd,
+          cache_discount_usd, latency_ms, openrouter_request_id, provider
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
       )
       .run(
         randomUUID(), runId, personaId, question.id, config.model, result.modelVersion,
         config.temperature, seed, 'style_c', mode, JSON.stringify(rotation), 'letters',
         prompt, result.content, byOption ? JSON.stringify(byOption) : null, parsedAnswer,
         parsed.isValid ? 1 : 0, parsed.abstained ? 1 : 0,
-        result.promptTokens, result.completionTokens, result.costUsd,
-        result.latencyMs, result.requestId
+        result.promptTokens, result.completionTokens, toCount(result.cachedTokens),
+        result.costUsd, toAmount(result.cacheDiscountUsd),
+        result.latencyMs, result.requestId, result.provider ?? null
       )
     this.budget.record(runId, {
       promptTokens: result.promptTokens,
       completionTokens: result.completionTokens,
+      cachedTokens: toCount(result.cachedTokens),
       costUsd: result.costUsd
     })
     runEvents.emit('response', {

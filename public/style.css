@@ -958,6 +958,7 @@ body {
   justify-content: space-between;
   align-items: center;
   gap: var(--space-3);
+  flex-wrap: wrap;
 }
 
 .evaluation-model {
@@ -1255,4 +1256,13 @@ body {
 
 .distribution-segment-support {
   background: var(--color-info);
+}
+
+.provider-tag {
+  font-size: 11px;
+  color: var(--color-text-secondary);
+  background: var(--color-bg-tertiary);
+  border-radius: 4px;
+  padding: 1px 5px;
+  margin-left: 4px;
 }

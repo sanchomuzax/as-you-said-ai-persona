@@ -72,14 +72,33 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
     if (results.totalResponses === 0) throw new Error('No responses to evaluate')
     const prompt = buildEvaluationPrompt(run.name, results)
     const model = (JSON.parse(run.config_json) as RunConfig).model
+
+    // Coverage snapshot, taken BEFORE the model call: the run keeps recording
+    // responses during those seconds, and if it finishes meanwhile, a snapshot
+    // taken afterwards would call this evaluation complete — exactly the false
+    // "everything was covered" claim the snapshot exists to prevent. The count is
+    // what the evaluation actually saw, not what the run has by now.
+    const coverage = {
+      status: (db.prepare('SELECT status FROM runs WHERE id = ?').get(runId) as { status: string }).status,
+      done: results.totalResponses,
+      total: totalCells(runId)
+    }
+
     const result = await client.complete(model, prompt, { temperature: 0.3, seed: 0 })
     const id = randomUUID()
     db.prepare(
-      'INSERT INTO run_evaluations (id, run_id, model, prompt, content, prompt_tokens, completion_tokens, cost_usd) VALUES (?,?,?,?,?,?,?,?)'
-    ).run(id, runId, result.modelVersion, prompt, result.content, result.promptTokens, result.completionTokens, result.costUsd)
+      `INSERT INTO run_evaluations
+         (id, run_id, model, prompt, content, prompt_tokens, completion_tokens, cost_usd, run_status, done_cells, total_cells)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?)`
+    ).run(
+      id, runId, result.modelVersion, prompt, result.content,
+      result.promptTokens, result.completionTokens, result.costUsd,
+      coverage.status, coverage.done, coverage.total
+    )
     budget.record(runId, {
       promptTokens: result.promptTokens,
       completionTokens: result.completionTokens,
+      cachedTokens: result.cachedTokens ?? 0,
       costUsd: result.costUsd
     })
     runEvents.emit('evaluation', { runId, evaluationId: id })
@@ -369,7 +388,7 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
       .prepare(
         `SELECT res.id, res.persona_id, p.name AS persona_name, res.question_id, q.text AS question_text,
                 q.options_json, res.elicitation_mode,
-                res.model_version, res.seed, res.permutation_json, res.parsed_distribution_json,
+                res.model_version, res.provider, res.seed, res.permutation_json, res.parsed_distribution_json,
                 res.parsed_answer, res.is_valid, res.abstained, res.prompt_tokens,
                 res.completion_tokens, res.cost_usd, res.latency_ms, res.created_at
          FROM responses res
@@ -443,7 +462,7 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
     return {
       success: true,
       data: db
-        .prepare('SELECT id, model, content, prompt_tokens, completion_tokens, cost_usd, created_at FROM run_evaluations WHERE run_id = ? ORDER BY created_at DESC')
+        .prepare('SELECT id, model, content, prompt_tokens, completion_tokens, cost_usd, run_status, done_cells, total_cells, created_at FROM run_evaluations WHERE run_id = ? ORDER BY created_at DESC')
         .all(id)
     }
   })
@@ -460,8 +479,10 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
 
   app.get('/api/runs/:id/export.csv', async (req, reply) => {
     const { id } = req.params as { id: string }
-    const rows = db.prepare('SELECT * FROM responses WHERE run_id = ? ORDER BY created_at').all(id) as Record<string, unknown>[]
-    const header = rows.length > 0 ? Object.keys(rows[0]!) : []
+    const rows = db
+      .prepare(`SELECT ${CSV_COLUMNS.join(', ')} FROM responses WHERE run_id = ? ORDER BY created_at`)
+      .all(id) as Record<string, unknown>[]
+    const header = CSV_COLUMNS
     const csv = [
       header.join(','),
       ...rows.map((r) => header.map((h) => csvEscape(r[h])).join(','))
@@ -496,6 +517,20 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
 
   return app
 }
+
+/**
+ * Explicit column list: `SELECT *` returns migrated columns in a different order
+ * than a freshly created database, which would make exports from two machines
+ * impossible to diff.
+ */
+const CSV_COLUMNS = [
+  'id', 'run_id', 'persona_id', 'question_id', 'model_requested', 'model_version', 'provider',
+  'temperature', 'seed', 'prompt_style', 'elicitation_mode', 'permutation_json', 'label_style',
+  'prompt_rendered', 'raw_response', 'parsed_distribution_json', 'parsed_answer', 'is_valid',
+  'abstained', 'prompt_tokens', 'completion_tokens', 'cached_tokens', 'cost_usd',
+  'cache_discount_usd', 'latency_ms',
+  'openrouter_request_id', 'created_at'
+]
 
 function rowToPersona(r: Record<string, unknown>): Record<string, unknown> {
   return {

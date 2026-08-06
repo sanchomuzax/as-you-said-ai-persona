@@ -40,6 +40,44 @@ describe('loadModels', () => {
 })
 
 describe('schema migration', () => {
+  it('adds every later column to a database created by an earlier version', async () => {
+    const { createDb } = await import('../src/db.js')
+    const { mkdtempSync } = await import('node:fs')
+    const { tmpdir } = await import('node:os')
+    const { join } = await import('node:path')
+
+    const path = join(mkdtempSync(join(tmpdir(), 'asys-migrate-all-')), 'db.sqlite')
+    const before = createDb(path)
+    for (const drop of [
+      'ALTER TABLE responses DROP COLUMN elicitation_mode',
+      'ALTER TABLE responses DROP COLUMN cached_tokens',
+      'ALTER TABLE responses DROP COLUMN provider',
+      'ALTER TABLE responses DROP COLUMN cache_discount_usd',
+      'ALTER TABLE token_ledger DROP COLUMN cached_tokens',
+      'ALTER TABLE run_evaluations DROP COLUMN run_status',
+      'ALTER TABLE run_evaluations DROP COLUMN done_cells',
+      'ALTER TABLE run_evaluations DROP COLUMN total_cells'
+    ]) {
+      before.exec(drop)
+    }
+    // a legacy row must survive the migration, including the NOT NULL DEFAULT columns
+    before.prepare('INSERT INTO token_ledger (run_id, prompt_tokens, completion_tokens, cost_usd) VALUES (?,?,?,?)').run('r', 10, 2, 0)
+    before.close()
+
+    const after = createDb(path)
+    const columns = (table: string): string[] =>
+      (after.prepare(`PRAGMA table_info(${table})`).all() as unknown as { name: string }[]).map((c) => c.name)
+    expect(columns('responses')).toEqual(
+      expect.arrayContaining(['elicitation_mode', 'cached_tokens', 'provider', 'cache_discount_usd'])
+    )
+    expect(columns('token_ledger')).toContain('cached_tokens')
+    expect(columns('run_evaluations')).toEqual(expect.arrayContaining(['run_status', 'done_cells', 'total_cells']))
+    const legacy = after.prepare('SELECT cached_tokens FROM token_ledger').get() as { cached_tokens: number }
+    expect(legacy.cached_tokens).toBe(0)
+    createDb(path).close() // idempotent
+    after.close()
+  })
+
   it('adds elicitation_mode to a database created before the elicitation split', async () => {
     const { createDb } = await import('../src/db.js')
     const { mkdtempSync } = await import('node:fs')

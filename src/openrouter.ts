@@ -4,6 +4,10 @@ export interface ChatResult {
   promptTokens: number
   completionTokens: number
   costUsd: number
+  cachedTokens: number
+  /** Which upstream provider served the call (OpenRouter routes the same model to several). */
+  provider: string | null
+  cacheDiscountUsd: number
   requestId: string | null
   latencyMs: number
 }
@@ -67,8 +71,15 @@ export class OpenRouterClient implements ChatClient {
     const data = (await res.json()) as {
       id?: string
       model?: string
+      provider?: string
       choices?: Array<{ message?: { content?: string } }>
-      usage?: { prompt_tokens?: number; completion_tokens?: number; cost?: number }
+      usage?: {
+        prompt_tokens?: number
+        completion_tokens?: number
+        cost?: number
+        prompt_tokens_details?: { cached_tokens?: number }
+        cache_discount?: number
+      }
     }
     const content = data.choices?.[0]?.message?.content
     if (typeof content !== 'string') throw new Error('OpenRouter response missing content')
@@ -79,6 +90,9 @@ export class OpenRouterClient implements ChatClient {
       promptTokens: data.usage?.prompt_tokens ?? 0,
       completionTokens: data.usage?.completion_tokens ?? 0,
       costUsd: data.usage?.cost ?? 0,
+      cachedTokens: data.usage?.prompt_tokens_details?.cached_tokens ?? 0,
+      provider: data.provider ?? null,
+      cacheDiscountUsd: data.usage?.cache_discount ?? 0,
       requestId: data.id ?? null,
       latencyMs: Date.now() - started
     }

@@ -305,6 +305,8 @@ function renderRunCard(run) {
   const abstained = progress.abstained ?? run.abstained_count ?? 0;
   const usage = progress.usage || {};
   const totalTokens = usage.totalTokens ?? run.total_tokens ?? 0;
+  const cachedTokens = usage.cachedTokens ?? 0;
+  const promptTokens = usage.promptTokens ?? run.prompt_tokens ?? 0;
   const costUsd = usage.costUsd ?? run.cost_usd ?? 0;
   const pct = totalCells > 0 ? Math.min((done / totalCells) * 100, 100) : 0;
   const invPct = invalidPct(invalid, totalCells);
@@ -322,7 +324,7 @@ function renderRunCard(run) {
         <div class="progress-fill" style="width: ${pct}%"></div>
       </div>
       <div class="run-card-stats">
-        ${runStatChips({ done, totalCells, invalid, abstained, totalTokens, costUsd, invPct })}
+        ${runStatChips({ done, totalCells, invalid, abstained, totalTokens, cachedTokens, promptTokens, costUsd, invPct })}
       </div>
       <div class="run-card-controls">
         ${runControlButtons(run, 'card')}
