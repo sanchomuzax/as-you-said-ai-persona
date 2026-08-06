@@ -8,7 +8,9 @@ import type { Db } from './db.js'
 import type { AppConfig, ModelsConfig } from './config.js'
 import type { ChatClient } from './openrouter.js'
 import { BudgetTracker } from './lib/budget.js'
-import { SurveyRunner, runEvents, type RunConfig } from './runner.js'
+import { SurveyRunner, runEvents, requestPause, requestStop, isResumable, type RunConfig } from './runner.js'
+import { computeRunResults } from './lib/results.js'
+import { buildEvaluationPrompt } from './lib/evaluate.js'
 import {
   checkCredentials,
   createSessionToken,
@@ -33,6 +35,53 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
   })
   const runner = new SurveyRunner(db, client, budget)
   const rateLimiter = new LoginRateLimiter()
+
+  // Runs left 'running' by a previous process (restart/crash) have no live loop:
+  // mark them paused so they can be resumed from the UI.
+  db.prepare("UPDATE runs SET status = 'paused' WHERE status = 'running'").run()
+
+  const totalCells = (runId: string): number => {
+    const row = db
+      .prepare(
+        `SELECT r.config_json,
+           (SELECT COUNT(*) FROM run_personas WHERE run_id = r.id) AS personas,
+           (SELECT COALESCE(SUM(json_array_length(options_json)), 0)
+              FROM questions WHERE questionnaire_id = r.questionnaire_id) AS rotations
+         FROM runs r WHERE r.id = ?`
+      )
+      .get(runId) as { config_json: string; personas: number; rotations: number } | undefined
+    if (!row) return 0
+    const seeds = (JSON.parse(row.config_json) as RunConfig).seeds.length
+    // per question: rotation count = option count; cells = rotations × personas × seeds
+    return row.rotations * row.personas * seeds
+  }
+
+  const runEvaluation = async (runId: string): Promise<{ id: string } > => {
+    const run = db.prepare('SELECT * FROM runs WHERE id = ?').get(runId) as
+      | { id: string; name: string; config_json: string }
+      | undefined
+    if (!run) throw new Error('Run not found')
+    const results = computeRunResults(db, runId)
+    if (results.totalResponses === 0) throw new Error('No responses to evaluate')
+    const prompt = buildEvaluationPrompt(run.name, results)
+    const model = (JSON.parse(run.config_json) as RunConfig).model
+    const result = await client.complete(model, prompt, { temperature: 0.3, seed: 0 })
+    const id = randomUUID()
+    db.prepare(
+      'INSERT INTO run_evaluations (id, run_id, model, prompt, content, prompt_tokens, completion_tokens, cost_usd) VALUES (?,?,?,?,?,?,?,?)'
+    ).run(id, runId, result.modelVersion, prompt, result.content, result.promptTokens, result.completionTokens, result.costUsd)
+    budget.record(runId, {
+      promptTokens: result.promptTokens,
+      completionTokens: result.completionTokens,
+      costUsd: result.costUsd
+    })
+    runEvents.emit('evaluation', { runId, evaluationId: id })
+    return { id }
+  }
+
+  runEvents.on('run_finished', ({ runId }: { runId: string }) => {
+    void runEvaluation(runId).catch(() => undefined)
+  })
 
   const app = Fastify({ logger: false })
   app.register(fastifyCookie)
@@ -226,7 +275,8 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
     personaIds: z.array(z.string()).min(1),
     model: z.string().default(models.default),
     temperature: z.number().min(0).max(2).default(1.0),
-    seeds: z.array(z.number().int()).min(1).default([0, 1])
+    seeds: z.array(z.number().int()).min(1).default([0, 1]),
+    autoEvaluate: z.boolean().default(false)
   })
 
   app.post('/api/runs', async (req, reply) => {
@@ -238,7 +288,8 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
     const runConfig: RunConfig = {
       model: body.data.model,
       temperature: body.data.temperature,
-      seeds: body.data.seeds
+      seeds: body.data.seeds,
+      autoEvaluate: body.data.autoEvaluate
     }
     const id = randomUUID()
     db.exec('BEGIN')
@@ -290,6 +341,83 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
       )
       .all(id)
     return { success: true, data: { run, responses, usage: budget.usage(id) } }
+  })
+
+  // --- Run control ---
+  app.post('/api/runs/:id/pause', async (req, reply) => {
+    const { id } = req.params as { id: string }
+    const run = db.prepare('SELECT status FROM runs WHERE id = ?').get(id) as { status: string } | undefined
+    if (!run) return reply.code(404).send({ success: false, error: 'Run not found' })
+    if (run.status !== 'running') return reply.code(400).send({ success: false, error: `Cannot pause a ${run.status} run` })
+    requestPause(id)
+    return { success: true }
+  })
+
+  app.post('/api/runs/:id/resume', async (req, reply) => {
+    const { id } = req.params as { id: string }
+    const run = db.prepare('SELECT status FROM runs WHERE id = ?').get(id) as { status: string } | undefined
+    if (!run) return reply.code(404).send({ success: false, error: 'Run not found' })
+    if (!isResumable(run.status)) return reply.code(400).send({ success: false, error: `Cannot resume a ${run.status} run` })
+    void runner.execute(id).catch(() => undefined)
+    return { success: true }
+  })
+
+  app.post('/api/runs/:id/stop', async (req, reply) => {
+    const { id } = req.params as { id: string }
+    const run = db.prepare('SELECT status FROM runs WHERE id = ?').get(id) as { status: string } | undefined
+    if (!run) return reply.code(404).send({ success: false, error: 'Run not found' })
+    if (run.status === 'running') requestStop(id)
+    else db.prepare("UPDATE runs SET status = 'stopped' WHERE id = ?").run(id)
+    return { success: true }
+  })
+
+  // --- Progress / results / evaluation ---
+  app.get('/api/runs/:id/progress', async (req, reply) => {
+    const { id } = req.params as { id: string }
+    const run = db.prepare('SELECT status FROM runs WHERE id = ?').get(id) as { status: string } | undefined
+    if (!run) return reply.code(404).send({ success: false, error: 'Run not found' })
+    const counts = db
+      .prepare('SELECT COUNT(*) done, COALESCE(SUM(is_valid=0),0) invalid, COALESCE(SUM(abstained),0) abstained, COALESCE(AVG(latency_ms),0) avgLatency FROM responses WHERE run_id = ?')
+      .get(id) as { done: number; invalid: number; abstained: number; avgLatency: number }
+    return {
+      success: true,
+      data: {
+        status: run.status,
+        totalCells: totalCells(id),
+        done: counts.done,
+        invalid: counts.invalid,
+        abstained: counts.abstained,
+        avgLatencyMs: Math.round(counts.avgLatency),
+        usage: budget.usage(id)
+      }
+    }
+  })
+
+  app.get('/api/runs/:id/results', async (req, reply) => {
+    const { id } = req.params as { id: string }
+    const run = db.prepare('SELECT id FROM runs WHERE id = ?').get(id)
+    if (!run) return reply.code(404).send({ success: false, error: 'Run not found' })
+    return { success: true, data: computeRunResults(db, id) }
+  })
+
+  app.get('/api/runs/:id/evaluations', async (req) => {
+    const { id } = req.params as { id: string }
+    return {
+      success: true,
+      data: db
+        .prepare('SELECT id, model, content, prompt_tokens, completion_tokens, cost_usd, created_at FROM run_evaluations WHERE run_id = ? ORDER BY created_at DESC')
+        .all(id)
+    }
+  })
+
+  app.post('/api/runs/:id/evaluate', async (req, reply) => {
+    const { id } = req.params as { id: string }
+    try {
+      const result = await runEvaluation(id)
+      return { success: true, data: result }
+    } catch (error) {
+      return reply.code(400).send({ success: false, error: error instanceof Error ? error.message : 'Evaluation failed' })
+    }
   })
 
   app.get('/api/runs/:id/export.csv', async (req, reply) => {

@@ -1,0 +1,149 @@
+{
+  "project": {
+    "name": "Example — Everyday Technology",
+    "applicationDomain": "Demo / platform testing (fictional consumer technology attitudes survey)",
+    "targetPopulation": "Fictional demo panel — four synthetic anchor-core personas with deliberately varied demographics. NOT grounded in real population data; for platform testing only."
+  },
+  "personas": [
+    {
+      "name": "Demo — Early Adopter",
+      "renderingStyle": "bulleted_profile",
+      "demographics": {
+        "age": 29,
+        "gender": "male",
+        "location": "large city",
+        "occupation": "software developer",
+        "education": "university degree",
+        "household": "single, lives alone",
+        "financial_situation": "comfortable",
+        "core_values": "novelty, efficiency, self-improvement",
+        "tech_attitude": "tries new apps and gadgets as soon as they appear; high risk tolerance for beta software"
+      },
+      "biography": "Fictional demo persona. Works remotely, automates much of his daily life, backs crowdfunding campaigns for gadgets, and treats his phone as his primary computer.",
+      "provenance": {
+        "source": "Fictional example data shipped with the as-you-said platform",
+        "grounding": "none — synthetic anchor core, not calibrated to any real population"
+      }
+    },
+    {
+      "name": "Demo — Pragmatic Parent",
+      "renderingStyle": "bulleted_profile",
+      "demographics": {
+        "age": 41,
+        "gender": "female",
+        "location": "suburb",
+        "occupation": "accountant",
+        "education": "college degree",
+        "household": "married, two school-age children",
+        "financial_situation": "budget-conscious",
+        "core_values": "family, reliability, value for money",
+        "tech_attitude": "uses technology when it saves time; skeptical of hype; strong privacy concerns about children's data"
+      },
+      "biography": "Fictional demo persona. Runs the family logistics through a shared calendar, compares prices before every purchase, and replaces devices only when they break.",
+      "provenance": {
+        "source": "Fictional example data shipped with the as-you-said platform",
+        "grounding": "none — synthetic anchor core, not calibrated to any real population"
+      }
+    },
+    {
+      "name": "Demo — Offline Craftsman",
+      "renderingStyle": "bulleted_profile",
+      "demographics": {
+        "age": 56,
+        "gender": "male",
+        "location": "small town",
+        "occupation": "carpenter, own workshop",
+        "education": "vocational school",
+        "household": "married, adult children moved out",
+        "financial_situation": "stable but cautious",
+        "core_values": "craftsmanship, independence, community",
+        "tech_attitude": "uses a phone for calls and photos of finished work; distrustful of subscriptions and online payments"
+      },
+      "biography": "Fictional demo persona. Gets customers by word of mouth, keeps paper records, and asks his wife to handle anything that requires a login.",
+      "provenance": {
+        "source": "Fictional example data shipped with the as-you-said platform",
+        "grounding": "none — synthetic anchor core, not calibrated to any real population"
+      }
+    },
+    {
+      "name": "Demo — Social Student",
+      "renderingStyle": "natural_language_sentence",
+      "demographics": {
+        "age": 21,
+        "gender": "female",
+        "location": "university city, dormitory",
+        "occupation": "undergraduate student with part-time café job",
+        "education": "in progress (BA)",
+        "household": "shared room, tight budget",
+        "core_values": "friendships, experiences, sustainability",
+        "tech_attitude": "phone-native; discovers everything through short video and group chats; low tolerance for clunky interfaces"
+      },
+      "biography": "Fictional demo persona. Streams everything, owns no TV, buys second-hand clothes online, and organizes her social life entirely through group chats.",
+      "provenance": {
+        "source": "Fictional example data shipped with the as-you-said platform",
+        "grounding": "none — synthetic anchor core, not calibrated to any real population"
+      }
+    }
+  ],
+  "questionnaires": [
+    {
+      "name": "Example — Everyday Technology Attitudes",
+      "questions": [
+        {
+          "text": "How do you usually decide whether to try a new app or digital service?",
+          "options": [
+            "I try it immediately if it looks interesting",
+            "I wait until people I trust recommend it",
+            "I read reviews and comparisons first",
+            "I only try it if I really need it",
+            "I avoid new apps whenever possible"
+          ],
+          "scaleType": "single_choice"
+        },
+        {
+          "text": "How often do you make purchases online?",
+          "options": ["Several times a week", "About once a week", "A few times a month", "A few times a year", "Never"],
+          "scaleType": "frequency"
+        },
+        {
+          "text": "Which statement best describes your attitude to subscriptions (streaming, apps, services)?",
+          "options": [
+            "I happily pay for several subscriptions",
+            "I keep one or two that are really worth it",
+            "I prefer one-time purchases over subscriptions",
+            "I avoid paying for digital services entirely"
+          ],
+          "scaleType": "single_choice"
+        },
+        {
+          "text": "How concerned are you about how companies use your personal data?",
+          "options": ["Not concerned at all", "Slightly concerned", "Moderately concerned", "Very concerned", "It determines which services I use"],
+          "scaleType": "ordinal_5",
+          "scaleDirection": "ascending"
+        },
+        {
+          "text": "Where do you most often hear about new products?",
+          "options": [
+            "Short videos and social media",
+            "Friends and family",
+            "News sites and blogs",
+            "Advertisements",
+            "In shops, while browsing"
+          ],
+          "scaleType": "single_choice"
+        },
+        {
+          "text": "If a device you use daily broke today, what would you most likely do?",
+          "options": [
+            "Buy the newest model immediately",
+            "Research options for days before buying",
+            "Buy the cheapest acceptable replacement",
+            "Try to repair it first",
+            "Live without it for a while"
+          ],
+          "scaleType": "single_choice"
+        }
+      ]
+    }
+  ]
+}

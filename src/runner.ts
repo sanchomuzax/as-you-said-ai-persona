@@ -11,6 +11,24 @@ export interface RunConfig {
   model: string
   temperature: number
   seeds: number[]
+  autoEvaluate?: boolean
+}
+
+/** In-memory control signals; checked between cells. */
+const controls = new Map<string, 'pause' | 'stop'>()
+
+export function requestPause(runId: string): void {
+  controls.set(runId, 'pause')
+}
+
+export function requestStop(runId: string): void {
+  controls.set(runId, 'stop')
+}
+
+const RESUMABLE = new Set(['paused', 'budget_exhausted', 'failed', 'pending'])
+
+export function isResumable(status: string): boolean {
+  return RESUMABLE.has(status)
 }
 
 export const runEvents = new EventEmitter()
@@ -58,6 +76,15 @@ export class SurveyRunner {
       .prepare('SELECT * FROM questions WHERE questionnaire_id = ? ORDER BY ord')
       .all(run.questionnaire_id) as unknown as QuestionRow[]
 
+    // Resume support: skip cells that already have a recorded response.
+    const doneCells = new Set(
+      (this.db
+        .prepare('SELECT question_id, persona_id, permutation_json, seed FROM responses WHERE run_id = ?')
+        .all(runId) as unknown as { question_id: string; persona_id: string; permutation_json: string; seed: number }[]
+      ).map((r) => cellKey(r.question_id, r.persona_id, r.permutation_json, r.seed))
+    )
+
+    controls.delete(runId)
     this.setStatus(runId, 'running')
     try {
       for (const question of questions) {
@@ -67,6 +94,13 @@ export class SurveyRunner {
           const persona = toPersonaInput(personaRow)
           for (const rotation of rotations) {
             for (const seed of config.seeds) {
+              const control = controls.get(runId)
+              if (control) {
+                controls.delete(runId)
+                this.setStatus(runId, control === 'stop' ? 'stopped' : 'paused')
+                return
+              }
+              if (doneCells.has(cellKey(question.id, personaRow.id, JSON.stringify(rotation), seed))) continue
               if (!this.budget.canSpend(runId)) {
                 this.setStatus(runId, 'budget_exhausted')
                 return
@@ -77,6 +111,7 @@ export class SurveyRunner {
         }
       }
       this.setStatus(runId, 'completed')
+      if (config.autoEvaluate) runEvents.emit('run_finished', { runId })
     } catch (error) {
       this.setStatus(runId, 'failed')
       throw error
@@ -147,6 +182,10 @@ export class SurveyRunner {
     this.db.prepare('UPDATE runs SET status = ? WHERE id = ?').run(status, runId)
     runEvents.emit('status', { runId, status })
   }
+}
+
+function cellKey(questionId: string, personaId: string, permutationJson: string, seed: number): string {
+  return `${questionId}|${personaId}|${permutationJson}|${seed}`
 }
 
 function toPersonaInput(row: PersonaRow): PersonaInput {

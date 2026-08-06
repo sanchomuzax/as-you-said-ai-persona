@@ -205,63 +205,81 @@
               <label for="runTemperature">Hőmérséklet (0-2)</label>
               <input type="number" id="runTemperature" min="0" max="2" step="0.1" value="1.0">
             </div>
+            <div class="form-group checkbox-inline">
+              <input type="checkbox" id="runAutoEvaluate">
+              <label for="runAutoEvaluate">Automatikus AI-kiértékelés a futás végén</label>
+            </div>
             <button type="submit" class="btn btn-primary">Futtatás indítása</button>
           </form>
         </div>
         <div class="tab-section">
           <h2>Futtatások</h2>
-          <div id="runsList" class="list-container">
+          <div id="runsList" class="runs-grid">
             <p class="placeholder">Betöltés...</p>
           </div>
         </div>
       </div>
     </main>
 
-    <!-- Run Detail Modal -->
-    <div id="runDetailModal" class="modal" style="display: none;">
-      <div class="modal-content">
-        <div class="modal-header">
+    <!-- Run Detail View -->
+    <section id="runDetailView" class="run-detail-view" style="display: none;">
+      <div class="run-detail-header">
+        <button id="runDetailBackBtn" class="btn btn-secondary back-btn">&larr; Vissza</button>
+        <div class="run-detail-title-row">
           <h2 id="runDetailTitle">Futtatás részletei</h2>
-          <button class="close-btn" id="closeDetailBtn">&times;</button>
+          <span id="runDetailStatus" class="badge"></span>
         </div>
-        <div class="modal-body">
-          <div class="run-detail-info">
-            <div class="info-row">
-              <span class="label">Státusz:</span>
-              <span id="runDetailStatus" class="badge"></span>
-            </div>
-            <div class="info-row">
-              <span class="label">Token használat:</span>
-              <span id="runDetailTokens">-</span>
-            </div>
-            <div class="info-row">
-              <span class="label">Költség:</span>
-              <span id="runDetailCost">-</span> USD
-            </div>
+        <div class="run-detail-controls" id="runDetailControls"></div>
+        <div class="run-detail-progress">
+          <div class="progress-bar">
+            <div id="runDetailProgressFill" class="progress-fill" style="width: 0%"></div>
           </div>
-          <div class="run-detail-export">
-            <a id="runExportLink" href="" download class="btn btn-secondary">CSV letöltés</a>
-          </div>
-          <div class="responses-table-wrapper">
-            <table id="responsesTable" class="responses-table">
-              <thead>
-                <tr>
-                  <th>Perszóna</th>
-                  <th>Kérdés</th>
-                  <th>Válasz</th>
-                  <th>Megoszlás</th>
-                  <th>Érvényes</th>
-                  <th>Seed</th>
-                  <th>Modell</th>
-                </tr>
-              </thead>
-              <tbody id="responsesTableBody">
-              </tbody>
-            </table>
-          </div>
+        </div>
+        <div class="run-detail-stats" id="runDetailStats"></div>
+        <div class="run-detail-export">
+          <a id="runExportLink" href="" download class="btn btn-secondary">CSV letöltés</a>
         </div>
       </div>
-    </div>
+
+      <nav class="subtabs">
+        <button class="subtab-btn active" data-subtab="overview">Áttekintés</button>
+        <button class="subtab-btn" data-subtab="responses">Válaszok</button>
+        <button class="subtab-btn" data-subtab="evaluation">Kiértékelés</button>
+      </nav>
+
+      <div id="subtab-overview" class="subtab-pane active">
+        <div id="overviewContent"><p class="placeholder">Betöltés...</p></div>
+      </div>
+
+      <div id="subtab-responses" class="subtab-pane">
+        <div class="responses-table-wrapper">
+          <table id="responsesTable" class="responses-table">
+            <thead>
+              <tr>
+                <th>Perszóna</th>
+                <th>Kérdés</th>
+                <th>Válasz</th>
+                <th>Megoszlás</th>
+                <th>Érvényes</th>
+                <th>Seed</th>
+                <th>Modell</th>
+              </tr>
+            </thead>
+            <tbody id="responsesTableBody">
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div id="subtab-evaluation" class="subtab-pane">
+        <div class="evaluation-actions">
+          <button id="runEvaluateBtn" class="btn btn-primary">Kiértékelés futtatása</button>
+          <span id="evaluateSpinner" class="spinner" style="display: none;"></span>
+          <span id="evaluateError" class="error-message"></span>
+        </div>
+        <div id="evaluationsList"><p class="placeholder">Betöltés...</p></div>
+      </div>
+    </section>
   </div>
 
   <script src="app.js"></script>

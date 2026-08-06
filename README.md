@@ -15,8 +15,14 @@ recorded with full experimental metadata so runs are reproducible and auditable.
   persona answers in near-real time. Personas are scoped to projects (each research
   project has its own persona set, with application domain and target population
   recorded per the transparency checklist).
-- **Seeding**: `npx tsx scripts/seed.ts <seed.json>` loads a project + personas
-  definition idempotently (see script header for the JSON shape).
+- **Seeding**: `npx tsx scripts/seed.ts <seed.json>` loads a project + personas +
+  questionnaires definition idempotently (see script header for the JSON shape).
+  A ready-to-use fictional demo (4 personas + 6-question questionnaire) ships with
+  the repo — seed it to try the platform end-to-end:
+
+  ```bash
+  npx tsx scripts/seed.ts seeds/example-project.json
+  ```
 - **Full response recording**: every model call is stored with prompt, permutation,
   model parameters, raw output and token usage.
 - **Bias mitigation built in**: balanced permutation of answer options, Style C

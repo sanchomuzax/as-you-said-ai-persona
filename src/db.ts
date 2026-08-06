@@ -116,6 +116,18 @@ CREATE TABLE IF NOT EXISTS token_ledger (
   ts TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+CREATE TABLE IF NOT EXISTS run_evaluations (
+  id TEXT PRIMARY KEY,
+  run_id TEXT NOT NULL REFERENCES runs(id),
+  model TEXT NOT NULL,
+  prompt TEXT NOT NULL,
+  content TEXT NOT NULL,
+  prompt_tokens INTEGER,
+  completion_tokens INTEGER,
+  cost_usd REAL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 CREATE INDEX IF NOT EXISTS idx_responses_run ON responses(run_id);
 CREATE INDEX IF NOT EXISTS idx_ledger_run ON token_ledger(run_id);
 `

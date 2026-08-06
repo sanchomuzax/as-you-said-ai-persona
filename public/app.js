@@ -7,8 +7,23 @@ let state = {
   personas: [],
   questionnaires: [],
   runs: [],
-  currentRunDetail: null,
-  eventSource: null
+  runProgress: {},
+  currentRunId: null,
+  currentSubtab: 'overview',
+  currentRunDetailData: null,
+  eventSource: null,
+  progressPollTimer: null,
+  activeTab: 'projects'
+};
+
+const STATUS_LABELS = {
+  pending: 'Függőben',
+  running: 'Fut',
+  paused: 'Szüneteltetve',
+  completed: 'Kész',
+  budget_exhausted: 'Keret elfogyott',
+  stopped: 'Leállítva',
+  failed: 'Hiba'
 };
 
 // API wrapper
@@ -93,11 +108,70 @@ function renderDistribution(parsed_json) {
   }
 }
 
+function escapeHtml(text) {
+  if (text === null || text === undefined) return '';
+  const div = document.createElement('div');
+  div.textContent = text;
+  return div.innerHTML;
+}
+
+function formatNumber(n) {
+  if (n === null || n === undefined || Number.isNaN(n)) return '0';
+  return Number(n).toLocaleString('hu-HU');
+}
+
+function formatCost(n) {
+  if (n === null || n === undefined || Number.isNaN(n)) return '0.0000';
+  return Number(n).toFixed(4);
+}
+
+function formatMetric(n) {
+  if (n === null || n === undefined || Number.isNaN(n)) return '—';
+  return Number(n).toFixed(2);
+}
+
+// ----- Hash routing -----
+function parseHash() {
+  const hash = (location.hash || '').replace(/^#/, '');
+  if (!hash) return { tab: 'projects', runId: null };
+  const runMatch = hash.match(/^runs\/(.+)$/);
+  if (runMatch) return { tab: 'runs', runId: runMatch[1] };
+  const validTabs = ['projects', 'personas', 'questionnaires', 'runs'];
+  if (validTabs.includes(hash)) return { tab: hash, runId: null };
+  return { tab: 'projects', runId: null };
+}
+
+function setHash(tab, runId) {
+  const newHash = runId ? '#runs/' + runId : '#' + tab;
+  if (location.hash !== newHash) {
+    history.replaceState(null, '', newHash);
+  }
+}
+
+window.addEventListener('hashchange', () => {
+  if (!state.authenticated) return;
+  applyRoute(parseHash());
+});
+
+async function applyRoute(route) {
+  if (route.runId) {
+    state.activeTab = 'runs';
+    setActiveTab('runs');
+    await openRunDetail(route.runId, false);
+  } else {
+    closeRunDetail(false);
+    state.activeTab = route.tab;
+    setActiveTab(route.tab);
+    setHash(route.tab, null);
+  }
+}
+
 // DOM Functions
 function showLoginScreen() {
   document.getElementById('loginScreen').style.display = 'flex';
   document.getElementById('appContainer').style.display = 'none';
   if (state.eventSource) state.eventSource.close();
+  if (state.progressPollTimer) clearInterval(state.progressPollTimer);
 }
 
 function showAppScreen() {
@@ -106,6 +180,8 @@ function showAppScreen() {
 }
 
 function setActiveTab(tabName) {
+  document.getElementById('runDetailView').style.display = 'none';
+  document.querySelector('.tab-content').style.display = 'block';
   document.querySelectorAll('.tab-pane').forEach(p => p.classList.remove('active'));
   document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
 
@@ -153,6 +229,19 @@ function updateProjectDropdowns() {
       `<option value="${p.id}">${escapeHtml(p.name)}</option>`
     ).join('');
     select.value = currentValue;
+  });
+}
+
+function selectProjectEverywhere(projectId) {
+  state.selectedProjectId = projectId || null;
+  if (projectId) {
+    localStorage.setItem('selectedProjectId', projectId);
+  } else {
+    localStorage.removeItem('selectedProjectId');
+  }
+  ['personaProjectSelect', 'runProjectSelect', 'questionnaireProjectSelect'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.value = projectId || '';
   });
 }
 
@@ -223,6 +312,76 @@ function renderQuestionnairesList() {
   select.value = currentValue;
 }
 
+// ----- Run cards / dashboard -----
+function badgeClassForStatus(status) {
+  return 'badge badge-' + (status || 'pending');
+}
+
+function statusLabel(status) {
+  return STATUS_LABELS[status] || status || '—';
+}
+
+function runControlButtons(run, context) {
+  const status = run.status;
+  const buttons = [];
+  if (status === 'running') {
+    buttons.push(`<button class="btn btn-secondary btn-sm" data-action="pause" data-run="${run.id}">Szünet</button>`);
+  }
+  if (status === 'paused' || status === 'budget_exhausted' || status === 'failed') {
+    buttons.push(`<button class="btn btn-secondary btn-sm" data-action="resume" data-run="${run.id}">Folytatás</button>`);
+  }
+  if (status === 'running' || status === 'paused') {
+    buttons.push(`<button class="btn btn-danger btn-sm" data-action="stop" data-run="${run.id}">Leállítás</button>`);
+  }
+  if (context === 'card') {
+    buttons.push(`<button class="btn btn-primary btn-sm" data-action="details" data-run="${run.id}">Részletek</button>`);
+  }
+  return buttons.join('');
+}
+
+function invalidPct(invalid, total) {
+  if (!total) return 0;
+  return (invalid / total) * 100;
+}
+
+function renderRunCard(run) {
+  const progress = state.runProgress[run.id] || {};
+  const totalCells = progress.totalCells ?? run.totalCells ?? 0;
+  const done = progress.done ?? run.response_count ?? 0;
+  const invalid = progress.invalid ?? run.invalid_count ?? 0;
+  const abstained = progress.abstained ?? run.abstained_count ?? 0;
+  const usage = progress.usage || {};
+  const totalTokens = usage.totalTokens ?? run.total_tokens ?? 0;
+  const costUsd = usage.costUsd ?? run.cost_usd ?? 0;
+  const pct = totalCells > 0 ? Math.min((done / totalCells) * 100, 100) : 0;
+  const invPct = invalidPct(invalid, totalCells);
+  const status = progress.status || run.status;
+
+  return `
+    <div class="run-card" data-run-card="${run.id}">
+      <div class="run-card-header">
+        <div class="run-card-title">${escapeHtml(run.name)}</div>
+        <span class="${badgeClassForStatus(status)}">
+          ${status === 'running' ? '<span class="pulse-dot"></span>' : ''}${escapeHtml(statusLabel(status))}
+        </span>
+      </div>
+      <div class="progress-bar">
+        <div class="progress-fill" style="width: ${pct}%"></div>
+      </div>
+      <div class="run-card-stats">
+        <span class="stat-chip">${formatNumber(done)}/${formatNumber(totalCells)} cella</span>
+        <span class="stat-chip ${invPct > 10 ? 'stat-chip-danger' : ''}">Érvénytelen: ${formatNumber(invalid)}</span>
+        <span class="stat-chip">Elutasítva: ${formatNumber(abstained)}</span>
+        <span class="stat-chip">${formatNumber(totalTokens)} token</span>
+        <span class="stat-chip">${formatCost(costUsd)} USD</span>
+      </div>
+      <div class="run-card-controls">
+        ${runControlButtons(run, 'card')}
+      </div>
+    </div>
+  `;
+}
+
 function renderRunsList() {
   const container = document.getElementById('runsList');
   if (state.runs.length === 0) {
@@ -230,28 +389,79 @@ function renderRunsList() {
     return;
   }
 
-  container.innerHTML = state.runs.map(r => {
-    const badgeClass = 'badge badge-' + (r.status || 'pending');
-    const statusLabel = {
-      pending: 'Függőben',
-      running: 'Futó',
-      completed: 'Kész',
-      budget_exhausted: 'Költségvetés elfogyott',
-      failed: 'Hiba'
-    }[r.status] || r.status;
+  container.innerHTML = state.runs.map(r => renderRunCard(r)).join('');
+}
 
-    return `
-      <div class="list-item" onclick="showRunDetail('${r.id}')">
-        <div>
-          <div class="list-item-title">${escapeHtml(r.name)}</div>
-          <div class="list-item-meta">
-            ${r.response_count || 0} válasz | ${r.invalid_count || 0} érvénytelen
-          </div>
-        </div>
-        <span class="${badgeClass}">${escapeHtml(statusLabel)}</span>
-      </div>
-    `;
-  }).join('');
+document.getElementById('runsList')?.addEventListener('click', async (e) => {
+  const btn = e.target.closest('button[data-action]');
+  if (!btn) return;
+  const action = btn.dataset.action;
+  const runId = btn.dataset.run;
+  await handleRunAction(action, runId);
+});
+
+document.getElementById('runDetailControls')?.addEventListener('click', async (e) => {
+  const btn = e.target.closest('button[data-action]');
+  if (!btn) return;
+  const action = btn.dataset.action;
+  const runId = btn.dataset.run;
+  await handleRunAction(action, runId);
+});
+
+async function handleRunAction(action, runId) {
+  try {
+    if (action === 'details') {
+      setHash('runs', runId);
+      await openRunDetail(runId, true);
+      return;
+    }
+    if (action === 'pause') {
+      await apiCall('POST', `/api/runs/${runId}/pause`);
+    } else if (action === 'resume') {
+      await apiCall('POST', `/api/runs/${runId}/resume`);
+    } else if (action === 'stop') {
+      if (!confirm('Biztosan leállítod a futtatást? Ez a művelet nem visszavonható.')) return;
+      await apiCall('POST', `/api/runs/${runId}/stop`);
+    }
+    await refreshRunsList();
+    if (state.currentRunId === runId) {
+      await refreshRunDetailHeader(runId);
+    }
+  } catch (err) {
+    alert('Művelet sikertelen: ' + err.message);
+  }
+}
+
+async function refreshRunsList() {
+  try {
+    const runs = await apiCall('GET', '/api/runs');
+    state.runs = runs;
+    renderRunsList();
+  } catch (err) {
+    // silent - keep last known state
+  }
+}
+
+async function pollRunningProgress() {
+  const runningRuns = state.runs.filter(r => r.status === 'running');
+  if (runningRuns.length === 0) return;
+  await Promise.all(runningRuns.map(async r => {
+    try {
+      const progress = await apiCall('GET', `/api/runs/${r.id}/progress`);
+      state.runProgress[r.id] = progress;
+    } catch {
+      // ignore
+    }
+  }));
+  renderRunsList();
+  if (state.currentRunId && runningRuns.some(r => r.id === state.currentRunId)) {
+    renderRunDetailHeaderFromCache(state.currentRunId);
+  }
+}
+
+function startProgressPolling() {
+  if (state.progressPollTimer) clearInterval(state.progressPollTimer);
+  state.progressPollTimer = setInterval(pollRunningProgress, 5000);
 }
 
 function renderPersonasCheckboxes() {
@@ -288,59 +498,320 @@ function updateBudgetBar() {
     });
 }
 
-function escapeHtml(text) {
-  if (!text) return '';
-  const div = document.createElement('div');
-  div.textContent = text;
-  return div.innerHTML;
+// ----- Run Detail View -----
+function findRunById(runId) {
+  return state.runs.find(r => r.id === runId);
 }
 
-// Detail View
-async function showRunDetail(runId) {
+async function openRunDetail(runId, updateHash) {
+  state.currentRunId = runId;
+  document.querySelector('.tab-content').style.display = 'none';
+  document.getElementById('runDetailView').style.display = 'block';
+  if (updateHash) setHash('runs', runId);
+
+  await refreshRunDetailHeader(runId);
+  await loadSubtab(state.currentSubtab || 'overview');
+}
+
+function closeRunDetail(updateHash) {
+  state.currentRunId = null;
+  document.getElementById('runDetailView').style.display = 'none';
+  document.querySelector('.tab-content').style.display = 'block';
+  if (updateHash) setHash(state.activeTab || 'runs', null);
+}
+
+document.getElementById('runDetailBackBtn')?.addEventListener('click', () => {
+  closeRunDetail(true);
+  setActiveTab('runs');
+  refreshRunsList();
+});
+
+function renderRunDetailHeaderFromCache(runId) {
+  const run = findRunById(runId);
+  if (!run) return;
+  const progress = state.runProgress[runId] || {};
+  renderRunDetailHeader(run, progress);
+}
+
+function renderRunDetailHeader(run, progress) {
+  const status = progress.status || run.status;
+  document.getElementById('runDetailTitle').textContent = run.name || '';
+  const statusEl = document.getElementById('runDetailStatus');
+  statusEl.className = badgeClassForStatus(status);
+  statusEl.innerHTML = (status === 'running' ? '<span class="pulse-dot"></span>' : '') + escapeHtml(statusLabel(status));
+
+  const totalCells = progress.totalCells ?? 0;
+  const done = progress.done ?? 0;
+  const invalid = progress.invalid ?? 0;
+  const abstained = progress.abstained ?? 0;
+  const usage = progress.usage || {};
+  const pct = totalCells > 0 ? Math.min((done / totalCells) * 100, 100) : 0;
+  const invPct = invalidPct(invalid, totalCells);
+
+  document.getElementById('runDetailProgressFill').style.width = pct + '%';
+  document.getElementById('runDetailStats').innerHTML = `
+    <span class="stat-chip">${formatNumber(done)}/${formatNumber(totalCells)} cella</span>
+    <span class="stat-chip ${invPct > 10 ? 'stat-chip-danger' : ''}">Érvénytelen: ${formatNumber(invalid)}</span>
+    <span class="stat-chip">Elutasítva: ${formatNumber(abstained)}</span>
+    <span class="stat-chip">${formatNumber(usage.totalTokens || 0)} token</span>
+    <span class="stat-chip">${formatCost(usage.costUsd || 0)} USD</span>
+    ${progress.avgLatencyMs ? `<span class="stat-chip">${formatNumber(Math.round(progress.avgLatencyMs))} ms/válasz</span>` : ''}
+  `;
+  document.getElementById('runDetailControls').innerHTML = runControlButtons({ id: run.id, status }, 'detail');
+  document.getElementById('runExportLink').href = '/api/runs/' + run.id + '/export.csv';
+}
+
+async function refreshRunDetailHeader(runId) {
+  try {
+    const run = findRunById(runId) || (await apiCall('GET', '/api/runs/' + runId)).run;
+    let progress;
+    try {
+      progress = await apiCall('GET', `/api/runs/${runId}/progress`);
+      state.runProgress[runId] = progress;
+    } catch {
+      progress = state.runProgress[runId] || {};
+    }
+    renderRunDetailHeader(run, progress);
+  } catch (err) {
+    // ignore transient errors
+  }
+}
+
+document.querySelectorAll('.subtab-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    loadSubtab(btn.dataset.subtab);
+  });
+});
+
+async function loadSubtab(name) {
+  state.currentSubtab = name;
+  document.querySelectorAll('.subtab-btn').forEach(b => b.classList.remove('active'));
+  document.querySelector(`.subtab-btn[data-subtab="${name}"]`)?.classList.add('active');
+  document.querySelectorAll('.subtab-pane').forEach(p => p.classList.remove('active'));
+  document.getElementById('subtab-' + name)?.classList.add('active');
+
+  if (!state.currentRunId) return;
+
+  if (name === 'overview') {
+    await loadOverviewTab(state.currentRunId);
+  } else if (name === 'responses') {
+    await loadResponsesTab(state.currentRunId);
+  } else if (name === 'evaluation') {
+    await loadEvaluationTab(state.currentRunId);
+  }
+}
+
+function renderOptionBars(question) {
+  const options = question.options || [];
+  const aggregated = question.aggregated || [];
+  const total = aggregated.reduce((a, b) => a + b, 0);
+  const max = Math.max(1, ...aggregated);
+
+  return options.map((opt, i) => {
+    const value = aggregated[i] || 0;
+    const barPct = (value / max) * 100;
+    const sharePct = total > 0 ? Math.round((value / total) * 100) : 0;
+    return `
+      <div class="option-bar-row">
+        <span class="option-bar-label" title="${escapeHtml(opt)}">${escapeHtml(opt)}</span>
+        <div class="option-bar-track">
+          <div class="option-bar-fill" style="width: ${barPct}%"></div>
+        </div>
+        <span class="option-bar-pct">${sharePct}% (${formatNumber(value)})</span>
+      </div>
+    `;
+  }).join('');
+}
+
+function renderPersonaBreakdown(question) {
+  const byPersona = question.byPersona || {};
+  const entries = Object.entries(byPersona);
+  if (entries.length === 0) return '<p class="placeholder-inline">Nincs perszóna szintű adat.</p>';
+
+  const rows = entries.map(([personaId, info]) => {
+    const dist = info.distribution || [];
+    const total = dist.reduce((a, b) => a + b, 0);
+    let topIdx = -1;
+    let topVal = -1;
+    dist.forEach((v, i) => { if (v > topVal) { topVal = v; topIdx = i; } });
+    const topOption = topIdx >= 0 && question.options ? question.options[topIdx] : '—';
+    const topPct = total > 0 && topVal >= 0 ? Math.round((topVal / total) * 100) : 0;
+    return `
+      <tr>
+        <td>${escapeHtml(info.name || personaId)}</td>
+        <td>${escapeHtml(topOption || '—')}</td>
+        <td class="numeric">${topPct}%</td>
+        <td class="numeric">${formatNumber(info.abstainCount || 0)}</td>
+      </tr>
+    `;
+  }).join('');
+
+  return `
+    <table class="persona-breakdown-table">
+      <thead>
+        <tr>
+          <th>Perszóna</th>
+          <th>Top válasz</th>
+          <th class="numeric">%</th>
+          <th class="numeric">Elutasítás</th>
+        </tr>
+      </thead>
+      <tbody>${rows}</tbody>
+    </table>
+  `;
+}
+
+function renderMetricChips(question) {
+  const chips = [];
+  const pc = question.positionConsistency;
+  const rs = question.repetitionStability;
+  if (pc !== undefined && pc !== null) {
+    chips.push(`<span class="metric-chip">PC ${formatMetric(pc)}</span>`);
+    if (pc < 0.7) chips.push('<span class="metric-chip metric-chip-warning">⚠ pozíció-érzékeny — nem megbízható</span>');
+  }
+  if (rs !== undefined && rs !== null) {
+    chips.push(`<span class="metric-chip">RS ${formatMetric(rs)}</span>`);
+    if (rs < 0.7) chips.push('<span class="metric-chip metric-chip-warning">⚠ instabil</span>');
+  }
+  chips.push(`<span class="metric-chip metric-chip-info">🔍 bizonyítékhézag: ${formatNumber(question.abstainCount || 0)}</span>`);
+  if (question.invalidCount) {
+    chips.push(`<span class="metric-chip metric-chip-danger">Érvénytelen: ${formatNumber(question.invalidCount)}</span>`);
+  }
+  return chips.join('');
+}
+
+async function loadOverviewTab(runId) {
+  const container = document.getElementById('overviewContent');
+  container.innerHTML = '<p class="placeholder">Betöltés...</p>';
+  try {
+    const results = await apiCall('GET', `/api/runs/${runId}/results`);
+    const questions = results.questions || [];
+
+    const summary = `
+      <div class="overview-summary">
+        <span class="stat-chip">Összes válasz: ${formatNumber(results.totalResponses || 0)}</span>
+        <span class="stat-chip ${((results.invalidRate || 0) * 100) > 10 ? 'stat-chip-danger' : ''}">Érvénytelen arány: ${formatMetric((results.invalidRate || 0) * 100)}%</span>
+        <span class="stat-chip">Elutasítási arány: ${formatMetric((results.abstainRate || 0) * 100)}%</span>
+      </div>
+    `;
+
+    if (questions.length === 0) {
+      container.innerHTML = summary + '<p class="placeholder">Nincs eredmény.</p>';
+      return;
+    }
+
+    container.innerHTML = summary + questions.map(q => `
+      <div class="question-card">
+        <div class="question-card-header">
+          <h4>${escapeHtml(q.text)}</h4>
+          <div class="metric-chips">${renderMetricChips(q)}</div>
+        </div>
+        <div class="option-bars">
+          ${renderOptionBars(q)}
+        </div>
+        <details class="persona-breakdown-wrap">
+          <summary>Perszóna szintű bontás</summary>
+          ${renderPersonaBreakdown(q)}
+        </details>
+      </div>
+    `).join('');
+  } catch (err) {
+    container.innerHTML = `<p class="error-message">Eredmények betöltése sikertelen: ${escapeHtml(err.message)}</p>`;
+  }
+}
+
+async function loadResponsesTab(runId) {
+  const tbody = document.getElementById('responsesTableBody');
+  tbody.innerHTML = '<tr><td colspan="7" class="placeholder">Betöltés...</td></tr>';
   try {
     const runData = await apiCall('GET', '/api/runs/' + runId);
-    const run = runData.run;
     const responses = runData.responses || [];
-    const usage = runData.usage || {};
 
-    state.currentRunDetail = runId;
+    if (responses.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="7" class="placeholder">Nincs válasz.</td></tr>';
+      return;
+    }
 
-    document.getElementById('runDetailTitle').textContent = escapeHtml(run.name);
-    document.getElementById('runDetailStatus').textContent = {
-      pending: 'Függőben',
-      running: 'Futó',
-      completed: 'Kész',
-      budget_exhausted: 'Költségvetés elfogyott',
-      failed: 'Hiba'
-    }[run.status] || run.status;
-    document.getElementById('runDetailStatus').className = 'badge badge-' + run.status;
-    document.getElementById('runDetailTokens').textContent = usage.totalTokens || 0;
-    document.getElementById('runDetailCost').textContent = (usage.costUsd || 0).toFixed(4);
-    document.getElementById('runExportLink').href = '/api/runs/' + runId + '/export.csv';
-
-    const tbody = document.getElementById('responsesTableBody');
     tbody.innerHTML = responses.map(r => {
       const validClass = r.is_valid ? 'valid-flag' : (r.abstained ? 'abstained-flag' : 'invalid-flag');
       const validText = r.is_valid ? '✓' : (r.abstained ? '—' : '✗');
+      const dist = renderDistribution(r.parsed_distribution_json);
+      const distHtml = typeof dist === 'string' ? dist : dist.outerHTML;
 
       return `
         <tr>
           <td>${escapeHtml(r.persona_name)}</td>
           <td>${escapeHtml(r.question_text)}</td>
           <td>${escapeHtml(r.parsed_answer || '—')}</td>
-          <td>${renderDistribution(r.parsed_distribution_json).outerHTML || '—'}</td>
+          <td>${distHtml}</td>
           <td><span class="${validClass}">${validText}</span></td>
-          <td>${r.seed || '—'}</td>
+          <td>${escapeHtml(r.seed != null ? String(r.seed) : '—')}</td>
           <td>${escapeHtml(r.model_version || '—')}</td>
         </tr>
       `;
     }).join('');
-
-    document.getElementById('runDetailModal').style.display = 'flex';
   } catch (err) {
-    alert('Futtatás betöltése sikertelen: ' + err.message);
+    tbody.innerHTML = `<tr><td colspan="7" class="error-message">Válaszok betöltése sikertelen: ${escapeHtml(err.message)}</td></tr>`;
   }
 }
+
+function renderEvaluationCard(ev) {
+  const created = ev.created_at ? new Date(ev.created_at).toLocaleString('hu-HU') : '—';
+  return `
+    <div class="evaluation-card">
+      <div class="evaluation-card-header">
+        <span class="evaluation-model">${escapeHtml(ev.model || '—')}</span>
+        <span class="evaluation-date">${escapeHtml(created)}</span>
+      </div>
+      <pre class="evaluation-content">${escapeHtml(ev.content || '')}</pre>
+      <div class="evaluation-meta">
+        <span class="stat-chip">${formatNumber(ev.prompt_tokens || 0)} prompt token</span>
+        <span class="stat-chip">${formatNumber(ev.completion_tokens || 0)} completion token</span>
+        <span class="stat-chip">${formatCost(ev.cost_usd || 0)} USD</span>
+      </div>
+    </div>
+  `;
+}
+
+async function loadEvaluationTab(runId) {
+  const container = document.getElementById('evaluationsList');
+  container.innerHTML = '<p class="placeholder">Betöltés...</p>';
+  document.getElementById('evaluateError').textContent = '';
+  try {
+    const evaluations = await apiCall('GET', `/api/runs/${runId}/evaluations`);
+    const sorted = [...(evaluations || [])].sort((a, b) => {
+      const ta = a.created_at ? new Date(a.created_at).getTime() : 0;
+      const tb = b.created_at ? new Date(b.created_at).getTime() : 0;
+      return tb - ta;
+    });
+    if (sorted.length === 0) {
+      container.innerHTML = '<p class="placeholder">Még nincs kiértékelés.</p>';
+      return;
+    }
+    container.innerHTML = sorted.map(renderEvaluationCard).join('');
+  } catch (err) {
+    container.innerHTML = `<p class="error-message">Kiértékelések betöltése sikertelen: ${escapeHtml(err.message)}</p>`;
+  }
+}
+
+document.getElementById('runEvaluateBtn')?.addEventListener('click', async () => {
+  if (!state.currentRunId) return;
+  const btn = document.getElementById('runEvaluateBtn');
+  const spinner = document.getElementById('evaluateSpinner');
+  const errorEl = document.getElementById('evaluateError');
+  errorEl.textContent = '';
+  btn.disabled = true;
+  spinner.style.display = 'inline-block';
+  try {
+    await apiCall('POST', `/api/runs/${state.currentRunId}/evaluate`);
+    await loadEvaluationTab(state.currentRunId);
+  } catch (err) {
+    errorEl.textContent = 'Kiértékelés indítása sikertelen: ' + err.message;
+  } finally {
+    btn.disabled = false;
+    spinner.style.display = 'none';
+  }
+});
 
 // Event Subscription
 function subscribeToEvents() {
@@ -350,22 +821,26 @@ function subscribeToEvents() {
 
   state.eventSource.addEventListener('response', (e) => {
     const evt = JSON.parse(e.data);
-    if (state.currentRunDetail === evt.runId) {
-      showRunDetail(evt.runId);
+    if (state.currentRunId === evt.runId) {
+      refreshRunDetailHeader(evt.runId);
+      if (state.currentSubtab === 'responses') loadResponsesTab(evt.runId);
+      if (state.currentSubtab === 'overview') loadOverviewTab(evt.runId);
     }
   });
 
   state.eventSource.addEventListener('status', (e) => {
     const evt = JSON.parse(e.data);
-    apiCall('GET', '/api/runs')
-      .then(runs => {
-        state.runs = runs;
-        renderRunsList();
-        if (state.currentRunDetail === evt.runId) {
-          showRunDetail(evt.runId);
-        }
-      })
-      .catch(() => {});
+    refreshRunsList();
+    if (state.currentRunId === evt.runId) {
+      refreshRunDetailHeader(evt.runId);
+    }
+  });
+
+  state.eventSource.addEventListener('evaluation', (e) => {
+    const evt = JSON.parse(e.data);
+    if (state.currentRunId === evt.runId && state.currentSubtab === 'evaluation') {
+      loadEvaluationTab(evt.runId);
+    }
   });
 
   state.eventSource.onerror = () => {
@@ -390,9 +865,11 @@ document.getElementById('projectForm')?.addEventListener('submit', async (e) => 
     renderProjectsList();
     updateProjectDropdowns();
     updatePersonaFormVisibility();
-    state.selectedProjectId = newProject.id;
-    document.getElementById('personaProjectSelect').value = newProject.id;
+    selectProjectEverywhere(newProject.id);
+    const submitBtn = document.getElementById('personaSubmitBtn');
+    if (submitBtn) submitBtn.disabled = false;
     await reloadPersonasList();
+    await reloadQuestionnairesList(newProject.id);
   } catch (err) {
     alert('Projekt létrehozása sikertelen: ' + err.message);
   }
@@ -400,7 +877,7 @@ document.getElementById('projectForm')?.addEventListener('submit', async (e) => 
 
 document.getElementById('personaProjectSelect')?.addEventListener('change', async (e) => {
   const projectId = e.target.value;
-  state.selectedProjectId = projectId;
+  selectProjectEverywhere(projectId);
   const submitBtn = document.getElementById('personaSubmitBtn');
   if (submitBtn) submitBtn.disabled = !projectId;
   if (projectId) {
@@ -414,7 +891,7 @@ document.getElementById('personaProjectSelect')?.addEventListener('change', asyn
 
 document.getElementById('runProjectSelect')?.addEventListener('change', async (e) => {
   const projectId = e.target.value;
-  state.selectedProjectId = projectId;
+  selectProjectEverywhere(projectId);
   if (projectId) {
     await reloadPersonasList();
     await reloadQuestionnairesList(projectId);
@@ -428,6 +905,7 @@ document.getElementById('runProjectSelect')?.addEventListener('change', async (e
 
 document.getElementById('questionnaireProjectSelect')?.addEventListener('change', async (e) => {
   const projectId = e.target.value;
+  selectProjectEverywhere(projectId);
   if (projectId) {
     await reloadQuestionnairesList(projectId);
   } else {
@@ -551,14 +1029,13 @@ document.getElementById('runForm')?.addEventListener('submit', async (e) => {
       personaIds,
       model: document.getElementById('runModel').value,
       temperature: parseFloat(document.getElementById('runTemperature').value),
-      projectId: state.selectedProjectId
+      projectId: state.selectedProjectId,
+      autoEvaluate: document.getElementById('runAutoEvaluate').checked
     };
 
     await apiCall('POST', '/api/runs', body);
     document.getElementById('runForm').reset();
-    const runs = await apiCall('GET', '/api/runs');
-    state.runs = runs;
-    renderRunsList();
+    await refreshRunsList();
     updateBudgetBar();
   } catch (err) {
     alert('Futtatás indítása sikertelen: ' + err.message);
@@ -569,21 +1046,11 @@ document.getElementById('runForm')?.addEventListener('submit', async (e) => {
 document.querySelectorAll('.tab-btn').forEach(btn => {
   btn.addEventListener('click', () => {
     const tabName = btn.dataset.tab;
+    state.activeTab = tabName;
+    closeRunDetail(false);
     setActiveTab(tabName);
+    setHash(tabName, null);
   });
-});
-
-// Modal
-document.getElementById('closeDetailBtn')?.addEventListener('click', () => {
-  document.getElementById('runDetailModal').style.display = 'none';
-  state.currentRunDetail = null;
-});
-
-document.getElementById('runDetailModal')?.addEventListener('click', (e) => {
-  if (e.target.id === 'runDetailModal') {
-    document.getElementById('runDetailModal').style.display = 'none';
-    state.currentRunDetail = null;
-  }
 });
 
 // Initial Load
@@ -606,10 +1073,8 @@ async function loadInitialData() {
     renderProjectsList();
     updateProjectDropdowns();
     updatePersonaFormVisibility();
-    renderPersonasList();
     renderQuestionnairesList();
     renderRunsList();
-    renderPersonasCheckboxes();
     updateBudgetBar();
 
     const personaSubmitBtn = document.getElementById('personaSubmitBtn');
@@ -620,7 +1085,24 @@ async function loadInitialData() {
       `<option value="${m.id}" ${m.id === models.default ? 'selected' : ''}>${escapeHtml(m.label)}</option>`
     ).join('');
 
+    // Restore selected project from localStorage
+    const storedProjectId = localStorage.getItem('selectedProjectId');
+    if (storedProjectId && state.projects.some(p => p.id === storedProjectId)) {
+      selectProjectEverywhere(storedProjectId);
+      const personaSubmitBtn2 = document.getElementById('personaSubmitBtn');
+      if (personaSubmitBtn2) personaSubmitBtn2.disabled = false;
+      await reloadPersonasList();
+      await reloadQuestionnairesList(storedProjectId);
+    } else {
+      renderPersonasList();
+      renderPersonasCheckboxes();
+    }
+
     subscribeToEvents();
+    startProgressPolling();
+
+    // Restore route from hash (tab / open run detail)
+    await applyRoute(parseHash());
   } catch (err) {
     alert('Adatbetöltés sikertelen: ' + err.message);
   }
