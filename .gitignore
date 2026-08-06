@@ -1,0 +1,31 @@
+# --- Private agent repo (separate, closed repository) ---
+agent/
+
+# --- Claude / agent context files (live in the private agent repo) ---
+CLAUDE.md
+MEMORY.md
+.claude/settings.local.json
+
+# --- Secrets / environment ---
+.env
+.env.*
+!.env.example
+
+# --- Node ---
+node_modules/
+dist/
+build/
+.next/
+coverage/
+*.tsbuildinfo
+
+# --- Data / runtime artifacts ---
+data/*.sqlite
+data/*.sqlite-journal
+data/*.db
+logs/
+*.log
+
+# --- OS / editor ---
+.DS_Store
+Thumbs.db
