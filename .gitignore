@@ -20,9 +20,7 @@ coverage/
 *.tsbuildinfo
 
 # --- Data / runtime artifacts ---
-data/*.sqlite
-data/*.sqlite-journal
-data/*.db
+data/
 logs/
 *.log
 

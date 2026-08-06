@@ -1,0 +1,70 @@
+import { applyPermutation, labelFor } from './permutation.js'
+
+export interface PersonaInput {
+  name: string
+  demographics: Record<string, unknown>
+  biography?: string
+  renderingStyle: 'bulleted_profile' | 'natural_language_sentence'
+}
+
+export interface QuestionInput {
+  text: string
+  options: readonly string[]
+}
+
+/**
+ * Persona rendering style is an experimental variable (bulleted vs. sentence
+ * alone flips ~9% of predictions) — both must be supported and recorded.
+ */
+export function renderPersona(p: PersonaInput): string {
+  const bio = p.biography ? `\n${p.biography}` : ''
+  if (p.renderingStyle === 'natural_language_sentence') {
+    const attrs = Object.entries(p.demographics)
+      .map(([k, v]) => `${k}: ${String(v)}`)
+      .join(', ')
+    return `A person with ${attrs}.${bio}`
+  }
+  const lines = Object.entries(p.demographics).map(([k, v]) => `- ${k}: ${String(v)}`)
+  return `${lines.join('\n')}${bio}`
+}
+
+export interface BuiltPrompt {
+  prompt: string
+  /** letter label -> original option index (for de-permutation at parse time) */
+  keyMap: Record<string, number>
+  keys: string[]
+}
+
+/**
+ * Style C (distribution) prompt. Neutral A/B/C labels, no model metadata,
+ * explicit abstention path. Sent in a fresh context (per-question memory reset).
+ */
+export function buildStyleCPrompt(
+  persona: PersonaInput,
+  question: QuestionInput,
+  rotation: readonly number[]
+): BuiltPrompt {
+  const permuted = applyPermutation(question.options, rotation)
+  const keys = permuted.map((_, i) => labelFor(i))
+  const keyMap = Object.fromEntries(keys.map((k, i) => {
+    const orig = rotation[i]
+    if (orig === undefined) throw new Error('rotation shorter than options')
+    return [k, orig]
+  }))
+  const optionLines = permuted.map((opt, i) => `${keys[i]}: ${opt}`).join('\n')
+
+  const prompt = `Consider a survey respondent with the following profile:
+${renderPersona(persona)}
+
+Estimate the probability that this respondent would choose each answer option for the question below. Probabilities must sum to 1.
+
+Question: ${question.text}
+
+Answer options:
+${optionLines}
+
+Return only valid JSON mapping each answer key to a probability, using exactly these keys: ${keys.join(', ')}. No other text.
+If the profile gives you no basis to answer this question, return exactly {"abstain": true} instead of guessing.`
+
+  return { prompt, keyMap, keys }
+}

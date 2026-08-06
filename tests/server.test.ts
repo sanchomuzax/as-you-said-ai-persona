@@ -1,0 +1,167 @@
+import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import type { FastifyInstance } from 'fastify'
+import { createDb } from '../src/db.js'
+import { buildServer } from '../src/server.js'
+import type { ChatClient, ChatResult } from '../src/openrouter.js'
+import type { AppConfig } from '../src/config.js'
+
+const testConfig: AppConfig = {
+  OPENROUTER_API_KEY: 'test-key',
+  OPENROUTER_BASE_URL: 'https://openrouter.ai/api/v1',
+  AUTH_USERNAME: 'admin',
+  AUTH_PASSWORD: 'test-password-123',
+  SESSION_SECRET: 'test-secret-at-least-16-chars',
+  TOKEN_BUDGET_GLOBAL: 1_000_000,
+  TOKEN_BUDGET_PER_RUN: 100_000,
+  PORT: 0,
+  DATABASE_PATH: ':memory:'
+}
+
+const testModels = {
+  default: 'deepseek/deepseek-v4-flash',
+  models: [{ id: 'deepseek/deepseek-v4-flash', label: 'DeepSeek V4 Flash' }]
+}
+
+class StubClient implements ChatClient {
+  async complete(model: string): Promise<ChatResult> {
+    return {
+      content: '{"A": 0.7, "B": 0.3}',
+      modelVersion: model,
+      promptTokens: 10,
+      completionTokens: 5,
+      costUsd: 0,
+      requestId: 'r1',
+      latencyMs: 1
+    }
+  }
+}
+
+let app: FastifyInstance
+let cookie: { asys_session: string }
+
+async function login(app: FastifyInstance): Promise<{ asys_session: string }> {
+  const res = await app.inject({
+    method: 'POST',
+    url: '/api/login',
+    payload: { username: 'admin', password: 'test-password-123' }
+  })
+  const setCookie = res.headers['set-cookie'] as string
+  const token = /asys_session=([^;]+)/.exec(setCookie)![1]!
+  return { asys_session: token }
+}
+
+beforeEach(async () => {
+  app = buildServer({
+    db: createDb(':memory:'),
+    config: testConfig,
+    models: testModels,
+    client: new StubClient()
+  })
+  await app.ready()
+  cookie = await login(app)
+})
+
+afterEach(() => app.close())
+
+describe('auth', () => {
+  it('rejects API access without a session', async () => {
+    const res = await app.inject({ method: 'GET', url: '/api/personas' })
+    expect(res.statusCode).toBe(401)
+  })
+
+  it('rejects bad credentials', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/login',
+      payload: { username: 'admin', password: 'wrong' }
+    })
+    expect(res.statusCode).toBe(401)
+  })
+
+  it('accepts valid credentials and grants API access', async () => {
+    const res = await app.inject({ method: 'GET', url: '/api/personas', cookies: cookie })
+    expect(res.statusCode).toBe(200)
+    expect(res.json()).toEqual({ success: true, data: [] })
+  })
+})
+
+describe('models & budget', () => {
+  it('serves the model config with the default model', async () => {
+    const res = await app.inject({ method: 'GET', url: '/api/models', cookies: cookie })
+    expect(res.json().data.default).toBe('deepseek/deepseek-v4-flash')
+  })
+
+  it('reports budget limits and usage', async () => {
+    const res = await app.inject({ method: 'GET', url: '/api/budget', cookies: cookie })
+    const { data } = res.json()
+    expect(data.limits.globalBudget).toBe(1_000_000)
+    expect(data.global.totalTokens).toBe(0)
+  })
+})
+
+describe('personas, questionnaires, runs end-to-end', () => {
+  it('creates entities and executes a run recording responses', async () => {
+    const persona = await app.inject({
+      method: 'POST',
+      url: '/api/personas',
+      cookies: cookie,
+      payload: { name: 'P1', demographics: { age: 40 }, renderingStyle: 'bulleted_profile' }
+    })
+    expect(persona.statusCode).toBe(200)
+    const personaId = persona.json().data.id
+
+    const questionnaire = await app.inject({
+      method: 'POST',
+      url: '/api/questionnaires',
+      cookies: cookie,
+      payload: {
+        name: 'Q1',
+        questions: [{ text: 'Trust banks?', options: ['Yes', 'No'] }]
+      }
+    })
+    const questionnaireId = questionnaire.json().data.id
+
+    const run = await app.inject({
+      method: 'POST',
+      url: '/api/runs',
+      cookies: cookie,
+      payload: {
+        name: 'R1',
+        questionnaireId,
+        personaIds: [personaId],
+        seeds: [0]
+      }
+    })
+    expect(run.statusCode).toBe(200)
+    const runId = run.json().data.id
+
+    // fire-and-forget run: give the event loop a tick to finish the stub calls
+    await new Promise((r) => setTimeout(r, 50))
+
+    const detail = await app.inject({ method: 'GET', url: `/api/runs/${runId}`, cookies: cookie })
+    const { data } = detail.json()
+    expect(data.run.status).toBe('completed')
+    expect(data.responses.length).toBe(2) // 2 options -> 2 rotations x 1 seed
+    expect(data.usage.totalTokens).toBe(30)
+
+    const csv = await app.inject({ method: 'GET', url: `/api/runs/${runId}/export.csv`, cookies: cookie })
+    expect(csv.headers['content-type']).toContain('text/csv')
+    expect(csv.body).toContain('prompt_rendered')
+  })
+
+  it('rejects a run with an unknown model', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/runs',
+      cookies: cookie,
+      payload: {
+        name: 'R',
+        questionnaireId: 'x',
+        personaIds: ['y'],
+        model: 'not/a-model'
+      }
+    })
+    expect(res.statusCode).toBe(400)
+    expect(res.json().error).toContain('Unknown model')
+  })
+})

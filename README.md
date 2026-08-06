@@ -31,8 +31,31 @@ recorded with full experimental metadata so runs are reproducible and auditable.
 ```bash
 cp .env.example .env   # fill in OPENROUTER_API_KEY and auth credentials
 npm install
-npm run dev
+npm run dev            # http://localhost:3555
 ```
+
+Requires Node.js 24+ (uses the built-in `node:sqlite` — no native modules).
+
+Run tests with `npm test` (50 tests) or `npm run test:coverage`.
+
+For production, a systemd user service works well:
+
+```ini
+[Unit]
+Description=as-you-said AI persona survey platform
+After=network-online.target
+
+[Service]
+WorkingDirectory=/path/to/as-you-said-ai-persona
+ExecStart=npx tsx src/main.ts
+Restart=on-failure
+
+[Install]
+WantedBy=default.target
+```
+
+The default model list lives in `config/models.json` (default:
+`deepseek/deepseek-v4-flash-0731`); the model is selectable per run in the UI.
 
 ## Methodology
 

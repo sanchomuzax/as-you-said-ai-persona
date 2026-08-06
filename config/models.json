@@ -1,0 +1,11 @@
+{
+  "default": "deepseek/deepseek-v4-flash-0731",
+  "models": [
+    { "id": "deepseek/deepseek-v4-flash-0731", "label": "DeepSeek V4 Flash (0731)" },
+    { "id": "deepseek/deepseek-chat", "label": "DeepSeek Chat" },
+    { "id": "anthropic/claude-haiku-4.5", "label": "Claude Haiku 4.5" },
+    { "id": "anthropic/claude-sonnet-5", "label": "Claude Sonnet 5" },
+    { "id": "openai/gpt-5-mini", "label": "GPT-5 Mini" },
+    { "id": "meta-llama/llama-3.3-70b-instruct", "label": "Llama 3.3 70B" }
+  ]
+}
