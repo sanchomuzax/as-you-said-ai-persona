@@ -28,11 +28,13 @@ const STATUS_LABELS = {
 
 // API wrapper
 async function apiCall(method, path, body = null) {
-  const options = {
-    method,
-    headers: { 'Content-Type': 'application/json' }
-  };
-  if (body) options.body = JSON.stringify(body);
+  // Content-Type only with an actual body: Fastify rejects an empty body that
+  // declares application/json (FST_ERR_CTP_EMPTY_JSON_BODY).
+  const options = { method };
+  if (body) {
+    options.headers = { 'Content-Type': 'application/json' };
+    options.body = JSON.stringify(body);
+  }
 
   const response = await fetch(path, options);
   const data = await response.json();
@@ -437,15 +439,22 @@ async function refreshRunsList() {
     const runs = await apiCall('GET', '/api/runs');
     state.runs = runs;
     renderRunsList();
+    await pollRunningProgress(true);
   } catch (err) {
     // silent - keep last known state
   }
 }
 
-async function pollRunningProgress() {
-  const runningRuns = state.runs.filter(r => r.status === 'running');
-  if (runningRuns.length === 0) return;
-  await Promise.all(runningRuns.map(async r => {
+/**
+ * Fetches progress for runs. Finished runs also need it once (cell totals, tokens,
+ * cost are only available here) — without it their cards show 0 totals.
+ */
+async function pollRunningProgress(includeAll = false) {
+  const targets = includeAll
+    ? state.runs
+    : state.runs.filter(r => r.status === 'running' || !state.runProgress[r.id]);
+  if (targets.length === 0) return;
+  await Promise.all(targets.map(async r => {
     try {
       const progress = await apiCall('GET', `/api/runs/${r.id}/progress`);
       state.runProgress[r.id] = progress;
@@ -454,7 +463,7 @@ async function pollRunningProgress() {
     }
   }));
   renderRunsList();
-  if (state.currentRunId && runningRuns.some(r => r.id === state.currentRunId)) {
+  if (state.currentRunId && targets.some(r => r.id === state.currentRunId)) {
     renderRunDetailHeaderFromCache(state.currentRunId);
   }
 }
