@@ -66,6 +66,10 @@ const TOOLTIPS = {
   providerSpread:
     'Ezt a futtatást több szolgáltató szolgálta ki ugyanazzal a modell-azonosítóval. A szolgáltatók eltérő kvantálással futtatják a modellt, ezért a válaszok közti eltérés egy része routingból ered, nem a perszónából vagy a seedből — az ismétlési stabilitást (RS) ez rontja. Új futtatásnál a szolgáltató rögzíthető.',
   providerSingle: 'A futtatást végig ugyanaz a szolgáltató szolgálta ki, tehát a modellverzió mellett a futtatókörnyezet is állandó volt.',
+  baselineArm:
+    'Kontroll-kar: ugyanez a kérdés perszóna NÉLKÜL, ugyanazzal a sablonnal, szolgáltatóval és időpontban. Enélkül nem lehet megkülönböztetni a perszóna hatását a modell alapértelmezett válaszától.',
+  personaEffect:
+    'Perszóna-hatás: a perszóna eloszlásának Jensen–Shannon-távolsága a kontroll-kartól (0 = ugyanaz, 1 = teljesen más). A kontroll-kar saját seedjei közti ingadozás adja a zajszintet; ha a divergencia ennél kisebb, a perszóna nem térítette el a modellt.',
   duplicateCells:
     'Ismételten rögzített cellák: párhuzamos futtató-hurkok miatt ugyanaz a cella (perszóna × kérdés × rotáció × seed) többször is lefutott. Az elemzés cellánként az első rögzítést használja, a többi megmarad a naplóban ismételt mérésként — az aggregátumot tehát nem torzítják, de a nyers sorszám nagyobb az egyedi celláknál.',
   support:

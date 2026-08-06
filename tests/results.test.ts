@@ -216,7 +216,10 @@ describe('buildEvaluationPrompt — no fabricated numbers', () => {
           invalidCount: 0,
           abstainCount: 0,
           aggregated: [0, 0],
-          byPersona: { p: { name: 'P', distribution: [0, 0], abstainCount: 0 } },
+          byPersona: {
+            p: { name: 'P', distribution: [0, 0], abstainCount: 0, baselineDivergence: null, movesModel: null }
+          },
+          baseline: null,
           positionConsistency: null,
           repetitionStability: null
         }
@@ -291,5 +294,52 @@ describe('computeRunResults — duplicated cells', () => {
     insertResponse({ dist: { '0': 0, '1': 1 }, answer: '1', rotation: [0, 1], seed: 0 })
     const q = computeRunResults(db, runId).questions[0]!
     expect(q.positionConsistency).toBe(1)
+  })
+})
+
+describe('computeRunResults — baseline control arm', () => {
+  function insertArm(opts: { condition: string; persona?: string | null; dist: Record<string, number>; seed?: number; rotation?: number[] }): void {
+    db.prepare(
+      `INSERT INTO responses (id, run_id, persona_id, question_id, model_requested, temperature, seed,
+         permutation_json, prompt_rendered, raw_response, parsed_distribution_json, parsed_answer,
+         is_valid, abstained, condition)
+       VALUES (?,?,?,?,'m',1,?,?,'p','r',?,'0',1,0,?)`
+    ).run(
+      randomUUID(), runId, opts.persona === undefined ? p1 : opts.persona, qid, opts.seed ?? 0,
+      JSON.stringify(opts.rotation ?? [0, 1]), JSON.stringify(opts.dist), opts.condition
+    )
+  }
+
+  it('keeps the control arm out of the persona aggregate and reports it separately', () => {
+    insertArm({ condition: 'persona', dist: { '0': 1, '1': 0 } })
+    insertArm({ condition: 'baseline', persona: null, dist: { '0': 0, '1': 1 } })
+    const q = computeRunResults(db, runId).questions[0]!
+    expect(q.aggregated[0]).toBeCloseTo(1) // persona only
+    expect(q.baseline).toBeTruthy()
+    expect(q.baseline![1]).toBeCloseTo(1)
+    expect(q.aggregatedResponseCount).toBe(1)
+  })
+
+  it('measures the persona effect as divergence from the control arm', () => {
+    insertArm({ condition: 'persona', dist: { '0': 1, '1': 0 } })
+    insertArm({ condition: 'baseline', persona: null, dist: { '0': 0, '1': 1 } })
+    const q = computeRunResults(db, runId).questions[0]!
+    // opposite distributions: maximal divergence
+    expect(q.byPersona[p1]!.baselineDivergence).toBeCloseTo(1, 1)
+  })
+
+  it('flags a persona that does not move the model away from its default', () => {
+    insertArm({ condition: 'persona', dist: { '0': 0.6, '1': 0.4 } })
+    insertArm({ condition: 'baseline', persona: null, dist: { '0': 0.6, '1': 0.4 } })
+    const q = computeRunResults(db, runId).questions[0]!
+    expect(q.byPersona[p1]!.baselineDivergence).toBeCloseTo(0)
+    expect(q.byPersona[p1]!.movesModel).toBe(false)
+  })
+
+  it('reports no baseline when the run had no control arm', () => {
+    insertArm({ condition: 'persona', dist: { '0': 1, '1': 0 } })
+    const q = computeRunResults(db, runId).questions[0]!
+    expect(q.baseline).toBeNull()
+    expect(q.byPersona[p1]!.baselineDivergence).toBeNull()
   })
 })

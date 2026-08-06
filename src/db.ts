@@ -68,10 +68,52 @@ function migrate(db: DatabaseSync): void {
       db.exec(`ALTER TABLE run_evaluations ADD COLUMN ${column}`)
     }
   }
+  addBaselineArmSupport(db)
   // Last: the index keys on elicitation_mode, so it can only be created once every
   // column exists. Created earlier, the first boot after an upgrade would silently
   // run with no database-level protection at all.
   createCellUniqueIndex(db)
+}
+
+/**
+ * The control arm records cells with no persona, but `persona_id` was created
+ * NOT NULL and SQLite cannot relax a constraint in place — so the table is
+ * rebuilt once, copying every row. The response log is append-only research
+ * data: the copy is verified row-for-row inside the same transaction, and the
+ * old table is only dropped if the counts match.
+ */
+function addBaselineArmSupport(db: DatabaseSync): void {
+  const columns = db.prepare('PRAGMA table_info(responses)').all() as unknown as {
+    name: string
+    notnull: number
+  }[]
+  const personaId = columns.find((c) => c.name === 'persona_id')
+  const needsRebuild = personaId?.notnull === 1 || !columns.some((c) => c.name === 'condition')
+  if (!needsRebuild) return
+
+  const names = columns.map((c) => c.name)
+  const carried = names.filter((n) => n !== 'condition').join(', ')
+  const before = (db.prepare('SELECT COUNT(*) c FROM responses').get() as { c: number }).c
+
+  db.exec('PRAGMA foreign_keys = OFF')
+  db.exec('BEGIN')
+  try {
+    db.exec('DROP INDEX IF EXISTS idx_responses_cell')
+    db.exec('DROP INDEX IF EXISTS idx_responses_run')
+    db.exec('ALTER TABLE responses RENAME TO responses_old')
+    db.exec(RESPONSES_TABLE)
+    db.exec(`INSERT INTO responses (${carried}) SELECT ${carried} FROM responses_old`)
+    const after = (db.prepare('SELECT COUNT(*) c FROM responses').get() as { c: number }).c
+    if (after !== before) throw new Error(`Response table rebuild lost rows: ${before} -> ${after}`)
+    db.exec('DROP TABLE responses_old')
+    db.exec('COMMIT')
+  } catch (error) {
+    db.exec('ROLLBACK')
+    throw error
+  } finally {
+    db.exec('PRAGMA foreign_keys = ON')
+  }
+  db.exec('CREATE INDEX IF NOT EXISTS idx_responses_run ON responses(run_id)')
 }
 
 /**
@@ -105,6 +147,51 @@ export function cellIndexPresent(db: DatabaseSync): boolean {
   const rows = db.prepare("PRAGMA index_list('responses')").all() as unknown as { name: string }[]
   return rows.some((r) => r.name === 'idx_responses_cell')
 }
+
+const RESPONSES_TABLE = `
+CREATE TABLE IF NOT EXISTS responses (
+  id TEXT PRIMARY KEY,
+  run_id TEXT NOT NULL REFERENCES runs(id),
+  -- NULL for the persona-free control arm: that cell has no subject by design,
+  -- and a placeholder persona would show up as a research subject it is not.
+  persona_id TEXT REFERENCES personas(id),
+  question_id TEXT NOT NULL REFERENCES questions(id),
+  -- 'persona' | 'baseline' — never mixed in aggregation
+  condition TEXT NOT NULL DEFAULT 'persona',
+  model_requested TEXT NOT NULL,
+  model_version TEXT,
+  temperature REAL NOT NULL,
+  seed INTEGER NOT NULL,
+  prompt_style TEXT NOT NULL DEFAULT 'style_c',
+  permutation_json TEXT NOT NULL,
+  label_style TEXT NOT NULL DEFAULT 'letters',
+  prompt_rendered TEXT NOT NULL,
+  raw_response TEXT NOT NULL,
+  parsed_distribution_json TEXT,
+  parsed_answer TEXT,
+  -- single_choice: distribution summing to 1; multi_choice: independent 0..1
+  -- probabilities. NULL marks pre-v0.6 rows, where multi-select questions were
+  -- elicited (and normalized) as if their options were mutually exclusive.
+  elicitation_mode TEXT,
+  is_valid INTEGER NOT NULL DEFAULT 1,
+  abstained INTEGER NOT NULL DEFAULT 0,
+  prompt_tokens INTEGER,
+  completion_tokens INTEGER,
+  -- prompt tokens served from the provider's prompt cache (~10% of the price).
+  -- 0 for rows recorded before this was measured: a provider that reports nothing
+  -- is indistinguishable from a cache miss anyway, so 0 loses no information.
+  cached_tokens INTEGER NOT NULL DEFAULT 0,
+  cost_usd REAL,
+  -- saving reported by OpenRouter for the cached part of the prompt
+  cache_discount_usd REAL,
+  latency_ms INTEGER,
+  openrouter_request_id TEXT,
+  -- the same model id is served by several providers with different quantization
+  -- and caching behaviour, so model pinning is only complete with the provider
+  provider TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+`
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS projects (
@@ -166,45 +253,7 @@ CREATE TABLE IF NOT EXISTS run_personas (
   PRIMARY KEY (run_id, persona_id)
 );
 
--- Append-only response log: one row per API call, never updated.
-CREATE TABLE IF NOT EXISTS responses (
-  id TEXT PRIMARY KEY,
-  run_id TEXT NOT NULL REFERENCES runs(id),
-  persona_id TEXT NOT NULL REFERENCES personas(id),
-  question_id TEXT NOT NULL REFERENCES questions(id),
-  model_requested TEXT NOT NULL,
-  model_version TEXT,
-  temperature REAL NOT NULL,
-  seed INTEGER NOT NULL,
-  prompt_style TEXT NOT NULL DEFAULT 'style_c',
-  permutation_json TEXT NOT NULL,
-  label_style TEXT NOT NULL DEFAULT 'letters',
-  prompt_rendered TEXT NOT NULL,
-  raw_response TEXT NOT NULL,
-  parsed_distribution_json TEXT,
-  parsed_answer TEXT,
-  -- single_choice: distribution summing to 1; multi_choice: independent 0..1
-  -- probabilities. NULL marks pre-v0.6 rows, where multi-select questions were
-  -- elicited (and normalized) as if their options were mutually exclusive.
-  elicitation_mode TEXT,
-  is_valid INTEGER NOT NULL DEFAULT 1,
-  abstained INTEGER NOT NULL DEFAULT 0,
-  prompt_tokens INTEGER,
-  completion_tokens INTEGER,
-  -- prompt tokens served from the provider's prompt cache (~10% of the price).
-  -- 0 for rows recorded before this was measured: a provider that reports nothing
-  -- is indistinguishable from a cache miss anyway, so 0 loses no information.
-  cached_tokens INTEGER NOT NULL DEFAULT 0,
-  cost_usd REAL,
-  -- saving reported by OpenRouter for the cached part of the prompt
-  cache_discount_usd REAL,
-  latency_ms INTEGER,
-  openrouter_request_id TEXT,
-  -- the same model id is served by several providers with different quantization
-  -- and caching behaviour, so model pinning is only complete with the provider
-  provider TEXT,
-  created_at TEXT NOT NULL DEFAULT (datetime('now'))
-);
+${RESPONSES_TABLE}
 
 CREATE TABLE IF NOT EXISTS token_ledger (
   id INTEGER PRIMARY KEY AUTOINCREMENT,

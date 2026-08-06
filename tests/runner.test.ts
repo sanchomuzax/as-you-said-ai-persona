@@ -477,3 +477,65 @@ describe('SurveyRunner — a rejected write must not be announced as a response'
     runEvents.removeAllListeners('status')
   })
 })
+
+describe('SurveyRunner — baseline control arm', () => {
+  function seedBaselineRun(db: Db, config: Record<string, unknown>): void {
+    db.prepare('INSERT INTO questionnaires (id, name) VALUES (?,?)').run('q', 'Q')
+    db.prepare('INSERT INTO questions (id, questionnaire_id, ord, text, options_json) VALUES (?,?,0,?,?)').run(
+      'qq', 'q', 'Q?', JSON.stringify(['a', 'b'])
+    )
+    db.prepare('INSERT INTO personas (id, name, demographics_json) VALUES (?,?,?)').run('p', 'P', '{"kor":"30"}')
+    db.prepare("INSERT INTO runs (id, questionnaire_id, name, status, config_json) VALUES (?,?,?,'pending',?)").run(
+      'run', 'q', 'R', JSON.stringify({ model: 'm', temperature: 1, seeds: [0], ...config })
+    )
+    db.prepare('INSERT INTO run_personas (run_id, persona_id) VALUES (?,?)').run('run', 'p')
+  }
+
+  it('fires one persona-free cell per question, rotation and seed', async () => {
+    const db = createDb(':memory:')
+    seedBaselineRun(db, { baselineArm: true })
+    await new SurveyRunner(db, new FakeClient(), new BudgetTracker(db, { globalBudget: 1e6, perRunBudget: 1e6 })).execute('run')
+
+    const rows = db.prepare("SELECT condition, persona_id, COUNT(*) c FROM responses WHERE run_id='run' GROUP BY 1,2").all() as unknown as {
+      condition: string
+      persona_id: string | null
+      c: number
+    }[]
+    expect(rows).toEqual(
+      expect.arrayContaining([
+        { condition: 'persona', persona_id: 'p', c: 2 },
+        { condition: 'baseline', persona_id: null, c: 2 }
+      ])
+    )
+  })
+
+  it('sends no profile block in the control cells', async () => {
+    const db = createDb(':memory:')
+    seedBaselineRun(db, { baselineArm: true })
+    await new SurveyRunner(db, new FakeClient(), new BudgetTracker(db, { globalBudget: 1e6, perRunBudget: 1e6 })).execute('run')
+    const baseline = db.prepare("SELECT prompt_rendered FROM responses WHERE condition='baseline' LIMIT 1").get() as {
+      prompt_rendered: string
+    }
+    expect(baseline.prompt_rendered).not.toContain('kor: 30')
+    expect(baseline.prompt_rendered).not.toMatch(/as yourself/i)
+  })
+
+  it('can be switched off', async () => {
+    const db = createDb(':memory:')
+    seedBaselineRun(db, { baselineArm: false })
+    await new SurveyRunner(db, new FakeClient(), new BudgetTracker(db, { globalBudget: 1e6, perRunBudget: 1e6 })).execute('run')
+    const baseline = db.prepare("SELECT COUNT(*) c FROM responses WHERE condition='baseline'").get() as { c: number }
+    expect(baseline.c).toBe(0)
+  })
+
+  it('resumes without repeating control cells it already recorded', async () => {
+    const db = createDb(':memory:')
+    seedBaselineRun(db, { baselineArm: true })
+    const budget = new BudgetTracker(db, { globalBudget: 1e6, perRunBudget: 1e6 })
+    await new SurveyRunner(db, new FakeClient(), budget).execute('run')
+    const before = db.prepare("SELECT COUNT(*) c FROM responses WHERE run_id='run'").get() as { c: number }
+    await new SurveyRunner(db, new FakeClient(), budget).execute('run')
+    const after = db.prepare("SELECT COUNT(*) c FROM responses WHERE run_id='run'").get() as { c: number }
+    expect(after.c).toBe(before.c)
+  })
+})

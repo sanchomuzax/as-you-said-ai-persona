@@ -58,9 +58,12 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
       )
       .get(runId) as { config_json: string; personas: number; rotations: number } | undefined
     if (!row) return 0
-    const seeds = (JSON.parse(row.config_json) as RunConfig).seeds.length
-    // per question: rotation count = option count; cells = rotations × personas × seeds
-    return row.rotations * row.personas * seeds
+    const config = JSON.parse(row.config_json) as RunConfig
+    const seeds = config.seeds.length
+    // per question: rotation count = option count; cells = rotations × personas × seeds,
+    // plus one persona-free control cell per rotation and seed when the arm is on
+    const arms = row.personas + (config.baselineArm === true ? 1 : 0)
+    return row.rotations * arms * seeds
   }
 
   /**
@@ -565,7 +568,10 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
     autoEvaluate: z.boolean().default(false),
     // Pinning the upstream provider makes a run reproducible: the same model id
     // is otherwise served by several providers with different quantization.
-    provider: z.string().min(1).optional()
+    provider: z.string().min(1).optional(),
+    // On by default: without an in-run control there is no way to separate a
+    // persona effect from the model's default answer.
+    baselineArm: z.boolean().default(true)
   })
 
   app.post('/api/runs', async (req, reply) => {
@@ -579,6 +585,7 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
       temperature: body.data.temperature,
       seeds: body.data.seeds,
       autoEvaluate: body.data.autoEvaluate,
+      baselineArm: body.data.baselineArm,
       ...(body.data.provider ? { provider: body.data.provider } : {})
     }
     const id = randomUUID()
@@ -621,12 +628,12 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
     const responses = db
       .prepare(
         `SELECT res.id, res.persona_id, p.name AS persona_name, res.question_id, q.text AS question_text,
-                q.options_json, res.elicitation_mode,
+                q.options_json, res.elicitation_mode, res.condition,
                 res.model_version, res.provider, res.seed, res.permutation_json, res.parsed_distribution_json,
                 res.parsed_answer, res.is_valid, res.abstained, res.prompt_tokens,
                 res.completion_tokens, res.cost_usd, res.latency_ms, res.created_at
          FROM responses res
-         JOIN personas p ON p.id = res.persona_id
+         LEFT JOIN personas p ON p.id = res.persona_id
          JOIN questions q ON q.id = res.question_id
          WHERE res.run_id = ? ORDER BY res.created_at`
       )
@@ -675,7 +682,7 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
         `SELECT ${CSV_COLUMNS.map((c) => 'res.' + c).join(', ')},
                 p.name AS persona_name, q.text AS question_text, q.options_json, q.scale_type
            FROM responses res
-           JOIN personas p ON p.id = res.persona_id
+           LEFT JOIN personas p ON p.id = res.persona_id
            JOIN questions q ON q.id = res.question_id
           WHERE res.id = ? AND res.run_id = ?`
       )

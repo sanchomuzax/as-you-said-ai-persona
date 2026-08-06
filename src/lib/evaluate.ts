@@ -43,6 +43,13 @@ export function buildEvaluationPrompt(
     const distLabel = multi
       ? 'Opciónkénti támogatottság (TÖBBVÁLASZOS kérdés: független valószínűségek, nem összegződnek 100%-ra)'
       : 'Aggregált eloszlás'
+    const baselineLine = q.baseline
+      ? `\n  KONTROLL-KAR (perszóna nélküli válasz ugyanerre a kérdésre): ${q.baseline
+          .map((p, i) => `${q.options[i]}: ${(p * 100).toFixed(1)}%`)
+          .join(', ')}\n  Perszóna-hatás (JS-divergencia a kontrolltól): ${Object.values(q.byPersona)
+          .map((p) => `${p.name}: ${p.baselineDivergence === null ? 'n/a' : p.baselineDivergence.toFixed(3)}${p.movesModel === false ? ' (a zajszinten belül)' : ''}`)
+          .join('; ')}`
+      : ''
     const personaTops = Object.values(q.byPersona)
       .map((p) => {
         const max = Math.max(...p.distribution)
@@ -55,7 +62,7 @@ export function buildEvaluationPrompt(
       : 'Pozíció-konzisztencia (PC)'
     return `Kérdés: ${q.text}
   ${distLabel}: ${dist}${legacyNote}
-  Perszónánkénti topválasz: ${personaTops}
+  Perszónánkénti topválasz: ${personaTops}${baselineLine}
   Invalid: ${q.invalidCount}/${q.totalResponses}, Abstain: ${q.abstainCount}/${q.totalResponses}
   ${stabilityLabel}: ${fmt(q.positionConsistency)}, Ismétlési stabilitás (RS): ${fmt(q.repetitionStability)}`
   })
@@ -67,6 +74,7 @@ FONTOS SZABÁLYOK:
 - Kizárólag az alábbi, kódból számolt adatokra támaszkodj; új számokat ne találj ki.
 - Ahol a pozíció-konzisztencia (PC) 0.7 alatt van, ott az adott kérdés eredményét KÖTELEZŐ megbízhatatlannak jelölnöd (a válasz a felsorolás sorrendjétől függött).
 - A perszónák közti éles különbségeket fenntartással kezeld: az LLM-ek a csoportkülönbségeket tipikusan 2-4x felnagyítják (spurious split kockázat).
+- Ahol van KONTROLL-KAR, ott a perszónás eredményt KÖTELEZŐ ahhoz KÉPEST értelmezni: ha egy perszóna divergenciája a zajszinten belül van, mondd ki, hogy ott a perszóna nem térítette el a modellt a saját alapértelmezésétől — az eredmény a modell tulajdonsága, nem a perszónáé.
 - Az abstain nem hiba, hanem bizonyítékhézag: jelezd, mely témákban nem volt a perszónáknak megalapozott válasza.
 ${providerNote}${
     results.duplicateResponseCount > 0

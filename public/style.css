@@ -1396,3 +1396,10 @@ body {
   color: var(--color-text-secondary);
   margin-top: var(--space-2);
 }
+
+.option-bar-baseline {
+  font-size: 11px;
+  color: var(--color-info);
+  min-width: 8em;
+  text-align: right;
+}

@@ -41,7 +41,7 @@ export interface BuiltPrompt {
  * explicit abstention path. Sent in a fresh context (per-question memory reset).
  */
 export function buildStyleCPrompt(
-  persona: PersonaInput,
+  persona: PersonaInput | null,
   question: QuestionInput,
   rotation: readonly number[],
   mode: ElicitationMode = 'single_choice'
@@ -62,8 +62,21 @@ export function buildStyleCPrompt(
       ? 'This question allows multiple answers. For each option independently, estimate the probability between 0 and 1 that this respondent would select it. The options are independent: the probabilities do NOT have to sum to any particular value, and several options may be high at once.'
       : 'Estimate the probability that this respondent would choose each answer option for the question below. Probabilities must sum to 1.'
 
-  const prompt = `Consider a survey respondent with the following profile:
-${renderPersona(persona)}
+  // The control arm has no profile block at all. The framing stays "a survey
+  // respondent": asking the model to answer AS ITSELF would activate the
+  // assistant persona, which is a different bias, not the absence of one.
+  const intro = persona
+    ? `Consider a survey respondent with the following profile:\n${renderPersona(persona)}`
+    : 'Consider a survey respondent.'
+
+  // The abstention clause must not reference a profile the control arm does not
+  // have: with "the profile gives you no basis", a persona-free cell abstains
+  // every single time — measured, not assumed (6 of 6 in the first live run).
+  const abstention = persona
+    ? 'If the profile gives you no basis to answer this question, return exactly {"abstain": true} instead of guessing.'
+    : 'If you have no basis to estimate these probabilities, return exactly {"abstain": true} instead of guessing.'
+
+  const prompt = `${intro}
 
 ${task}
 
@@ -73,7 +86,7 @@ Answer options:
 ${optionLines}
 
 Return only valid JSON mapping each answer key to a probability, using exactly these keys: ${keys.join(', ')}. No other text.
-If the profile gives you no basis to answer this question, return exactly {"abstain": true} instead of guessing.`
+${abstention}`
 
   return { prompt, keyMap, keys }
 }

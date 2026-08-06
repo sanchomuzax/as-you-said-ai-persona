@@ -158,3 +158,57 @@ describe('cell uniqueness', () => {
     reopened.close()
   })
 })
+
+describe('baseline arm schema migration', () => {
+  it('makes persona_id nullable and adds the condition column, keeping every row', async () => {
+    const { createDb } = await import('../src/db.js')
+    const { mkdtempSync } = await import('node:fs')
+    const { tmpdir } = await import('node:os')
+    const { join } = await import('node:path')
+    const path = join(mkdtempSync(join(tmpdir(), 'asys-baseline-')), 'db.sqlite')
+
+    // a database from before the baseline arm: persona_id NOT NULL, no condition
+    const before = createDb(path)
+    before.exec('DROP INDEX IF EXISTS idx_responses_cell')
+    before.exec('ALTER TABLE responses DROP COLUMN condition')
+    before.prepare('INSERT INTO questionnaires (id, name) VALUES (?,?)').run('q', 'Q')
+    before.prepare('INSERT INTO questions (id, questionnaire_id, ord, text, options_json) VALUES (?,?,0,?,?)').run('qq', 'q', 'Q?', '["a","b"]')
+    before.prepare('INSERT INTO personas (id, name, demographics_json) VALUES (?,?,?)').run('p', 'P', '{}')
+    before.prepare("INSERT INTO runs (id, questionnaire_id, name, config_json) VALUES ('run','q','R','{}')").run()
+    for (const [id, seed] of [['a', 0], ['b', 1]] as [string, number][]) {
+      before.prepare(
+        `INSERT INTO responses (id, run_id, persona_id, question_id, model_requested, temperature, seed,
+           permutation_json, prompt_rendered, raw_response, is_valid, abstained, prompt_tokens)
+         VALUES (?, 'run','p','qq','m',1,?,'[0,1]','prompt','raw',1,0,42)`
+      ).run(id, seed)
+    }
+    before.close()
+
+    const after = createDb(path)
+    const rows = after.prepare('SELECT id, persona_id, prompt_tokens, condition FROM responses ORDER BY id').all() as unknown as {
+      id: string
+      persona_id: string
+      prompt_tokens: number
+      condition: string
+    }[]
+    expect(rows).toHaveLength(2)
+    expect(rows[0]).toMatchObject({ id: 'a', persona_id: 'p', prompt_tokens: 42, condition: 'persona' })
+
+    // and a persona-free control cell can now be recorded
+    after
+      .prepare(
+        `INSERT INTO responses (id, run_id, persona_id, question_id, model_requested, temperature, seed,
+           permutation_json, prompt_rendered, raw_response, is_valid, abstained, condition)
+         VALUES ('baseline','run',NULL,'qq','m',1,9,'[0,1]','prompt','raw',1,0,'baseline')`
+      )
+      .run()
+    const baseline = after.prepare("SELECT persona_id, condition FROM responses WHERE id='baseline'").get() as {
+      persona_id: string | null
+      condition: string
+    }
+    expect(baseline.persona_id).toBeNull()
+    expect(baseline.condition).toBe('baseline')
+    createDb(path).close() // idempotent
+    after.close()
+  })
+})

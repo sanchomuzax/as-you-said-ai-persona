@@ -14,6 +14,13 @@ export interface RunConfig {
   autoEvaluate?: boolean
   /** Pinned upstream provider; part of the experimental configuration. */
   provider?: string
+  /**
+   * Persona-free control cells alongside the persona cells. Without an in-run
+   * control there is no way to tell a persona effect from the model's default
+   * answer: the arm shares the run's exact template, provider, moment and
+   * questionnaire, which a separately measured profile cannot.
+   */
+  baselineArm?: boolean
 }
 
 /** In-memory control signals; checked between cells. */
@@ -39,6 +46,9 @@ export function requestPause(runId: string): void {
 export function requestStop(runId: string): void {
   controls.set(runId, 'stop')
 }
+
+/** Stands in for the missing persona id when keying a control cell. */
+const BASELINE_CELL_KEY = '__baseline__'
 
 const RESUMABLE = new Set(['paused', 'budget_exhausted', 'failed', 'pending'])
 
@@ -126,7 +136,7 @@ export class SurveyRunner {
       .prepare('SELECT question_id, persona_id, permutation_json, seed, elicitation_mode FROM responses WHERE run_id = ?')
       .all(runId) as unknown as {
       question_id: string
-      persona_id: string
+      persona_id: string | null
       permutation_json: string
       seed: number
       elicitation_mode: string | null
@@ -138,7 +148,7 @@ export class SurveyRunner {
           if (current === undefined) return true
           return r.elicitation_mode === null ? current === 'single_choice' : r.elicitation_mode === current
         })
-        .map((r) => cellKey(r.question_id, r.persona_id, r.permutation_json, r.seed))
+        .map((r) => cellKey(r.question_id, r.persona_id ?? BASELINE_CELL_KEY, r.permutation_json, r.seed))
     )
     const staleCells = recorded.length - doneCells.size
     if (staleCells > 0) {
@@ -172,6 +182,29 @@ export class SurveyRunner {
               await this.executeCell(runId, config, persona, personaRow.id, question, options, rotation, seed)
             }
           }
+
+        }
+
+        // The control arm belongs to the question, not to a persona: one
+        // persona-free cell per rotation and seed, sharing this run's exact
+        // template, provider and moment in time.
+        if (config.baselineArm === true) {
+          for (const rotation of rotations) {
+            for (const seed of config.seeds) {
+              const control = controls.get(runId)
+              if (control) {
+                controls.delete(runId)
+                this.setStatus(runId, control === 'stop' ? 'stopped' : 'paused')
+                return
+              }
+              if (doneCells.has(cellKey(question.id, BASELINE_CELL_KEY, JSON.stringify(rotation), seed))) continue
+              if (!this.budget.canSpend(runId)) {
+                this.setStatus(runId, 'budget_exhausted')
+                return
+              }
+              await this.executeCell(runId, config, null, null, question, options, rotation, seed)
+            }
+          }
         }
       }
       this.setStatus(runId, 'completed')
@@ -185,8 +218,8 @@ export class SurveyRunner {
   private async executeCell(
     runId: string,
     config: RunConfig,
-    persona: PersonaInput,
-    personaId: string,
+    persona: PersonaInput | null,
+    personaId: string | null,
     question: QuestionRow,
     options: string[],
     rotation: number[],
@@ -228,15 +261,16 @@ export class SurveyRunner {
       .prepare(
         `INSERT OR IGNORE INTO responses (
           id, run_id, persona_id, question_id, model_requested, model_version,
-          temperature, seed, prompt_style, elicitation_mode, permutation_json, label_style,
+          temperature, seed, prompt_style, elicitation_mode, condition, permutation_json, label_style,
           prompt_rendered, raw_response, parsed_distribution_json, parsed_answer,
           is_valid, abstained, prompt_tokens, completion_tokens, cached_tokens, cost_usd,
           cache_discount_usd, latency_ms, openrouter_request_id, provider
-        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
       )
       .run(
         randomUUID(), runId, personaId, question.id, config.model, result.modelVersion,
-        config.temperature, seed, 'style_c', mode, JSON.stringify(rotation), 'letters',
+        config.temperature, seed, 'style_c', mode, personaId === null ? 'baseline' : 'persona',
+        JSON.stringify(rotation), 'letters',
         prompt, result.content, byOption ? JSON.stringify(byOption) : null, parsedAnswer,
         parsed.isValid ? 1 : 0, parsed.abstained ? 1 : 0,
         result.promptTokens, result.completionTokens, toCount(result.cachedTokens),

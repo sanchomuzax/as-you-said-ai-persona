@@ -78,3 +78,38 @@ describe('buildStyleCPrompt — multi_choice elicitation', () => {
     expect(keyMap).toEqual({ A: 2, B: 0, C: 1 })
   })
 })
+
+describe('buildStyleCPrompt — baseline (persona-free) arm', () => {
+  it('omits the profile block entirely', () => {
+    const { prompt } = buildStyleCPrompt(null, question, [0, 1, 2])
+    expect(prompt).not.toContain('42')
+    expect(prompt).not.toContain('Pécs')
+    expect(prompt).not.toMatch(/profile:/i)
+  })
+
+  it('never tells the model to answer as itself — that would summon the assistant role', () => {
+    const { prompt } = buildStyleCPrompt(null, question, [0, 1, 2])
+    expect(prompt).not.toMatch(/as yourself|as an ai|as the assistant/i)
+    expect(prompt).toMatch(/survey respondent/i)
+  })
+
+  it('keeps the same task, labels and abstention path as the persona arm', () => {
+    const baseline = buildStyleCPrompt(null, question, [2, 0, 1])
+    expect(baseline.keyMap).toEqual({ A: 2, B: 0, C: 1 })
+    expect(baseline.prompt).toMatch(/sum to 1/i)
+    expect(baseline.prompt).toMatch(/abstain/i)
+  })
+})
+
+describe('buildStyleCPrompt — abstention wording per arm', () => {
+  it('does not point the control arm at a profile it does not have', () => {
+    const { prompt } = buildStyleCPrompt(null, question, [0, 1, 2])
+    expect(prompt).not.toMatch(/the profile gives you no basis/i)
+    expect(prompt).toMatch(/no basis to estimate/i)
+  })
+
+  it('keeps the profile-based wording for persona cells', () => {
+    const { prompt } = buildStyleCPrompt(persona, question, [0, 1, 2])
+    expect(prompt).toMatch(/the profile gives you no basis/i)
+  })
+})

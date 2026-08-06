@@ -130,8 +130,13 @@ function renderOptionBars(question) {
   // a share of a 100% total — that is exactly the reading the fix removes.
   const rowTooltip = multi ? TOOLTIPS.support : TOOLTIPS.distribution;
 
+  const baseline = Array.isArray(question.baseline) ? question.baseline : null;
   return options.map((opt, i) => {
     const value = aggregated[i] || 0;
+    const baselineValue = baseline ? baseline[i] || 0 : null;
+    const baselinePct = baselineValue === null
+      ? null
+      : (multi ? Math.round(baselineValue * 100) : (baseline.reduce((a, b) => a + b, 0) > 0 ? Math.round((baselineValue / baseline.reduce((a, b) => a + b, 0)) * 100) : 0));
     const barPct = (value / max) * 100;
     const pct = multi
       ? Math.round(value * 100)
@@ -143,6 +148,7 @@ function renderOptionBars(question) {
           <div class="option-bar-fill${multi ? ' option-bar-fill-support' : ''}" style="width: ${barPct}%"></div>
         </div>
         <span class="option-bar-pct">${pct}%${multi ? ' támogatottság' : ''} (${formatMetric(value)})</span>
+        ${baselinePct === null ? '' : `<span class="option-bar-baseline" title="${escapeHtml(TOOLTIPS.baselineArm)}">kontroll: ${baselinePct}%</span>`}
       </div>
     `;
   }).join('');
@@ -171,6 +177,11 @@ function renderPersonaBreakdown(question) {
         <td>${escapeHtml(info.name || personaId)}</td>
         <td>${escapeHtml(topOption || '—')}</td>
         <td class="numeric">${topPct === '—' ? '—' : topPct + '%'}</td>
+        <td class="numeric" title="${escapeHtml(TOOLTIPS.personaEffect)}">${
+          info.baselineDivergence === null || info.baselineDivergence === undefined
+            ? '—'
+            : formatMetric(info.baselineDivergence) + (info.movesModel === false ? ' (zajszint)' : '')
+        }</td>
         <td class="numeric">${formatNumber(info.abstainCount || 0)}</td>
       </tr>
     `;
@@ -183,6 +194,7 @@ function renderPersonaBreakdown(question) {
           <th>Perszóna</th>
           <th title="${escapeHtml(TOOLTIPS.topAnswer)}">Top válasz</th>
           <th class="numeric" title="${escapeHtml(multi ? TOOLTIPS.support : TOOLTIPS.distribution)}">%</th>
+          <th class="numeric" title="${escapeHtml(TOOLTIPS.personaEffect)}">Perszóna-hatás</th>
           <th class="numeric" title="${escapeHtml(TOOLTIPS.abstain)}">Tartózkodás</th>
         </tr>
       </thead>

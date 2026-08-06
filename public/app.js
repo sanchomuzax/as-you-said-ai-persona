@@ -705,7 +705,8 @@ document.getElementById('runForm')?.addEventListener('submit', async (e) => {
       temperature: parseFloat(document.getElementById('runTemperature').value),
       provider: document.getElementById('runProvider').value.trim() || undefined,
       projectId: state.selectedProjectId,
-      autoEvaluate: document.getElementById('runAutoEvaluate').checked
+      autoEvaluate: document.getElementById('runAutoEvaluate').checked,
+      baselineArm: document.getElementById('runBaselineArm').checked
     };
 
     await apiCall('POST', '/api/runs', body);

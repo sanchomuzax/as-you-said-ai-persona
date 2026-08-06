@@ -21,8 +21,21 @@ export interface QuestionResult {
   abstainCount: number
   /** Mean probability per original option index, over valid non-abstained responses. */
   aggregated: number[]
-  /** Same, broken down per persona. */
-  byPersona: Record<string, { name: string; distribution: number[]; abstainCount: number }>
+  /** Same, broken down per persona, with each persona's distance from the control arm. */
+  byPersona: Record<
+    string,
+    {
+      name: string
+      distribution: number[]
+      abstainCount: number
+      /** Jensen-Shannon divergence from the control arm (0..1), null without an arm. */
+      baselineDivergence: number | null
+      /** False when the persona's answer sits within the run's own seed noise. */
+      movesModel: boolean | null
+    }
+  >
+  /** Mean distribution of the persona-free control cells, null when the run had no arm. */
+  baseline: number[] | null
   /** Position Consistency: share of (persona, seed) groups whose top choice is identical across rotations. */
   positionConsistency: number | null
   /** Repetition Stability: share of (persona, rotation) groups whose top choice is identical across seeds. */
@@ -47,6 +60,7 @@ interface ResponseRow {
   id: string
   question_id: string
   elicitation_mode: string | null
+  condition: string | null
   persona_id: string
   persona_name: string
   permutation_json: string
@@ -75,8 +89,8 @@ export function computeRunResults(db: Db, runId: string): RunResults {
     .prepare(
       `SELECT res.id, res.question_id, res.persona_id, p.name AS persona_name, res.permutation_json,
               res.seed, res.parsed_distribution_json, res.parsed_answer, res.is_valid, res.abstained,
-              res.elicitation_mode
-       FROM responses res JOIN personas p ON p.id = res.persona_id WHERE res.run_id = ?
+              res.elicitation_mode, res.condition
+       FROM responses res LEFT JOIN personas p ON p.id = res.persona_id WHERE res.run_id = ?
        ORDER BY res.rowid`
     )
     .all(runId) as unknown as ResponseRow[]
@@ -86,7 +100,11 @@ export function computeRunResults(db: Db, runId: string): RunResults {
   const results = questions.map((q) => {
     const options = JSON.parse(q.options_json) as string[]
     const mode = elicitationModeFor(q.scale_type)
-    const rows = responses.filter((r) => r.question_id === q.id)
+    const allRows = responses.filter((r) => r.question_id === q.id)
+    // The control arm answers the same question with no subject: it must never be
+    // averaged into the persona result, only compared against it.
+    const baselineRows = allRows.filter((r) => r.condition === 'baseline')
+    const rows = allRows.filter((r) => r.condition !== 'baseline')
     const parsable = rows.filter((r) => r.is_valid === 1 && r.abstained === 0 && r.parsed_distribution_json)
     // A normalized answer to a multi-select question measures something else
     // entirely, so it cannot be averaged together with independent probabilities.
@@ -99,14 +117,26 @@ export function computeRunResults(db: Db, runId: string): RunResults {
     const valid = usable
 
     const aggregated = meanDistribution(valid, options.length)
+    const validBaseline = baselineRows.filter(
+      (r) => r.is_valid === 1 && r.abstained === 0 && r.parsed_distribution_json
+    )
+    const baseline = validBaseline.length > 0 ? meanDistribution(validBaseline, options.length) : null
+    // Noise floor: how far the control arm drifts from itself between seeds. A
+    // persona closer than that has not moved the model, it has moved with the noise.
+    const noiseFloor = baseline ? seedNoiseFloor(validBaseline, options.length) : 0
+
     const byPersona: QuestionResult['byPersona'] = {}
     for (const row of rows) {
       if (!byPersona[row.persona_id]) {
         const personaRows = valid.filter((r) => r.persona_id === row.persona_id)
+        const distribution = meanDistribution(personaRows, options.length)
+        const divergence = baseline ? jensenShannon(distribution, baseline) : null
         byPersona[row.persona_id] = {
           name: row.persona_name,
-          distribution: meanDistribution(personaRows, options.length),
-          abstainCount: rows.filter((r) => r.persona_id === row.persona_id && r.abstained === 1).length
+          distribution,
+          abstainCount: rows.filter((r) => r.persona_id === row.persona_id && r.abstained === 1).length,
+          baselineDivergence: divergence,
+          movesModel: divergence === null ? null : divergence > noiseFloor
         }
       }
     }
@@ -116,6 +146,7 @@ export function computeRunResults(db: Db, runId: string): RunResults {
       text: q.text,
       options,
       scaleType: q.scale_type,
+      baseline,
       elicitationMode: mode,
       legacyElicitationCount,
       aggregatedResponseCount: valid.length,
@@ -213,4 +244,46 @@ function meanPairwiseJaccard(answers: string[]): number {
     }
   }
   return sum / pairs
+}
+
+/**
+ * Jensen-Shannon divergence in bits (0 = identical, 1 = disjoint). Symmetric and
+ * bounded, unlike KL — which matters because either side can contain a zero.
+ */
+function jensenShannon(p: number[], q: number[]): number {
+  const norm = (v: number[]): number[] => {
+    const sum = v.reduce((a, b) => a + b, 0)
+    return sum > 0 ? v.map((x) => x / sum) : v.map(() => 0)
+  }
+  const a = norm(p)
+  const b = norm(q)
+  let divergence = 0
+  for (let i = 0; i < Math.max(a.length, b.length); i++) {
+    const pi = a[i] ?? 0
+    const qi = b[i] ?? 0
+    const mi = (pi + qi) / 2
+    if (pi > 0 && mi > 0) divergence += (pi / 2) * Math.log2(pi / mi)
+    if (qi > 0 && mi > 0) divergence += (qi / 2) * Math.log2(qi / mi)
+  }
+  return Math.min(Math.max(divergence, 0), 1)
+}
+
+/** Mean divergence between the control arm's own seeds: the run's own noise level. */
+function seedNoiseFloor(baselineRows: ResponseRow[], optionCount: number): number {
+  const bySeed = new Map<number, ResponseRow[]>()
+  for (const row of baselineRows) {
+    if (!bySeed.has(row.seed)) bySeed.set(row.seed, [])
+    bySeed.get(row.seed)!.push(row)
+  }
+  const distributions = [...bySeed.values()].map((rows) => meanDistribution(rows, optionCount))
+  if (distributions.length < 2) return 0
+  let sum = 0
+  let pairs = 0
+  for (let i = 0; i < distributions.length; i++) {
+    for (let j = i + 1; j < distributions.length; j++) {
+      sum += jensenShannon(distributions[i]!, distributions[j]!)
+      pairs++
+    }
+  }
+  return pairs > 0 ? sum / pairs : 0
 }

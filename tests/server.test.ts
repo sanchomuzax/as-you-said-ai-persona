@@ -280,8 +280,11 @@ describe('personas, questionnaires, runs end-to-end', () => {
     const detail = await app.inject({ method: 'GET', url: `/api/runs/${runId}`, cookies: cookie })
     const { data } = detail.json()
     expect(data.run.status).toBe('completed')
-    expect(data.responses.length).toBe(2) // 2 options -> 2 rotations x 1 seed
-    expect(data.usage.totalTokens).toBe(30)
+    // 2 options -> 2 rotations x 1 seed, once for the persona and once for the
+    // persona-free control arm, which is on by default
+    expect(data.responses.length).toBe(4)
+    expect(data.responses.filter((r: { condition: string }) => r.condition === 'baseline')).toHaveLength(2)
+    expect(data.usage.totalTokens).toBe(60)
 
     const csv = await app.inject({ method: 'GET', url: `/api/runs/${runId}/export.csv`, cookies: cookie })
     expect(csv.headers['content-type']).toContain('text/csv')
@@ -396,8 +399,8 @@ describe('evaluation coverage snapshot', () => {
     await app.inject({ method: 'POST', url: `/api/runs/${runId}/evaluate`, cookies: cookie })
     const evaluations = (await app.inject({ method: 'GET', url: `/api/runs/${runId}/evaluations`, cookies: cookie })).json().data
     expect(evaluations[0].run_status).toBe('completed')
-    expect(evaluations[0].total_cells).toBe(2)
-    expect(evaluations[0].done_cells).toBe(2)
+    // persona cells + the control arm's cells
+    expect(evaluations[0].done_cells).toBe(4)
   })
 
   it('marks an evaluation made while the run was still unfinished', async () => {
