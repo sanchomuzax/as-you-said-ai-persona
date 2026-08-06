@@ -53,7 +53,15 @@ const TOOLTIPS = {
     'Style C elicitáció: a perszóna nem egy választ ad, hanem valószínűség-eloszlást az opciókra. Az oszlopok az átlagolt eloszlást mutatják.',
   seed: 'A modellhíváshoz használt seed. Ugyanaz a kérdés több seeddel megy ki, így mérhető az ismétlési stabilitás.',
   modelVersion: 'A szolgáltató által ténylegesen kiszolgáló modellverzió (model pinning ellenőrzéshez rögzítjük).',
-  validFlag: '✓ érvényes válasz · — tartózkodás (bizonyítékhézag) · ✗ nem értelmezhető kimenet'
+  validFlag: '✓ érvényes válasz · — tartózkodás (bizonyítékhézag) · ✗ nem értelmezhető kimenet',
+  multiChoice:
+    'Többválaszos kérdés: az opciók függetlenek, mindegyikhez külön 0–1 kiválasztási valószínűség tartozik. A számok NEM összegződnek 100%-ra, és nem hasonlíthatók közvetlenül egyválaszos kérdés eloszlásához.',
+  singleChoice:
+    'Egyválaszos kérdés: az opciók kizárják egymást, a valószínűségek 100%-ra összegződnek (Style C eloszlás).',
+  legacyElicitation:
+    'Régi elicitationnal készült válaszok: ezek a többválaszos kérdést is 100%-ra normalizált eloszlásként kérdezték le, ezért mást mérnek. Az aggregátumból kihagyva — az összehasonlíthatóság érdekében a kérdést újra kell futtatni.',
+  support:
+    'Opciónkénti támogatottság: az adott opció átlagos kiválasztási valószínűsége a perszónák válaszaiban. Többválaszos kérdésnél az értékek összege meghaladhatja a 100%-ot.'
 };
 
 function statusLabel(status) {
@@ -78,6 +86,19 @@ function renderMetricChips(question) {
   const chips = [];
   const pc = question.positionConsistency;
   const rs = question.repetitionStability;
+
+  if (question.elicitationMode === 'multi_choice') {
+    chips.push(chip('metric-chip metric-chip-info', '☑ Többválaszos', TOOLTIPS.multiChoice));
+  }
+  if (question.legacyElicitationCount) {
+    chips.push(
+      chip(
+        'metric-chip metric-chip-warning',
+        '⚠ régi elicitation: ' + formatNumber(question.legacyElicitationCount) + ' válasz kihagyva',
+        TOOLTIPS.legacyElicitation
+      )
+    );
+  }
 
   if (pc !== undefined && pc !== null) {
     chips.push(chip('metric-chip', 'PC ' + formatMetric(pc), TOOLTIPS.positionConsistency));
@@ -123,4 +144,15 @@ function runStatChips(stats) {
     chips.push(chip('stat-chip', formatNumber(Math.round(stats.avgLatencyMs)) + ' ms/válasz', TOOLTIPS.latency));
   }
   return chips.join('');
+}
+
+/**
+ * When every response to a multi-select question predates the elicitation fix,
+ * the aggregate would be all zeros — an empty chart reads as "no support", which
+ * is a different (and false) claim. Say what actually happened instead.
+ */
+function renderLegacyOnlyNotice(question) {
+  const legacy = question.legacyElicitationCount || 0;
+  if (legacy === 0 || (question.aggregatedResponseCount || 0) > 0) return '';
+  return `<p class="detail-note detail-note-warning">Ehhez a kérdéshez csak a régi, hibás elicitationnal készült válasz van (${formatNumber(legacy)} db), ezért nincs mit aggregálni. A számokhoz a kérdést újra kell futtatni — a régi válaszok megmaradnak a naplóban.</p>`;
 }

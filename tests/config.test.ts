@@ -38,3 +38,30 @@ describe('loadModels', () => {
     expect(models.models.some((m) => m.id === models.default)).toBe(true)
   })
 })
+
+describe('schema migration', () => {
+  it('adds elicitation_mode to a database created before the elicitation split', async () => {
+    const { createDb } = await import('../src/db.js')
+    const { mkdtempSync } = await import('node:fs')
+    const { tmpdir } = await import('node:os')
+    const { join } = await import('node:path')
+
+    const path = join(mkdtempSync(join(tmpdir(), 'asys-migrate-')), 'db.sqlite')
+    const before = createDb(path)
+    before.exec('ALTER TABLE responses DROP COLUMN elicitation_mode')
+    expect(
+      (before.prepare('PRAGMA table_info(responses)').all() as unknown as { name: string }[])
+        .some((c) => c.name === 'elicitation_mode')
+    ).toBe(false)
+    before.close()
+
+    const after = createDb(path)
+    expect(
+      (after.prepare('PRAGMA table_info(responses)').all() as unknown as { name: string }[])
+        .some((c) => c.name === 'elicitation_mode')
+    ).toBe(true)
+    // idempotent: opening again must not throw
+    createDb(path).close()
+    after.close()
+  })
+})

@@ -301,3 +301,27 @@ describe('personas, questionnaires, runs end-to-end', () => {
     expect(res.json().error).toContain('Unknown model')
   })
 })
+
+describe('questionnaire validation', () => {
+  it('rejects an unknown scale type instead of silently falling back to single-choice elicitation', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/questionnaires',
+      cookies: cookie,
+      payload: { name: 'Q', questions: [{ text: 'Q?', options: ['a', 'b'], scaleType: 'multi-choice' }] }
+    })
+    expect(res.statusCode).toBe(400)
+  })
+
+  it('accepts the known scale types', async () => {
+    for (const scaleType of ['single_choice', 'multi_choice', 'frequency', 'ordinal', 'categorical']) {
+      const res = await app.inject({
+        method: 'POST',
+        url: '/api/questionnaires',
+        cookies: cookie,
+        payload: { name: 'Q-' + scaleType, questions: [{ text: 'Q?', options: ['a', 'b'], scaleType }] }
+      })
+      expect(res.statusCode, scaleType).toBe(200)
+    }
+  })
+})

@@ -244,7 +244,9 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
         z.object({
           text: z.string().min(1),
           options: z.array(z.string().min(1)).min(2).max(26),
-          scaleType: z.string().default('categorical'),
+          // A typo here would silently revert a multi-select question to sum-to-1
+          // elicitation, so the value is constrained rather than free text.
+          scaleType: z.enum(['single_choice', 'multi_choice', 'frequency', 'ordinal', 'categorical']).default('categorical'),
           scaleDirection: z.enum(['ascending', 'descending']).default('ascending')
         })
       )
@@ -366,6 +368,7 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
     const responses = db
       .prepare(
         `SELECT res.id, res.persona_id, p.name AS persona_name, res.question_id, q.text AS question_text,
+                q.options_json, res.elicitation_mode,
                 res.model_version, res.seed, res.permutation_json, res.parsed_distribution_json,
                 res.parsed_answer, res.is_valid, res.abstained, res.prompt_tokens,
                 res.completion_tokens, res.cost_usd, res.latency_ms, res.created_at

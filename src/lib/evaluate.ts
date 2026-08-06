@@ -10,20 +10,41 @@ import type { RunResults } from './results.js'
  */
 export function buildEvaluationPrompt(runName: string, results: RunResults): string {
   const lines = results.questions.map((q) => {
+    const multi = q.elicitationMode === 'multi_choice'
+    const legacyNote =
+      q.legacyElicitationCount > 0
+        ? `\n  FIGYELEM: ${q.legacyElicitationCount} válasz régi, hibás elicitationnal készült, ezért ki van hagyva az aggregátumból.`
+        : ''
+
+    // Zero usable responses must never be printed as zero percentages: the judge
+    // would read a measured "nobody picked this" where nothing was measured.
+    if (q.aggregatedResponseCount === 0) {
+      return `Kérdés: ${q.text}
+  Nincs értékelhető válasz ehhez a kérdéshez.${legacyNote}
+  Invalid: ${q.invalidCount}/${q.totalResponses}, Abstain: ${q.abstainCount}/${q.totalResponses}`
+    }
+
     const dist = q.aggregated
       .map((p, i) => `${q.options[i]}: ${(p * 100).toFixed(1)}%`)
       .join(', ')
+    const distLabel = multi
+      ? 'Opciónkénti támogatottság (TÖBBVÁLASZOS kérdés: független valószínűségek, nem összegződnek 100%-ra)'
+      : 'Aggregált eloszlás'
     const personaTops = Object.values(q.byPersona)
       .map((p) => {
-        const top = p.distribution.indexOf(Math.max(...p.distribution))
-        return `${p.name}→${q.options[top] ?? 'n/a'}`
+        const max = Math.max(...p.distribution)
+        if (!(max > 0)) return `${p.name}→nincs értékelhető válasz`
+        return `${p.name}→${q.options[p.distribution.indexOf(max)] ?? 'n/a'}`
       })
       .join('; ')
+    const stabilityLabel = multi
+      ? 'Pozíció-konzisztencia (PC, halmaz-átfedés)'
+      : 'Pozíció-konzisztencia (PC)'
     return `Kérdés: ${q.text}
-  Aggregált eloszlás: ${dist}
+  ${distLabel}: ${dist}${legacyNote}
   Perszónánkénti topválasz: ${personaTops}
   Invalid: ${q.invalidCount}/${q.totalResponses}, Abstain: ${q.abstainCount}/${q.totalResponses}
-  Pozíció-konzisztencia (PC): ${fmt(q.positionConsistency)}, Ismétlési stabilitás (RS): ${fmt(q.repetitionStability)}`
+  ${stabilityLabel}: ${fmt(q.positionConsistency)}, Ismétlési stabilitás (RS): ${fmt(q.repetitionStability)}`
   })
 
   return `Egy szintetikus AI-perszóna kérdőíves kutatás ("${runName}") lefutott eredményeit kell kiértékelned kutatói szemmel, magyarul.
@@ -34,6 +55,8 @@ FONTOS SZABÁLYOK:
 - Ahol a pozíció-konzisztencia (PC) 0.7 alatt van, ott az adott kérdés eredményét KÖTELEZŐ megbízhatatlannak jelölnöd (a válasz a felsorolás sorrendjétől függött).
 - A perszónák közti éles különbségeket fenntartással kezeld: az LLM-ek a csoportkülönbségeket tipikusan 2-4x felnagyítják (spurious split kockázat).
 - Az abstain nem hiba, hanem bizonyítékhézag: jelezd, mely témákban nem volt a perszónáknak megalapozott válasza.
+- A többválaszos kérdések számai opciónkénti FÜGGETLEN támogatottságok: ezeket tilos egyválaszos kérdések eloszlásaival közvetlenül összehasonlítani, és nem összegződnek 100%-ra. Ott a PC/RS a kiválasztott opció-HALMAZOK átfedését méri (nem egyetlen topválasz egyezését), tehát szigorúbb mutató — ezt vedd figyelembe az értelmezésnél.
+- Ahol az adat "nincs értékelhető válasz", ott TILOS bármilyen tartalmi állítást tenni a kérdésről; csak a hiányt nevezd meg.
 
 ADATOK:
 Összes válasz: ${results.totalResponses}, invalid-ráta: ${(results.invalidRate * 100).toFixed(1)}%, abstain-ráta: ${(results.abstainRate * 100).toFixed(1)}%

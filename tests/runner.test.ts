@@ -107,3 +107,114 @@ describe('SurveyRunner', () => {
     expect(rows[0]!.raw_response).toContain('refuse')
   })
 })
+
+describe('SurveyRunner — elicitation modes', () => {
+  it('uses independent-probability elicitation for multi_choice questions and records the mode', async () => {
+    const db = createDb(':memory:')
+    const prompts: string[] = []
+    const client: ChatClient = {
+      async complete(model: string, prompt: string) {
+        prompts.push(prompt)
+        return {
+          content: '{"A": 0.9, "B": 0.8}',
+          modelVersion: model,
+          promptTokens: 1,
+          completionTokens: 1,
+          costUsd: 0,
+          requestId: 'r',
+          latencyMs: 1
+        }
+      }
+    }
+    db.prepare('INSERT INTO questionnaires (id, name) VALUES (?,?)').run('q', 'Q')
+    db.prepare(
+      'INSERT INTO questions (id, questionnaire_id, ord, text, scale_type, options_json) VALUES (?,?,0,?,?,?)'
+    ).run('qq', 'q', 'Melyekből tájékozódsz?', 'multi_choice', JSON.stringify(['a', 'b']))
+    db.prepare('INSERT INTO personas (id, name, demographics_json) VALUES (?,?,?)').run('p', 'P', '{}')
+    db.prepare("INSERT INTO runs (id, questionnaire_id, name, status, config_json) VALUES (?,?,?,'pending',?)").run(
+      'run', 'q', 'R', JSON.stringify({ model: 'm', temperature: 1, seeds: [0] })
+    )
+    db.prepare('INSERT INTO run_personas (run_id, persona_id) VALUES (?,?)').run('run', 'p')
+
+    const runner = new SurveyRunner(db, client, new BudgetTracker(db, { globalBudget: 1e6, perRunBudget: 1e6 }))
+    await runner.execute('run')
+
+    expect(prompts[0]).not.toMatch(/sum to 1/i)
+    const rows = db.prepare('SELECT * FROM responses WHERE run_id = ?').all('run') as unknown as {
+      elicitation_mode: string
+      parsed_distribution_json: string
+      parsed_answer: string
+    }[]
+    expect(rows).toHaveLength(2) // 2 options -> 2 rotations
+    expect(rows[0]!.elicitation_mode).toBe('multi_choice')
+    // kept as independent probabilities, not renormalized to 0.53/0.47
+    const dist = JSON.parse(rows[0]!.parsed_distribution_json) as Record<string, number>
+    expect(Object.values(dist).sort()).toEqual([0.8, 0.9])
+    // both options selected -> answer is the full selected set, in original option order
+    expect(rows[0]!.parsed_answer).toBe('0,1')
+  })
+
+  it('records single_choice mode for ordinary questions', async () => {
+    const db = createDb(':memory:')
+    db.prepare('INSERT INTO questionnaires (id, name) VALUES (?,?)').run('q', 'Q')
+    db.prepare(
+      'INSERT INTO questions (id, questionnaire_id, ord, text, scale_type, options_json) VALUES (?,?,0,?,?,?)'
+    ).run('qq', 'q', 'Q?', 'single_choice', JSON.stringify(['a', 'b']))
+    db.prepare('INSERT INTO personas (id, name, demographics_json) VALUES (?,?,?)').run('p', 'P', '{}')
+    db.prepare("INSERT INTO runs (id, questionnaire_id, name, status, config_json) VALUES (?,?,?,'pending',?)").run(
+      'run', 'q', 'R', JSON.stringify({ model: 'm', temperature: 1, seeds: [0] })
+    )
+    db.prepare('INSERT INTO run_personas (run_id, persona_id) VALUES (?,?)').run('run', 'p')
+
+    const runner = new SurveyRunner(db, new FakeClient(), new BudgetTracker(db, { globalBudget: 1e6, perRunBudget: 1e6 }))
+    await runner.execute('run')
+
+    const row = db.prepare('SELECT elicitation_mode, parsed_answer FROM responses WHERE run_id = ?').get('run') as {
+      elicitation_mode: string
+      parsed_answer: string
+    }
+    expect(row.elicitation_mode).toBe('single_choice')
+    expect(row.parsed_answer).toMatch(/^\d+$/)
+  })
+})
+
+describe('SurveyRunner — resuming across the elicitation fix', () => {
+  function seedMixedRun(db: Db, scaleType: string): string {
+    db.prepare('INSERT INTO questionnaires (id, name) VALUES (?,?)').run('q', 'Q')
+    db.prepare(
+      'INSERT INTO questions (id, questionnaire_id, ord, text, scale_type, options_json) VALUES (?,?,0,?,?,?)'
+    ).run('qq', 'q', 'Q?', scaleType, JSON.stringify(['a', 'b']))
+    db.prepare('INSERT INTO personas (id, name, demographics_json) VALUES (?,?,?)').run('p', 'P', '{}')
+    db.prepare("INSERT INTO runs (id, questionnaire_id, name, status, config_json) VALUES (?,?,?,'paused',?)").run(
+      'run', 'q', 'R', JSON.stringify({ model: 'm', temperature: 1, seeds: [0] })
+    )
+    db.prepare('INSERT INTO run_personas (run_id, persona_id) VALUES (?,?)').run('run', 'p')
+    // one legacy cell, recorded before elicitation_mode existed
+    db.prepare(
+      `INSERT INTO responses (id, run_id, persona_id, question_id, model_requested, temperature, seed,
+         permutation_json, prompt_rendered, raw_response, parsed_distribution_json, parsed_answer, is_valid, abstained)
+       VALUES ('legacy','run','p','qq','m',1,0,?,'p','r','{"0":0.6,"1":0.4}','0',1,0)`
+    ).run(JSON.stringify([0, 1]))
+    return 'run'
+  }
+
+  it('re-elicits a multi_choice cell whose only response predates the fix', async () => {
+    const db = createDb(':memory:')
+    seedMixedRun(db, 'multi_choice')
+    await new SurveyRunner(db, new FakeClient(), new BudgetTracker(db, { globalBudget: 1e6, perRunBudget: 1e6 })).execute('run')
+
+    const fresh = db.prepare("SELECT COUNT(*) c FROM responses WHERE run_id='run' AND elicitation_mode='multi_choice'").get() as { c: number }
+    expect(fresh.c).toBe(2) // both rotations re-run, so the permutation stays balanced
+    const legacy = db.prepare("SELECT COUNT(*) c FROM responses WHERE id='legacy'").get() as { c: number }
+    expect(legacy.c).toBe(1) // the append-only log keeps the old row
+  })
+
+  it('does not re-run legacy single_choice cells, where the semantics never changed', async () => {
+    const db = createDb(':memory:')
+    seedMixedRun(db, 'single_choice')
+    await new SurveyRunner(db, new FakeClient(), new BudgetTracker(db, { globalBudget: 1e6, perRunBudget: 1e6 })).execute('run')
+
+    const total = db.prepare("SELECT COUNT(*) c FROM responses WHERE run_id='run'").get() as { c: number }
+    expect(total.c).toBe(2) // 1 legacy kept + 1 newly run rotation
+  })
+})

@@ -32,9 +32,24 @@ narrow hypotheses; conclusions require validation on real human samples.
 
 ### 2.2 Elicitation protocol
 
-- **Style C (distribution) prompts**: the persona returns a JSON probability distribution
-  over options, not a single choice. (Style A single-answer mode kept only as a
-  comparison condition.)
+- **Style C (distribution) prompts**: the persona returns a JSON probability estimate
+  per option, not a single choice. (Style A single-answer mode kept only as a
+  comparison condition.) Two elicitation modes, recorded per response in
+  `responses.elicitation_mode`:
+  - `single_choice` — mutually exclusive options; probabilities must sum to 1 and are
+    normalized to 1 at parse time. Used for every scale type except multi-select.
+  - `multi_choice` — independent options; each carries its own 0..1 selection
+    probability, with **no** sum constraint and **no** normalization. Asking a
+    multi-select question for a sum-to-1 distribution measures something else: it
+    dilutes every option as the option count grows and makes questions incomparable.
+    Options at or above `SELECTION_THRESHOLD = 0.5` count as selected; the recorded
+    answer is the whole selected set, so PC/RS compare selections (mean pairwise
+    Jaccard overlap), not a single top choice.
+  - Values outside 0..1 in multi mode are recorded as **invalid** rather than rescaled,
+    and an output carrying none of the option keys is invalid rather than "selects none".
+  - Responses recorded before this split (mode `NULL`) are excluded from multi-select
+    aggregates, with the excluded count shown in the UI; single-choice legacy rows are
+    unaffected, their semantics did not change.
 - **Per-question memory reset**: each question is sent in a fresh context — no
   conversation history, preventing carryover/priming effects.
 - **Neutral labels**: options labelled A/B/C…; no model names or metadata in prompts.

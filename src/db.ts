@@ -24,6 +24,12 @@ function migrate(db: DatabaseSync): void {
   if (!questionnaireCols.some((c) => c.name === 'project_id')) {
     db.exec('ALTER TABLE questionnaires ADD COLUMN project_id TEXT REFERENCES projects(id)')
   }
+  // Left NULL for existing rows on purpose: their elicitation mode is unknown
+  // (and wrong for multi-select questions), which the UI has to be able to say.
+  const responseCols = db.prepare('PRAGMA table_info(responses)').all() as unknown as { name: string }[]
+  if (!responseCols.some((c) => c.name === 'elicitation_mode')) {
+    db.exec('ALTER TABLE responses ADD COLUMN elicitation_mode TEXT')
+  }
 }
 
 const SCHEMA = `
@@ -97,6 +103,10 @@ CREATE TABLE IF NOT EXISTS responses (
   raw_response TEXT NOT NULL,
   parsed_distribution_json TEXT,
   parsed_answer TEXT,
+  -- single_choice: distribution summing to 1; multi_choice: independent 0..1
+  -- probabilities. NULL marks pre-v0.6 rows, where multi-select questions were
+  -- elicited (and normalized) as if their options were mutually exclusive.
+  elicitation_mode TEXT,
   is_valid INTEGER NOT NULL DEFAULT 1,
   abstained INTEGER NOT NULL DEFAULT 0,
   prompt_tokens INTEGER,

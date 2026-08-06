@@ -1,10 +1,21 @@
 import type { Db } from '../db.js'
+import { elicitationModeFor, type ElicitationMode } from './parse.js'
 
 export interface QuestionResult {
   questionId: string
   text: string
   options: string[]
   scaleType: string
+  /** How this question was asked; multi_choice options are independent, not a distribution. */
+  elicitationMode: ElicitationMode
+  /**
+   * Responses recorded before the multi_choice elicitation fix: their values were
+   * normalized as if the options were mutually exclusive, so they are excluded
+   * from the aggregate — but never silently: the count is reported.
+   */
+  legacyElicitationCount: number
+  /** Responses actually behind `aggregated` (valid, non-abstained, matching mode). */
+  aggregatedResponseCount: number
   totalResponses: number
   invalidCount: number
   abstainCount: number
@@ -27,6 +38,7 @@ export interface RunResults {
 
 interface ResponseRow {
   question_id: string
+  elicitation_mode: string | null
   persona_id: string
   persona_name: string
   permutation_json: string
@@ -54,15 +66,23 @@ export function computeRunResults(db: Db, runId: string): RunResults {
   const responses = db
     .prepare(
       `SELECT res.question_id, res.persona_id, p.name AS persona_name, res.permutation_json,
-              res.seed, res.parsed_distribution_json, res.parsed_answer, res.is_valid, res.abstained
+              res.seed, res.parsed_distribution_json, res.parsed_answer, res.is_valid, res.abstained,
+              res.elicitation_mode
        FROM responses res JOIN personas p ON p.id = res.persona_id WHERE res.run_id = ?`
     )
     .all(runId) as unknown as ResponseRow[]
 
   const results = questions.map((q) => {
     const options = JSON.parse(q.options_json) as string[]
+    const mode = elicitationModeFor(q.scale_type)
     const rows = responses.filter((r) => r.question_id === q.id)
-    const valid = rows.filter((r) => r.is_valid === 1 && r.abstained === 0 && r.parsed_distribution_json)
+    const parsable = rows.filter((r) => r.is_valid === 1 && r.abstained === 0 && r.parsed_distribution_json)
+    // A normalized answer to a multi-select question measures something else
+    // entirely, so it cannot be averaged together with independent probabilities.
+    const usable =
+      mode === 'multi_choice' ? parsable.filter((r) => r.elicitation_mode === 'multi_choice') : parsable
+    const legacyElicitationCount = parsable.length - usable.length
+    const valid = usable
 
     const aggregated = meanDistribution(valid, options.length)
     const byPersona: QuestionResult['byPersona'] = {}
@@ -82,13 +102,16 @@ export function computeRunResults(db: Db, runId: string): RunResults {
       text: q.text,
       options,
       scaleType: q.scale_type,
+      elicitationMode: mode,
+      legacyElicitationCount,
+      aggregatedResponseCount: valid.length,
       totalResponses: rows.length,
       invalidCount: rows.filter((r) => r.is_valid === 0).length,
       abstainCount: rows.filter((r) => r.abstained === 1).length,
       aggregated,
       byPersona,
-      positionConsistency: consistency(valid, (r) => `${r.persona_id}|${r.seed}`),
-      repetitionStability: consistency(valid, (r) => `${r.persona_id}|${r.permutation_json}`)
+      positionConsistency: consistency(valid, (r) => `${r.persona_id}|${r.seed}`, mode),
+      repetitionStability: consistency(valid, (r) => `${r.persona_id}|${r.permutation_json}`, mode)
     }
   })
 
@@ -112,16 +135,54 @@ function meanDistribution(rows: ResponseRow[], optionCount: number): number[] {
   return n === 0 ? sums : sums.map((s) => s / n)
 }
 
-/** Share of groups whose parsed_answer (top choice) is identical across all group members. */
-function consistency(rows: ResponseRow[], keyFn: (r: ResponseRow) => string): number | null {
-  const groups = new Map<string, Set<string>>()
+/**
+ * Agreement of the recorded answers within each group.
+ *
+ * single_choice: the share of groups whose chosen option is identical — the
+ * answer is one option, so agreement is all-or-nothing.
+ *
+ * multi_choice: the mean pairwise Jaccard overlap of the selected sets. Exact set
+ * equality would be a knife-edge test (one option crossing the 0.5 selection
+ * threshold would score the whole group as inconsistent), which would make every
+ * multi-select question look unreliable for an artefact of rounding.
+ */
+function consistency(
+  rows: ResponseRow[],
+  keyFn: (r: ResponseRow) => string,
+  mode: ElicitationMode
+): number | null {
+  const groups = new Map<string, string[]>()
   for (const row of rows) {
     if (row.parsed_answer === null) continue
     const key = keyFn(row)
-    if (!groups.has(key)) groups.set(key, new Set())
-    groups.get(key)!.add(row.parsed_answer)
+    if (!groups.has(key)) groups.set(key, [])
+    groups.get(key)!.push(row.parsed_answer)
   }
-  const multi = [...groups.values()].filter((s) => s.size >= 1)
-  if (multi.length === 0) return null
-  return multi.filter((s) => s.size === 1).length / multi.length
+  const answerGroups = [...groups.values()]
+  if (answerGroups.length === 0) return null
+
+  const scores = answerGroups.map((answers) =>
+    mode === 'multi_choice' ? meanPairwiseJaccard(answers) : (new Set(answers).size === 1 ? 1 : 0)
+  )
+  return scores.reduce((a, b) => a + b, 0) / scores.length
+}
+
+/** 1 when every member selected the same set; 0 when no two members overlap at all. */
+function meanPairwiseJaccard(answers: string[]): number {
+  if (answers.length < 2) return 1
+  const sets = answers.map((a) => new Set(a === '' ? [] : a.split(',')))
+  let sum = 0
+  let pairs = 0
+  for (let i = 0; i < sets.length; i++) {
+    for (let j = i + 1; j < sets.length; j++) {
+      const a = sets[i]!
+      const b = sets[j]!
+      const intersection = [...a].filter((x) => b.has(x)).length
+      const union = new Set([...a, ...b]).size
+      // two empty selections agree completely
+      sum += union === 0 ? 1 : intersection / union
+      pairs++
+    }
+  }
+  return sum / pairs
 }

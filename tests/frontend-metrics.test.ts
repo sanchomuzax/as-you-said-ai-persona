@@ -2,6 +2,8 @@ import { describe, it, expect } from 'vitest'
 import { loadPublicScript } from './helpers/load-public-script.js'
 
 interface QuestionLike {
+  elicitationMode?: string
+  legacyElicitationCount?: number
   positionConsistency?: number | null
   repetitionStability?: number | null
   abstainCount?: number
@@ -17,13 +19,14 @@ const api = loadPublicScript<{
   statusTooltip: (s: string) => string
   renderMetricChips: (q: QuestionLike) => string
   runStatChips: (s: Record<string, number>) => string
+  renderLegacyOnlyNotice: (q: { legacyElicitationCount?: number; aggregatedResponseCount?: number }) => string
   TOOLTIPS: Record<string, string>
 }>(
   ['format.js', 'metrics.js'],
-  '{ escapeHtml, formatNumber, formatMetric, formatDateTime, statusLabel, statusTooltip, renderMetricChips, runStatChips, TOOLTIPS }'
+  '{ escapeHtml, formatNumber, formatMetric, formatDateTime, statusLabel, statusTooltip, renderMetricChips, runStatChips, renderLegacyOnlyNotice, TOOLTIPS }'
 )
 
-const { escapeHtml, formatNumber, formatMetric, formatDateTime, statusLabel, statusTooltip, renderMetricChips, runStatChips, TOOLTIPS } = api
+const { escapeHtml, formatNumber, formatMetric, formatDateTime, statusLabel, statusTooltip, renderMetricChips, runStatChips, renderLegacyOnlyNotice, TOOLTIPS } = api
 
 describe('escapeHtml', () => {
   it('escapes every character that could break out of text or attribute context', () => {
@@ -136,5 +139,36 @@ describe('renderMetricChips', () => {
       /title="[^"]*"[^ =>]/
     )
     expect(renderMetricChips({ abstainCount: 1 })).not.toMatch(/title="[^"]*"[^ =>]/)
+  })
+})
+
+describe('renderMetricChips — elicitation mode', () => {
+  it('marks a multi-choice question so its numbers are not read as a distribution', () => {
+    const html = renderMetricChips({ elicitationMode: 'multi_choice' } as QuestionLike)
+    expect(html).toContain('Többválaszos')
+    expect(html).toContain(escapeHtml(TOOLTIPS.multiChoice))
+  })
+
+  it('says nothing extra for an ordinary single-choice question', () => {
+    expect(renderMetricChips({ elicitationMode: 'single_choice' } as QuestionLike)).not.toContain('Többválaszos')
+  })
+
+  it('warns loudly when responses were dropped because of the old elicitation', () => {
+    const html = renderMetricChips({ elicitationMode: 'multi_choice', legacyElicitationCount: 12 } as QuestionLike)
+    expect(html).toContain('12 válasz kihagyva')
+    expect(html).toContain(escapeHtml(TOOLTIPS.legacyElicitation))
+  })
+})
+
+describe('renderLegacyOnlyNotice', () => {
+  it('replaces an empty aggregate with an explanation when only legacy responses exist', () => {
+    const html = renderLegacyOnlyNotice({ legacyElicitationCount: 336, aggregatedResponseCount: 0 })
+    expect(html).toContain('336')
+    expect(html).toContain('újra kell futtatni')
+  })
+
+  it('stays out of the way when there is something to aggregate', () => {
+    expect(renderLegacyOnlyNotice({ legacyElicitationCount: 336, aggregatedResponseCount: 12 })).toBe('')
+    expect(renderLegacyOnlyNotice({ legacyElicitationCount: 0, aggregatedResponseCount: 0 })).toBe('')
   })
 })

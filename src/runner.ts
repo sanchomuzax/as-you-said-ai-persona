@@ -5,7 +5,7 @@ import type { ChatClient } from './openrouter.js'
 import { BudgetTracker } from './lib/budget.js'
 import { balancedRotations } from './lib/permutation.js'
 import { buildStyleCPrompt, type PersonaInput } from './lib/prompt.js'
-import { parseDistribution } from './lib/parse.js'
+import { parseDistribution, elicitationModeFor } from './lib/parse.js'
 
 export interface RunConfig {
   model: string
@@ -46,6 +46,7 @@ interface QuestionRow {
   id: string
   text: string
   options_json: string
+  scale_type: string
 }
 
 /**
@@ -76,13 +77,34 @@ export class SurveyRunner {
       .prepare('SELECT * FROM questions WHERE questionnaire_id = ? ORDER BY ord')
       .all(run.questionnaire_id) as unknown as QuestionRow[]
 
-    // Resume support: skip cells that already have a recorded response.
+    // Resume support: skip cells that already have a response recorded under the
+    // elicitation mode we would use today. A multi-select cell answered before the
+    // mode split measured something else, so it does NOT count as done — leaving it
+    // would freeze a question at numbers that can never be aggregated. Legacy
+    // single-choice rows (mode NULL) are equivalent to today's output and are kept.
+    const modeByQuestion = new Map(questions.map((q) => [q.id, elicitationModeFor(q.scale_type)]))
+    const recorded = this.db
+      .prepare('SELECT question_id, persona_id, permutation_json, seed, elicitation_mode FROM responses WHERE run_id = ?')
+      .all(runId) as unknown as {
+      question_id: string
+      persona_id: string
+      permutation_json: string
+      seed: number
+      elicitation_mode: string | null
+    }[]
     const doneCells = new Set(
-      (this.db
-        .prepare('SELECT question_id, persona_id, permutation_json, seed FROM responses WHERE run_id = ?')
-        .all(runId) as unknown as { question_id: string; persona_id: string; permutation_json: string; seed: number }[]
-      ).map((r) => cellKey(r.question_id, r.persona_id, r.permutation_json, r.seed))
+      recorded
+        .filter((r) => {
+          const current = modeByQuestion.get(r.question_id)
+          if (current === undefined) return true
+          return r.elicitation_mode === null ? current === 'single_choice' : r.elicitation_mode === current
+        })
+        .map((r) => cellKey(r.question_id, r.persona_id, r.permutation_json, r.seed))
     )
+    const staleCells = recorded.length - doneCells.size
+    if (staleCells > 0) {
+      runEvents.emit('status', { runId, staleCellsReelicited: staleCells })
+    }
 
     controls.delete(runId)
     this.setStatus(runId, 'running')
@@ -128,12 +150,13 @@ export class SurveyRunner {
     rotation: number[],
     seed: number
   ): Promise<void> {
-    const { prompt, keyMap, keys } = buildStyleCPrompt(persona, { text: question.text, options }, rotation)
+    const mode = elicitationModeFor(question.scale_type)
+    const { prompt, keyMap, keys } = buildStyleCPrompt(persona, { text: question.text, options }, rotation, mode)
     const result = await this.client.complete(config.model, prompt, {
       temperature: config.temperature,
       seed
     })
-    const parsed = parseDistribution(result.content, keys)
+    const parsed = parseDistribution(result.content, keys, mode)
 
     // De-permute: map letter-keyed distribution back to original option indexes
     const byOption = parsed.distribution
@@ -141,22 +164,36 @@ export class SurveyRunner {
           Object.entries(parsed.distribution).map(([k, v]) => [String(keyMap[k] ?? k), v])
         )
       : null
+    // Single choice: the chosen option index. Multi choice: the whole selected
+    // set, so the stability metrics compare selections, not just the strongest one.
+    const toOptionIndex = (key: string): string => {
+      const index = keyMap[key]
+      if (index === undefined) throw new Error(`Unknown option key from parser: ${key}`)
+      return String(index)
+    }
     const parsedAnswer =
-      parsed.topChoice !== null ? String(keyMap[parsed.topChoice] ?? parsed.topChoice) : null
+      parsed.selectedKeys !== null
+        ? parsed.selectedKeys
+            .map(toOptionIndex)
+            .sort((a, b) => Number(a) - Number(b))
+            .join(',')
+        : parsed.topChoice !== null
+          ? toOptionIndex(parsed.topChoice)
+          : null
 
     this.db
       .prepare(
         `INSERT INTO responses (
           id, run_id, persona_id, question_id, model_requested, model_version,
-          temperature, seed, prompt_style, permutation_json, label_style,
+          temperature, seed, prompt_style, elicitation_mode, permutation_json, label_style,
           prompt_rendered, raw_response, parsed_distribution_json, parsed_answer,
           is_valid, abstained, prompt_tokens, completion_tokens, cost_usd,
           latency_ms, openrouter_request_id
-        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
       )
       .run(
         randomUUID(), runId, personaId, question.id, config.model, result.modelVersion,
-        config.temperature, seed, 'style_c', JSON.stringify(rotation), 'letters',
+        config.temperature, seed, 'style_c', mode, JSON.stringify(rotation), 'letters',
         prompt, result.content, byOption ? JSON.stringify(byOption) : null, parsedAnswer,
         parsed.isValid ? 1 : 0, parsed.abstained ? 1 : 0,
         result.promptTokens, result.completionTokens, result.costUsd,

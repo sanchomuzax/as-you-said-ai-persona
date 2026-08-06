@@ -33,6 +33,10 @@ recorded with full experimental metadata so runs are reproducible and auditable.
   model parameters, raw output and token usage.
 - **Bias mitigation built in**: balanced permutation of answer options, Style C
   (distribution) elicitation, per-question memory reset, neutral option labels.
+- **Two elicitation modes**: single-choice questions get a distribution summing to 1;
+  multi-select questions get independent per-option probabilities (asking a
+  multi-select question for a sum-to-1 distribution measures the wrong thing).
+  The mode used is recorded on every response.
 - **Token budget tracking** per run / per persona / global, with hard stops.
 - **Simple auth** (env-based credentials for the single-researcher phase).
 

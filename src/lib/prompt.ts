@@ -1,4 +1,5 @@
 import { applyPermutation, labelFor } from './permutation.js'
+import type { ElicitationMode } from './parse.js'
 
 export interface PersonaInput {
   name: string
@@ -42,7 +43,8 @@ export interface BuiltPrompt {
 export function buildStyleCPrompt(
   persona: PersonaInput,
   question: QuestionInput,
-  rotation: readonly number[]
+  rotation: readonly number[],
+  mode: ElicitationMode = 'single_choice'
 ): BuiltPrompt {
   const permuted = applyPermutation(question.options, rotation)
   const keys = permuted.map((_, i) => labelFor(i))
@@ -53,10 +55,17 @@ export function buildStyleCPrompt(
   }))
   const optionLines = permuted.map((opt, i) => `${keys[i]}: ${opt}`).join('\n')
 
+  // The task statement differs by mode: asking for a sum-to-1 distribution on a
+  // multi-select question is the wrong task — there the options are independent.
+  const task =
+    mode === 'multi_choice'
+      ? 'This question allows multiple answers. For each option independently, estimate the probability between 0 and 1 that this respondent would select it. The options are independent: the probabilities do NOT have to sum to any particular value, and several options may be high at once.'
+      : 'Estimate the probability that this respondent would choose each answer option for the question below. Probabilities must sum to 1.'
+
   const prompt = `Consider a survey respondent with the following profile:
 ${renderPersona(persona)}
 
-Estimate the probability that this respondent would choose each answer option for the question below. Probabilities must sum to 1.
+${task}
 
 Question: ${question.text}
 

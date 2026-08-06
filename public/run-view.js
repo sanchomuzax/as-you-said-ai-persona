@@ -111,20 +111,26 @@ async function loadSubtab(name) {
 function renderOptionBars(question) {
   const options = question.options || [];
   const aggregated = question.aggregated || [];
+  const multi = question.elicitationMode === 'multi_choice';
   const total = aggregated.reduce((a, b) => a + b, 0);
   const max = Math.max(1, ...aggregated);
+  // Multi-select values are independent supports, so they must NOT be shown as
+  // a share of a 100% total — that is exactly the reading the fix removes.
+  const rowTooltip = multi ? TOOLTIPS.support : TOOLTIPS.distribution;
 
   return options.map((opt, i) => {
     const value = aggregated[i] || 0;
     const barPct = (value / max) * 100;
-    const sharePct = total > 0 ? Math.round((value / total) * 100) : 0;
+    const pct = multi
+      ? Math.round(value * 100)
+      : (total > 0 ? Math.round((value / total) * 100) : 0);
     return `
-      <div class="option-bar-row" title="${escapeHtml(TOOLTIPS.distribution)}">
+      <div class="option-bar-row" title="${escapeHtml(rowTooltip)}">
         <span class="option-bar-label">${escapeHtml(opt)}</span>
         <div class="option-bar-track">
-          <div class="option-bar-fill" style="width: ${barPct}%"></div>
+          <div class="option-bar-fill${multi ? ' option-bar-fill-support' : ''}" style="width: ${barPct}%"></div>
         </div>
-        <span class="option-bar-pct">${sharePct}% (${formatNumber(value)})</span>
+        <span class="option-bar-pct">${pct}%${multi ? ' támogatottság' : ''} (${formatMetric(value)})</span>
       </div>
     `;
   }).join('');
@@ -135,19 +141,24 @@ function renderPersonaBreakdown(question) {
   const entries = Object.entries(byPersona);
   if (entries.length === 0) return '<p class="placeholder-inline">Nincs perszóna szintű adat.</p>';
 
+  const multi = question.elicitationMode === 'multi_choice';
   const rows = entries.map(([personaId, info]) => {
     const dist = info.distribution || [];
     const total = dist.reduce((a, b) => a + b, 0);
     let topIdx = -1;
-    let topVal = -1;
+    let topVal = 0;
     dist.forEach((v, i) => { if (v > topVal) { topVal = v; topIdx = i; } });
-    const topOption = topIdx >= 0 && question.options ? question.options[topIdx] : '—';
-    const topPct = total > 0 && topVal >= 0 ? Math.round((topVal / total) * 100) : 0;
+    // An all-zero distribution means nothing was measured for this persona — naming
+    // a "top answer" there would assert a result that was never observed.
+    const measured = topIdx >= 0;
+    const topOption = measured ? question.options[topIdx] : 'nincs értékelhető válasz';
+    // Multi-select: the top option's own support, not its share of a 100% total.
+    const topPct = !measured ? '—' : (multi ? Math.round(topVal * 100) : Math.round((topVal / total) * 100));
     return `
       <tr>
         <td>${escapeHtml(info.name || personaId)}</td>
         <td>${escapeHtml(topOption || '—')}</td>
-        <td class="numeric">${topPct}%</td>
+        <td class="numeric">${topPct === '—' ? '—' : topPct + '%'}</td>
         <td class="numeric">${formatNumber(info.abstainCount || 0)}</td>
       </tr>
     `;
@@ -159,7 +170,7 @@ function renderPersonaBreakdown(question) {
         <tr>
           <th>Perszóna</th>
           <th title="${escapeHtml(TOOLTIPS.topAnswer)}">Top válasz</th>
-          <th class="numeric" title="${escapeHtml(TOOLTIPS.distribution)}">%</th>
+          <th class="numeric" title="${escapeHtml(multi ? TOOLTIPS.support : TOOLTIPS.distribution)}">%</th>
           <th class="numeric" title="${escapeHtml(TOOLTIPS.abstain)}">Tartózkodás</th>
         </tr>
       </thead>
@@ -195,7 +206,7 @@ async function loadOverviewTab(runId) {
           <div class="metric-chips">${renderMetricChips(q)}</div>
         </div>
         <div class="option-bars">
-          ${renderOptionBars(q)}
+          ${renderLegacyOnlyNotice(q) || renderOptionBars(q)}
         </div>
         <details class="persona-breakdown-wrap">
           <summary>Perszóna szintű bontás</summary>
@@ -206,6 +217,17 @@ async function loadOverviewTab(runId) {
   } catch (err) {
     container.innerHTML = `<p class="error-message">Eredmények betöltése sikertelen: ${escapeHtml(err.message)}</p>`;
   }
+}
+
+/** Stored answers are option indexes; show what the respondent actually picked. */
+function answerText(response) {
+  let options = [];
+  try {
+    options = JSON.parse(response.options_json || '[]');
+  } catch {
+    options = [];
+  }
+  return answerLabel(response.parsed_answer, options, response.elicitation_mode === 'multi_choice');
 }
 
 async function loadResponsesTab(runId) {
@@ -226,14 +248,14 @@ async function loadResponsesTab(runId) {
       const validClass = r.abstained ? 'abstained-flag' : (r.is_valid ? 'valid-flag' : 'invalid-flag');
       const validText = r.abstained ? '—' : (r.is_valid ? '✓' : '✗');
       const validTitle = r.abstained ? TOOLTIPS.abstain : (r.is_valid ? TOOLTIPS.validFlag : TOOLTIPS.invalid);
-      const dist = renderDistribution(r.parsed_distribution_json);
+      const dist = renderDistribution(r.parsed_distribution_json, r.elicitation_mode === 'multi_choice');
       const distHtml = typeof dist === 'string' ? dist : dist.outerHTML;
 
       return `
         <tr>
           <td>${escapeHtml(r.persona_name)}</td>
           <td>${escapeHtml(r.question_text)}</td>
-          <td>${escapeHtml(r.parsed_answer || '—')}</td>
+          <td>${escapeHtml(answerText(r))}</td>
           <td>${distHtml}</td>
           <td><span class="${validClass}" title="${escapeHtml(validTitle)}">${validText}</span></td>
           <td>${escapeHtml(r.seed != null ? String(r.seed) : '—')}</td>

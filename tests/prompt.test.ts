@@ -49,3 +49,32 @@ describe('buildStyleCPrompt', () => {
     expect(prompt).not.toMatch(/deepseek|claude|gpt|llama|openrouter/i)
   })
 })
+
+describe('buildStyleCPrompt — multi_choice elicitation', () => {
+  it('does not ask for probabilities that sum to 1', () => {
+    const { prompt } = buildStyleCPrompt(persona, question, [0, 1, 2], 'multi_choice')
+    expect(prompt).not.toMatch(/sum to 1/i)
+  })
+
+  it('asks for an independent probability per option', () => {
+    const { prompt } = buildStyleCPrompt(persona, question, [0, 1, 2], 'multi_choice')
+    expect(prompt).toMatch(/independent/i)
+    expect(prompt).toMatch(/select|choose/i)
+    expect(prompt).toMatch(/between 0 and 1/i)
+    expect(prompt).toMatch(/abstain/i)
+  })
+
+  it('keeps the single-choice prompt constrained to a distribution', () => {
+    const { prompt } = buildStyleCPrompt(persona, question, [0, 1, 2], 'single_choice')
+    expect(prompt).toMatch(/sum to 1/i)
+  })
+
+  it('defaults to single-choice elicitation', () => {
+    expect(buildStyleCPrompt(persona, question, [0, 1, 2]).prompt).toMatch(/sum to 1/i)
+  })
+
+  it('uses the same neutral labels and permutation in both modes', () => {
+    const { keyMap } = buildStyleCPrompt(persona, question, [2, 0, 1], 'multi_choice')
+    expect(keyMap).toEqual({ A: 2, B: 0, C: 1 })
+  })
+})

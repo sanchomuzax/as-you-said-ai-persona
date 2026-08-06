@@ -73,24 +73,32 @@ function parseQuestions(text) {
   return questions;
 }
 
-function renderDistribution(parsed_json) {
+/**
+ * One response's values. Single choice is a distribution, so each option is shown
+ * as its share; multi choice values are independent probabilities and are shown
+ * as-is — dividing them by their sum would recreate exactly the bug this fixes.
+ */
+function renderDistribution(parsed_json, isMultiChoice) {
   if (!parsed_json) return '—';
   try {
     const data = typeof parsed_json === 'string' ? JSON.parse(parsed_json) : parsed_json;
     if (!data || typeof data !== 'object') return '—';
 
-    const total = Object.values(data).reduce((a, b) => a + b, 0);
-    if (total === 0) return '—';
+    const entries = Object.entries(data);
+    if (entries.length === 0) return '—';
+    const total = entries.reduce((sum, [, v]) => sum + v, 0);
+    if (!isMultiChoice && total === 0) return '—';
+    if (isMultiChoice && total === 0) return 'egyik sem';
 
     const div = document.createElement('div');
     div.className = 'distribution-bar';
 
-    Object.entries(data).forEach(([key, count]) => {
-      const pct = Math.round((count / total) * 100);
+    entries.forEach(([key, value]) => {
+      const pct = Math.round((isMultiChoice ? value : value / total) * 100);
       const seg = document.createElement('div');
-      seg.className = 'distribution-segment';
+      seg.className = 'distribution-segment' + (isMultiChoice ? ' distribution-segment-support' : '');
       seg.textContent = pct + '%';
-      seg.title = key + ': ' + count;
+      seg.title = key + ': ' + value;
       seg.style.width = Math.max(pct * 2, 20) + 'px';
       div.appendChild(seg);
     });

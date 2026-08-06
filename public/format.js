@@ -45,3 +45,21 @@ function formatDateTime(value) {
   const date = new Date(normalized);
   return Number.isNaN(date.getTime()) ? text : date.toLocaleString('hu-HU');
 }
+
+/**
+ * Turns a stored answer into readable option text. Answers are stored as
+ * original option indexes ("2"), and for multi-select as the whole selected set
+ * ("0,2"); an empty string means the respondent would select none of them.
+ */
+function answerLabel(parsedAnswer, options, isMultiChoice) {
+  if (parsedAnswer === null || parsedAnswer === undefined) return '—';
+  const text = String(parsedAnswer);
+  if (text === '') return isMultiChoice ? 'egyik sem' : '—';
+
+  const list = Array.isArray(options) ? options : [];
+  const labels = text.split(',').map(part => {
+    const index = Number(part);
+    return Number.isInteger(index) && list[index] !== undefined ? list[index] : part;
+  });
+  return labels.join(' + ');
+}

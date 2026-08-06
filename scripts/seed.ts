@@ -39,7 +39,9 @@ const seedSchema = z.object({
             z.object({
               text: z.string().min(1),
               options: z.array(z.string().min(1)).min(2).max(26),
-              scaleType: z.string().default('categorical'),
+              // A typo here would silently revert a multi-select question to sum-to-1
+          // elicitation, so the value is constrained rather than free text.
+          scaleType: z.enum(['single_choice', 'multi_choice', 'frequency', 'ordinal', 'categorical']).default('categorical'),
               scaleDirection: z.enum(['ascending', 'descending']).default('ascending')
             })
           )
