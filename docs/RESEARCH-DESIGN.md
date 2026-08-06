@@ -74,25 +74,44 @@ Generalizability — every run's config export must cover these six pillars.
 
 ### 3.2 Data model (append-only, reproducible)
 
+Grounded in the literature (PersonaCite provenance cards, DeepPersona, the
+"When Synthetic Users Fail" benchmark protocol):
+
 ```
-personas(id, name, version, anchor_core_json, attributes_json, grounding_source,
-         created_at)                     -- immutable snapshots; edits create new version
+projects(id, name, application_domain, target_population, created_at)
+personas(id, project_id, name, version, anchor_core_json, attributes_json,
+         rendering_style,                -- bulleted_profile | natural_language_sentence
+                                         -- (rendering alone flips ~9% of predictions!)
+         provenance_json,                -- VoC sources, temporal range, item counts
+         biography, created_at)          -- immutable snapshots; edits create new version
 questionnaires(id, name, version, created_at)
-questions(id, questionnaire_id, ord, text, type, options_json, scale_direction)
+questions(id, questionnaire_id, ord, text, scale_type, options_json, scale_direction)
 runs(id, questionnaire_id, name, status, config_json, token_budget, created_at)
      -- config_json: models, temperature, elicitation style, permutation plan, seeds,
      --              transparency-checklist fields
 run_personas(run_id, persona_id)
-responses(id, run_id, persona_id, question_id, model, permutation_json,
-          prompt_rendered, request_params_json,          -- temperature, max_tokens, seed
-          raw_response, parsed_distribution_json, abstained,
+responses(id, run_id, persona_id, question_id,
+          model_requested, model_version,   -- model PINNING: exact version returned
+                                            -- by the API, not just the alias
+          temperature, top_p, seed,         -- seed mandatory: run-to-run stability
+          prompt_style,                     -- style_a | style_c
+          permutation_json, label_style,    -- exact option order + letters|numbers
+          prompt_rendered,                  -- the exact final prompt sent
+          raw_response, parsed_distribution_json, parsed_answer, rationale,
+          is_valid, abstained,              -- invalid/refused rows are KEPT, flagged
           prompt_tokens, completion_tokens, cost_usd, latency_ms,
-          openrouter_request_id, created_at)             -- append-only, never updated
+          openrouter_request_id, created_at)   -- append-only, never updated
 token_ledger(id, run_id, ts, prompt_tokens, completion_tokens, cost_usd)
 ```
 
 Every response row stores the **exact rendered prompt**, the permutation used, all model
 parameters and the raw model output — enough to re-run or audit any single call.
+Invalid/refused outputs are never dropped: small models can produce up to 85% invalid
+Style C output on long scales, and invalids are rarely missing-at-random.
+
+Metrics computable directly from this schema: **Repetition Stability** (same seed/settings
+→ same answer?), **Position Consistency** (does the answer survive option reordering?),
+**Stereotyping Index** (demographic over-determination vs. real human variance).
 
 ### 3.3 Token budget enforcement
 
