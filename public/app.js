@@ -13,17 +13,8 @@ let state = {
   currentRunDetailData: null,
   eventSource: null,
   progressPollTimer: null,
-  activeTab: 'projects'
-};
-
-const STATUS_LABELS = {
-  pending: 'Függőben',
-  running: 'Fut',
-  paused: 'Szüneteltetve',
-  completed: 'Kész',
-  budget_exhausted: 'Keret elfogyott',
-  stopped: 'Leállítva',
-  failed: 'Hiba'
+  activeTab: 'projects',
+  currentEntity: null
 };
 
 // API wrapper
@@ -110,41 +101,13 @@ function renderDistribution(parsed_json) {
   }
 }
 
-function escapeHtml(text) {
-  if (text === null || text === undefined) return '';
-  const div = document.createElement('div');
-  div.textContent = text;
-  return div.innerHTML;
+// ----- Hash routing (route table lives in routing.js) -----
+function currentRoute() {
+  return parseHash(location.hash);
 }
 
-function formatNumber(n) {
-  if (n === null || n === undefined || Number.isNaN(n)) return '0';
-  return Number(n).toLocaleString('hu-HU');
-}
-
-function formatCost(n) {
-  if (n === null || n === undefined || Number.isNaN(n)) return '0.0000';
-  return Number(n).toFixed(4);
-}
-
-function formatMetric(n) {
-  if (n === null || n === undefined || Number.isNaN(n)) return '—';
-  return Number(n).toFixed(2);
-}
-
-// ----- Hash routing -----
-function parseHash() {
-  const hash = (location.hash || '').replace(/^#/, '');
-  if (!hash) return { tab: 'projects', runId: null };
-  const runMatch = hash.match(/^runs\/(.+)$/);
-  if (runMatch) return { tab: 'runs', runId: runMatch[1] };
-  const validTabs = ['projects', 'personas', 'questionnaires', 'runs'];
-  if (validTabs.includes(hash)) return { tab: hash, runId: null };
-  return { tab: 'projects', runId: null };
-}
-
-function setHash(tab, runId) {
-  const newHash = runId ? '#runs/' + runId : '#' + tab;
+function setHash(tab, detailId) {
+  const newHash = buildHash(tab, detailId);
   if (location.hash !== newHash) {
     history.replaceState(null, '', newHash);
   }
@@ -152,7 +115,7 @@ function setHash(tab, runId) {
 
 window.addEventListener('hashchange', () => {
   if (!state.authenticated) return;
-  applyRoute(parseHash());
+  applyRoute(currentRoute());
 });
 
 async function applyRoute(route) {
@@ -160,8 +123,13 @@ async function applyRoute(route) {
     state.activeTab = 'runs';
     setActiveTab('runs');
     await openRunDetail(route.runId, false);
+  } else if (route.entityId) {
+    state.activeTab = route.tab;
+    setActiveTab(route.tab);
+    await openEntityDetail(route.tab, route.entityId, false);
   } else {
     closeRunDetail(false);
+    closeEntityDetail(false);
     state.activeTab = route.tab;
     setActiveTab(route.tab);
     setHash(route.tab, null);
@@ -183,6 +151,7 @@ function showAppScreen() {
 
 function setActiveTab(tabName) {
   document.getElementById('runDetailView').style.display = 'none';
+  document.getElementById('entityDetailView').style.display = 'none';
   document.querySelector('.tab-content').style.display = 'block';
   document.querySelectorAll('.tab-pane').forEach(p => p.classList.remove('active'));
   document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
@@ -201,18 +170,9 @@ function renderProjectsList() {
 
   container.innerHTML = state.projects.map(p => {
     const metaParts = [];
-    if (p.applicationDomain) metaParts.push(escapeHtml(p.applicationDomain));
-    if (p.targetPopulation) metaParts.push(escapeHtml(p.targetPopulation));
-    const metaStr = metaParts.join(' | ');
-
-    return `
-      <div class="list-item">
-        <div>
-          <div class="list-item-title">${escapeHtml(p.name)}</div>
-          ${metaStr ? `<div class="list-item-meta">${metaStr}</div>` : ''}
-        </div>
-      </div>
-    `;
+    if (p.applicationDomain) metaParts.push(p.applicationDomain);
+    if (p.targetPopulation) metaParts.push(p.targetPopulation);
+    return entityListItem('projects', p.id, p.name, metaParts.join(' | '));
   }).join('');
 }
 
@@ -228,7 +188,7 @@ function updateProjectDropdowns() {
     const currentValue = select.value;
     select.innerHTML = '<option value="">-- Válassz projektet --</option>';
     select.innerHTML += state.projects.map(p =>
-      `<option value="${p.id}">${escapeHtml(p.name)}</option>`
+      `<option value="${escapeHtml(p.id)}">${escapeHtml(p.name)}</option>`
     ).join('');
     select.value = currentValue;
   });
@@ -269,14 +229,7 @@ function renderPersonasList() {
   container.innerHTML = state.personas.map(p => {
     const demStr = Object.entries(p.demographics || {})
       .map(([k, v]) => k + ': ' + v).join(', ');
-    return `
-      <div class="list-item">
-        <div>
-          <div class="list-item-title">${escapeHtml(p.name)}</div>
-          <div class="list-item-meta">${escapeHtml(demStr)}</div>
-        </div>
-      </div>
-    `;
+    return entityListItem('personas', p.id, p.name, demStr);
   }).join('');
 }
 
@@ -292,16 +245,9 @@ function renderQuestionnairesList() {
     let projectLabel = '(globális)';
     if (q.projectId) {
       const project = state.projects.find(p => p.id === q.projectId);
-      projectLabel = project ? escapeHtml(project.name) : '(ismeretlen projekt)';
+      projectLabel = project ? project.name : '(ismeretlen projekt)';
     }
-    return `
-      <div class="list-item">
-        <div>
-          <div class="list-item-title">${escapeHtml(q.name)}</div>
-          <div class="list-item-meta">${qCount} kérdés | ${projectLabel}</div>
-        </div>
-      </div>
-    `;
+    return entityListItem('questionnaires', q.id, q.name, qCount + ' kérdés | ' + projectLabel);
   }).join('');
 
   // Update run form questionnaire select
@@ -309,34 +255,31 @@ function renderQuestionnairesList() {
   const currentValue = select.value;
   select.innerHTML = '<option value="">-- Válassz kérdőívet --</option>';
   select.innerHTML += state.questionnaires.map(q =>
-    `<option value="${q.id}">${escapeHtml(q.name)}</option>`
+    `<option value="${escapeHtml(q.id)}">${escapeHtml(q.name)}</option>`
   ).join('');
   select.value = currentValue;
 }
+
 
 // ----- Run cards / dashboard -----
 function badgeClassForStatus(status) {
   return 'badge badge-' + (status || 'pending');
 }
 
-function statusLabel(status) {
-  return STATUS_LABELS[status] || status || '—';
-}
-
 function runControlButtons(run, context) {
   const status = run.status;
   const buttons = [];
   if (status === 'running') {
-    buttons.push(`<button class="btn btn-secondary btn-sm" data-action="pause" data-run="${run.id}">Szünet</button>`);
+    buttons.push(`<button class="btn btn-secondary btn-sm" data-action="pause" data-run="${escapeHtml(run.id)}">Szünet</button>`);
   }
   if (status === 'paused' || status === 'budget_exhausted' || status === 'failed') {
-    buttons.push(`<button class="btn btn-secondary btn-sm" data-action="resume" data-run="${run.id}">Folytatás</button>`);
+    buttons.push(`<button class="btn btn-secondary btn-sm" data-action="resume" data-run="${escapeHtml(run.id)}">Folytatás</button>`);
   }
   if (status === 'running' || status === 'paused') {
-    buttons.push(`<button class="btn btn-danger btn-sm" data-action="stop" data-run="${run.id}">Leállítás</button>`);
+    buttons.push(`<button class="btn btn-danger btn-sm" data-action="stop" data-run="${escapeHtml(run.id)}">Leállítás</button>`);
   }
   if (context === 'card') {
-    buttons.push(`<button class="btn btn-primary btn-sm" data-action="details" data-run="${run.id}">Részletek</button>`);
+    buttons.push(`<button class="btn btn-primary btn-sm" data-action="details" data-run="${escapeHtml(run.id)}">Részletek</button>`);
   }
   return buttons.join('');
 }
@@ -360,22 +303,18 @@ function renderRunCard(run) {
   const status = progress.status || run.status;
 
   return `
-    <div class="run-card" data-run-card="${run.id}">
+    <div class="run-card" data-run-card="${escapeHtml(run.id)}">
       <div class="run-card-header">
         <div class="run-card-title">${escapeHtml(run.name)}</div>
-        <span class="${badgeClassForStatus(status)}">
+        <span class="${badgeClassForStatus(status)}" title="${escapeHtml(statusTooltip(status))}">
           ${status === 'running' ? '<span class="pulse-dot"></span>' : ''}${escapeHtml(statusLabel(status))}
         </span>
       </div>
-      <div class="progress-bar">
+      <div class="progress-bar" title="${escapeHtml(TOOLTIPS.cells)}">
         <div class="progress-fill" style="width: ${pct}%"></div>
       </div>
       <div class="run-card-stats">
-        <span class="stat-chip">${formatNumber(done)}/${formatNumber(totalCells)} cella</span>
-        <span class="stat-chip ${invPct > 10 ? 'stat-chip-danger' : ''}">Érvénytelen: ${formatNumber(invalid)}</span>
-        <span class="stat-chip">Elutasítva: ${formatNumber(abstained)}</span>
-        <span class="stat-chip">${formatNumber(totalTokens)} token</span>
-        <span class="stat-chip">${formatCost(costUsd)} USD</span>
+        ${runStatChips({ done, totalCells, invalid, abstained, totalTokens, costUsd, invPct })}
       </div>
       <div class="run-card-controls">
         ${runControlButtons(run, 'card')}
@@ -396,10 +335,13 @@ function renderRunsList() {
 
 document.getElementById('runsList')?.addEventListener('click', async (e) => {
   const btn = e.target.closest('button[data-action]');
-  if (!btn) return;
-  const action = btn.dataset.action;
-  const runId = btn.dataset.run;
-  await handleRunAction(action, runId);
+  if (btn) {
+    await handleRunAction(btn.dataset.action, btn.dataset.run);
+    return;
+  }
+  // Clicking anywhere on the card opens it, like every other list in the app.
+  const card = e.target.closest('.run-card[data-run-card]');
+  if (card) await handleRunAction('details', card.dataset.runCard);
 });
 
 document.getElementById('runDetailControls')?.addEventListener('click', async (e) => {
@@ -482,8 +424,8 @@ function renderPersonasCheckboxes() {
 
   container.innerHTML = state.personas.map(p => `
     <div class="checkbox-item">
-      <input type="checkbox" id="persona_${p.id}" value="${p.id}" name="personas">
-      <label for="persona_${p.id}">${escapeHtml(p.name)}</label>
+      <input type="checkbox" id="persona_${escapeHtml(p.id)}" value="${escapeHtml(p.id)}" name="personas">
+      <label for="persona_${escapeHtml(p.id)}">${escapeHtml(p.name)}</label>
     </div>
   `).join('');
 }
@@ -495,10 +437,12 @@ function updateBudgetBar() {
       const limit = data.limits.globalBudget || 1;
       const pct = Math.min((used / limit) * 100, 100);
 
-      document.getElementById('budgetTokens').textContent = used;
-      document.getElementById('budgetLimit').textContent = limit;
-      document.getElementById('budgetCost').textContent = (data.global.costUsd || 0).toFixed(4);
+      document.getElementById('budgetTokens').textContent = formatNumber(used);
+      document.getElementById('budgetLimit').textContent = formatNumber(limit);
+      document.getElementById('budgetCost').textContent = formatCost(data.global.costUsd || 0);
       document.getElementById('budgetProgress').style.width = pct + '%';
+      document.querySelector('.budget-widget').title =
+        TOOLTIPS.budgetBar + ' Jelenleg: ' + formatMetric(pct) + '% (' + formatNumber(used) + ' / ' + formatNumber(limit) + ' token).';
     })
     .catch(() => {
       document.getElementById('budgetTokens').textContent = '—';
@@ -506,321 +450,6 @@ function updateBudgetBar() {
       document.getElementById('budgetCost').textContent = '—';
     });
 }
-
-// ----- Run Detail View -----
-function findRunById(runId) {
-  return state.runs.find(r => r.id === runId);
-}
-
-async function openRunDetail(runId, updateHash) {
-  state.currentRunId = runId;
-  document.querySelector('.tab-content').style.display = 'none';
-  document.getElementById('runDetailView').style.display = 'block';
-  if (updateHash) setHash('runs', runId);
-
-  await refreshRunDetailHeader(runId);
-  await loadSubtab(state.currentSubtab || 'overview');
-}
-
-function closeRunDetail(updateHash) {
-  state.currentRunId = null;
-  document.getElementById('runDetailView').style.display = 'none';
-  document.querySelector('.tab-content').style.display = 'block';
-  if (updateHash) setHash(state.activeTab || 'runs', null);
-}
-
-document.getElementById('runDetailBackBtn')?.addEventListener('click', () => {
-  closeRunDetail(true);
-  setActiveTab('runs');
-  refreshRunsList();
-});
-
-function renderRunDetailHeaderFromCache(runId) {
-  const run = findRunById(runId);
-  if (!run) return;
-  const progress = state.runProgress[runId] || {};
-  renderRunDetailHeader(run, progress);
-}
-
-function renderRunDetailHeader(run, progress) {
-  const status = progress.status || run.status;
-  document.getElementById('runDetailTitle').textContent = run.name || '';
-  const statusEl = document.getElementById('runDetailStatus');
-  statusEl.className = badgeClassForStatus(status);
-  statusEl.innerHTML = (status === 'running' ? '<span class="pulse-dot"></span>' : '') + escapeHtml(statusLabel(status));
-
-  const totalCells = progress.totalCells ?? 0;
-  const done = progress.done ?? 0;
-  const invalid = progress.invalid ?? 0;
-  const abstained = progress.abstained ?? 0;
-  const usage = progress.usage || {};
-  const pct = totalCells > 0 ? Math.min((done / totalCells) * 100, 100) : 0;
-  const invPct = invalidPct(invalid, totalCells);
-
-  document.getElementById('runDetailProgressFill').style.width = pct + '%';
-  document.getElementById('runDetailStats').innerHTML = `
-    <span class="stat-chip">${formatNumber(done)}/${formatNumber(totalCells)} cella</span>
-    <span class="stat-chip ${invPct > 10 ? 'stat-chip-danger' : ''}">Érvénytelen: ${formatNumber(invalid)}</span>
-    <span class="stat-chip">Elutasítva: ${formatNumber(abstained)}</span>
-    <span class="stat-chip">${formatNumber(usage.totalTokens || 0)} token</span>
-    <span class="stat-chip">${formatCost(usage.costUsd || 0)} USD</span>
-    ${progress.avgLatencyMs ? `<span class="stat-chip">${formatNumber(Math.round(progress.avgLatencyMs))} ms/válasz</span>` : ''}
-  `;
-  document.getElementById('runDetailControls').innerHTML = runControlButtons({ id: run.id, status }, 'detail');
-  document.getElementById('runExportLink').href = '/api/runs/' + run.id + '/export.csv';
-}
-
-async function refreshRunDetailHeader(runId) {
-  try {
-    const run = findRunById(runId) || (await apiCall('GET', '/api/runs/' + runId)).run;
-    let progress;
-    try {
-      progress = await apiCall('GET', `/api/runs/${runId}/progress`);
-      state.runProgress[runId] = progress;
-    } catch {
-      progress = state.runProgress[runId] || {};
-    }
-    renderRunDetailHeader(run, progress);
-  } catch (err) {
-    // ignore transient errors
-  }
-}
-
-document.querySelectorAll('.subtab-btn').forEach(btn => {
-  btn.addEventListener('click', () => {
-    loadSubtab(btn.dataset.subtab);
-  });
-});
-
-async function loadSubtab(name) {
-  state.currentSubtab = name;
-  document.querySelectorAll('.subtab-btn').forEach(b => b.classList.remove('active'));
-  document.querySelector(`.subtab-btn[data-subtab="${name}"]`)?.classList.add('active');
-  document.querySelectorAll('.subtab-pane').forEach(p => p.classList.remove('active'));
-  document.getElementById('subtab-' + name)?.classList.add('active');
-
-  if (!state.currentRunId) return;
-
-  if (name === 'overview') {
-    await loadOverviewTab(state.currentRunId);
-  } else if (name === 'responses') {
-    await loadResponsesTab(state.currentRunId);
-  } else if (name === 'evaluation') {
-    await loadEvaluationTab(state.currentRunId);
-  }
-}
-
-function renderOptionBars(question) {
-  const options = question.options || [];
-  const aggregated = question.aggregated || [];
-  const total = aggregated.reduce((a, b) => a + b, 0);
-  const max = Math.max(1, ...aggregated);
-
-  return options.map((opt, i) => {
-    const value = aggregated[i] || 0;
-    const barPct = (value / max) * 100;
-    const sharePct = total > 0 ? Math.round((value / total) * 100) : 0;
-    return `
-      <div class="option-bar-row">
-        <span class="option-bar-label" title="${escapeHtml(opt)}">${escapeHtml(opt)}</span>
-        <div class="option-bar-track">
-          <div class="option-bar-fill" style="width: ${barPct}%"></div>
-        </div>
-        <span class="option-bar-pct">${sharePct}% (${formatNumber(value)})</span>
-      </div>
-    `;
-  }).join('');
-}
-
-function renderPersonaBreakdown(question) {
-  const byPersona = question.byPersona || {};
-  const entries = Object.entries(byPersona);
-  if (entries.length === 0) return '<p class="placeholder-inline">Nincs perszóna szintű adat.</p>';
-
-  const rows = entries.map(([personaId, info]) => {
-    const dist = info.distribution || [];
-    const total = dist.reduce((a, b) => a + b, 0);
-    let topIdx = -1;
-    let topVal = -1;
-    dist.forEach((v, i) => { if (v > topVal) { topVal = v; topIdx = i; } });
-    const topOption = topIdx >= 0 && question.options ? question.options[topIdx] : '—';
-    const topPct = total > 0 && topVal >= 0 ? Math.round((topVal / total) * 100) : 0;
-    return `
-      <tr>
-        <td>${escapeHtml(info.name || personaId)}</td>
-        <td>${escapeHtml(topOption || '—')}</td>
-        <td class="numeric">${topPct}%</td>
-        <td class="numeric">${formatNumber(info.abstainCount || 0)}</td>
-      </tr>
-    `;
-  }).join('');
-
-  return `
-    <table class="persona-breakdown-table">
-      <thead>
-        <tr>
-          <th>Perszóna</th>
-          <th>Top válasz</th>
-          <th class="numeric">%</th>
-          <th class="numeric">Elutasítás</th>
-        </tr>
-      </thead>
-      <tbody>${rows}</tbody>
-    </table>
-  `;
-}
-
-function renderMetricChips(question) {
-  const chips = [];
-  const pc = question.positionConsistency;
-  const rs = question.repetitionStability;
-  if (pc !== undefined && pc !== null) {
-    chips.push(`<span class="metric-chip">PC ${formatMetric(pc)}</span>`);
-    if (pc < 0.7) chips.push('<span class="metric-chip metric-chip-warning">⚠ pozíció-érzékeny — nem megbízható</span>');
-  }
-  if (rs !== undefined && rs !== null) {
-    chips.push(`<span class="metric-chip">RS ${formatMetric(rs)}</span>`);
-    if (rs < 0.7) chips.push('<span class="metric-chip metric-chip-warning">⚠ instabil</span>');
-  }
-  chips.push(`<span class="metric-chip metric-chip-info">🔍 bizonyítékhézag: ${formatNumber(question.abstainCount || 0)}</span>`);
-  if (question.invalidCount) {
-    chips.push(`<span class="metric-chip metric-chip-danger">Érvénytelen: ${formatNumber(question.invalidCount)}</span>`);
-  }
-  return chips.join('');
-}
-
-async function loadOverviewTab(runId) {
-  const container = document.getElementById('overviewContent');
-  container.innerHTML = '<p class="placeholder">Betöltés...</p>';
-  try {
-    const results = await apiCall('GET', `/api/runs/${runId}/results`);
-    const questions = results.questions || [];
-
-    const summary = `
-      <div class="overview-summary">
-        <span class="stat-chip">Összes válasz: ${formatNumber(results.totalResponses || 0)}</span>
-        <span class="stat-chip ${((results.invalidRate || 0) * 100) > 10 ? 'stat-chip-danger' : ''}">Érvénytelen arány: ${formatMetric((results.invalidRate || 0) * 100)}%</span>
-        <span class="stat-chip">Elutasítási arány: ${formatMetric((results.abstainRate || 0) * 100)}%</span>
-      </div>
-    `;
-
-    if (questions.length === 0) {
-      container.innerHTML = summary + '<p class="placeholder">Nincs eredmény.</p>';
-      return;
-    }
-
-    container.innerHTML = summary + questions.map(q => `
-      <div class="question-card">
-        <div class="question-card-header">
-          <h4>${escapeHtml(q.text)}</h4>
-          <div class="metric-chips">${renderMetricChips(q)}</div>
-        </div>
-        <div class="option-bars">
-          ${renderOptionBars(q)}
-        </div>
-        <details class="persona-breakdown-wrap">
-          <summary>Perszóna szintű bontás</summary>
-          ${renderPersonaBreakdown(q)}
-        </details>
-      </div>
-    `).join('');
-  } catch (err) {
-    container.innerHTML = `<p class="error-message">Eredmények betöltése sikertelen: ${escapeHtml(err.message)}</p>`;
-  }
-}
-
-async function loadResponsesTab(runId) {
-  const tbody = document.getElementById('responsesTableBody');
-  tbody.innerHTML = '<tr><td colspan="7" class="placeholder">Betöltés...</td></tr>';
-  try {
-    const runData = await apiCall('GET', '/api/runs/' + runId);
-    const responses = runData.responses || [];
-
-    if (responses.length === 0) {
-      tbody.innerHTML = '<tr><td colspan="7" class="placeholder">Nincs válasz.</td></tr>';
-      return;
-    }
-
-    tbody.innerHTML = responses.map(r => {
-      const validClass = r.is_valid ? 'valid-flag' : (r.abstained ? 'abstained-flag' : 'invalid-flag');
-      const validText = r.is_valid ? '✓' : (r.abstained ? '—' : '✗');
-      const dist = renderDistribution(r.parsed_distribution_json);
-      const distHtml = typeof dist === 'string' ? dist : dist.outerHTML;
-
-      return `
-        <tr>
-          <td>${escapeHtml(r.persona_name)}</td>
-          <td>${escapeHtml(r.question_text)}</td>
-          <td>${escapeHtml(r.parsed_answer || '—')}</td>
-          <td>${distHtml}</td>
-          <td><span class="${validClass}">${validText}</span></td>
-          <td>${escapeHtml(r.seed != null ? String(r.seed) : '—')}</td>
-          <td>${escapeHtml(r.model_version || '—')}</td>
-        </tr>
-      `;
-    }).join('');
-  } catch (err) {
-    tbody.innerHTML = `<tr><td colspan="7" class="error-message">Válaszok betöltése sikertelen: ${escapeHtml(err.message)}</td></tr>`;
-  }
-}
-
-function renderEvaluationCard(ev) {
-  const created = ev.created_at ? new Date(ev.created_at).toLocaleString('hu-HU') : '—';
-  return `
-    <div class="evaluation-card">
-      <div class="evaluation-card-header">
-        <span class="evaluation-model">${escapeHtml(ev.model || '—')}</span>
-        <span class="evaluation-date">${escapeHtml(created)}</span>
-      </div>
-      <pre class="evaluation-content">${escapeHtml(ev.content || '')}</pre>
-      <div class="evaluation-meta">
-        <span class="stat-chip">${formatNumber(ev.prompt_tokens || 0)} prompt token</span>
-        <span class="stat-chip">${formatNumber(ev.completion_tokens || 0)} completion token</span>
-        <span class="stat-chip">${formatCost(ev.cost_usd || 0)} USD</span>
-      </div>
-    </div>
-  `;
-}
-
-async function loadEvaluationTab(runId) {
-  const container = document.getElementById('evaluationsList');
-  container.innerHTML = '<p class="placeholder">Betöltés...</p>';
-  document.getElementById('evaluateError').textContent = '';
-  try {
-    const evaluations = await apiCall('GET', `/api/runs/${runId}/evaluations`);
-    const sorted = [...(evaluations || [])].sort((a, b) => {
-      const ta = a.created_at ? new Date(a.created_at).getTime() : 0;
-      const tb = b.created_at ? new Date(b.created_at).getTime() : 0;
-      return tb - ta;
-    });
-    if (sorted.length === 0) {
-      container.innerHTML = '<p class="placeholder">Még nincs kiértékelés.</p>';
-      return;
-    }
-    container.innerHTML = sorted.map(renderEvaluationCard).join('');
-  } catch (err) {
-    container.innerHTML = `<p class="error-message">Kiértékelések betöltése sikertelen: ${escapeHtml(err.message)}</p>`;
-  }
-}
-
-document.getElementById('runEvaluateBtn')?.addEventListener('click', async () => {
-  if (!state.currentRunId) return;
-  const btn = document.getElementById('runEvaluateBtn');
-  const spinner = document.getElementById('evaluateSpinner');
-  const errorEl = document.getElementById('evaluateError');
-  errorEl.textContent = '';
-  btn.disabled = true;
-  spinner.style.display = 'inline-block';
-  try {
-    await apiCall('POST', `/api/runs/${state.currentRunId}/evaluate`);
-    await loadEvaluationTab(state.currentRunId);
-  } catch (err) {
-    errorEl.textContent = 'Kiértékelés indítása sikertelen: ' + err.message;
-  } finally {
-    btn.disabled = false;
-    spinner.style.display = 'none';
-  }
-});
 
 // Event Subscription
 function subscribeToEvents() {
@@ -983,11 +612,15 @@ document.getElementById('personaForm')?.addEventListener('submit', async (e) => 
       alert('Válassz projektet!');
       return;
     }
+    // Same "kulcs: érték" parsing as the demographics field; an empty provenance
+    // stays undefined so the detail view can flag the missing source.
+    const provenance = parseDemographics(document.getElementById('personaProvenance').value);
     const body = {
       name: document.getElementById('personaName').value,
       demographics: parseDemographics(document.getElementById('personaDemographics').value),
       biography: document.getElementById('personaBiography').value || undefined,
       renderingStyle: document.getElementById('personaStyle').value,
+      provenance: Object.keys(provenance).length > 0 ? provenance : undefined,
       projectId: state.selectedProjectId
     };
     await apiCall('POST', '/api/personas', body);
@@ -1057,6 +690,7 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
     const tabName = btn.dataset.tab;
     state.activeTab = tabName;
     closeRunDetail(false);
+    closeEntityDetail(false);
     setActiveTab(tabName);
     setHash(tabName, null);
   });
@@ -1091,7 +725,7 @@ async function loadInitialData() {
 
     const modelSelect = document.getElementById('runModel');
     modelSelect.innerHTML = state.models.map(m =>
-      `<option value="${m.id}" ${m.id === models.default ? 'selected' : ''}>${escapeHtml(m.label)}</option>`
+      `<option value="${escapeHtml(m.id)}" ${m.id === models.default ? 'selected' : ''}>${escapeHtml(m.label)}</option>`
     ).join('');
 
     // Restore selected project from localStorage
@@ -1111,7 +745,7 @@ async function loadInitialData() {
     startProgressPolling();
 
     // Restore route from hash (tab / open run detail)
-    await applyRoute(parseHash());
+    await applyRoute(currentRoute());
   } catch (err) {
     alert('Adatbetöltés sikertelen: ' + err.message);
   }

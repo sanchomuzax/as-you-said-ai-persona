@@ -164,6 +164,58 @@ describe('projects', () => {
     expect(names).toEqual(['global', 'inA'])
   })
 
+  it('updates a project from the detail view', async () => {
+    const id = (await app.inject({ method: 'POST', url: '/api/projects', cookies: cookie, payload: { name: 'Régi név' } })).json().data.id
+    const res = await app.inject({
+      method: 'PUT',
+      url: `/api/projects/${id}`,
+      cookies: cookie,
+      payload: { name: 'Új név', applicationDomain: 'média', targetPopulation: 'HU' }
+    })
+    expect(res.statusCode).toBe(200)
+    const list = await app.inject({ method: 'GET', url: '/api/projects', cookies: cookie })
+    expect(list.json().data[0]).toMatchObject({ id, name: 'Új név', applicationDomain: 'média', targetPopulation: 'HU' })
+  })
+
+  it('clears optional project fields when they are submitted empty', async () => {
+    const id = (await app.inject({
+      method: 'POST', url: '/api/projects', cookies: cookie, payload: { name: 'N', applicationDomain: 'x' }
+    })).json().data.id
+    await app.inject({ method: 'PUT', url: `/api/projects/${id}`, cookies: cookie, payload: { name: 'N' } })
+    const list = await app.inject({ method: 'GET', url: '/api/projects', cookies: cookie })
+    expect(list.json().data[0].applicationDomain).toBeNull()
+  })
+
+  it('rejects updating an unknown project and an empty name', async () => {
+    const missing = await app.inject({ method: 'PUT', url: '/api/projects/nope', cookies: cookie, payload: { name: 'X' } })
+    expect(missing.statusCode).toBe(404)
+    const id = (await app.inject({ method: 'POST', url: '/api/projects', cookies: cookie, payload: { name: 'N' } })).json().data.id
+    const invalid = await app.inject({ method: 'PUT', url: `/api/projects/${id}`, cookies: cookie, payload: { name: '' } })
+    expect(invalid.statusCode).toBe(400)
+  })
+
+  it('stores and returns persona provenance (Persona Provenance Card)', async () => {
+    const projectId = (await app.inject({ method: 'POST', url: '/api/projects', cookies: cookie, payload: { name: 'A' } })).json().data.id
+    const provenance = { source: 'KSH Mikrocenzus 2022', retrievedAt: '2026-08-06', note: 'anchor core' }
+    const created = await app.inject({
+      method: 'POST',
+      url: '/api/personas',
+      cookies: cookie,
+      payload: { projectId, name: 'P', demographics: { kor: '40' }, biography: 'Bio', provenance }
+    })
+    expect(created.statusCode).toBe(200)
+    const list = await app.inject({ method: 'GET', url: '/api/personas', cookies: cookie })
+    expect(list.json().data[0].provenance).toEqual(provenance)
+    expect(list.json().data[0].biography).toBe('Bio')
+  })
+
+  it('returns null provenance for personas created without one', async () => {
+    const projectId = (await app.inject({ method: 'POST', url: '/api/projects', cookies: cookie, payload: { name: 'A' } })).json().data.id
+    await app.inject({ method: 'POST', url: '/api/personas', cookies: cookie, payload: { projectId, name: 'P', demographics: {} } })
+    const list = await app.inject({ method: 'GET', url: '/api/personas', cookies: cookie })
+    expect(list.json().data[0].provenance).toBeNull()
+  })
+
   it('filters personas by project', async () => {
     const p1 = (await app.inject({ method: 'POST', url: '/api/projects', cookies: cookie, payload: { name: 'A' } })).json().data.id
     const p2 = (await app.inject({ method: 'POST', url: '/api/projects', cookies: cookie, payload: { name: 'B' } })).json().data.id

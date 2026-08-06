@@ -35,7 +35,7 @@
         <h1>as-you-said — AI persona kutatás</h1>
       </div>
       <div class="header-center">
-        <div class="budget-widget">
+        <div class="budget-widget" title="Globális token-keret: az összes futtatás eddigi tokenfogyasztása a beállított kerethez képest.">
           <div class="budget-info">
             <span id="budgetTokens">-</span> / <span id="budgetLimit">-</span> token
             <span id="budgetCost">-</span> USD
@@ -116,6 +116,10 @@
             <div class="form-group">
               <label for="personaBiography">Életrajz (opcionális)</label>
               <textarea id="personaBiography" rows="4"></textarea>
+            </div>
+            <div class="form-group">
+              <label for="personaProvenance" title="A demográfiai mag forrása. A módszertan külső statisztikai forrást ír elő (anchor core) — ide kerül a forrás, a lekérés dátuma és az arányok.">Provenance / forrás (kulcs: érték, egy sorban)</label>
+              <textarea id="personaProvenance" rows="3" placeholder="forrás: KSH Mikrocenzus 2022&#10;lekérve: 2026-08-06&#10;arány: 12%"></textarea>
             </div>
             <div class="form-group">
               <label for="personaStyle">Renderelési stílus</label>
@@ -221,6 +225,18 @@
       </div>
     </main>
 
+    <!-- Entity Detail View (projekt / perszóna / kérdőív) -->
+    <section id="entityDetailView" class="entity-detail-view" style="display: none;">
+      <div class="run-detail-header">
+        <button id="entityDetailBackBtn" class="btn btn-secondary back-btn">&larr; Vissza</button>
+        <div class="run-detail-title-row">
+          <h2 id="entityDetailTitle" tabindex="-1">Részletek</h2>
+          <span id="entityDetailKind" class="badge badge-kind"></span>
+        </div>
+      </div>
+      <div id="entityDetailBody"><p class="placeholder">Betöltés...</p></div>
+    </section>
+
     <!-- Run Detail View -->
     <section id="runDetailView" class="run-detail-view" style="display: none;">
       <div class="run-detail-header">
@@ -258,11 +274,11 @@
               <tr>
                 <th>Perszóna</th>
                 <th>Kérdés</th>
-                <th>Válasz</th>
-                <th>Megoszlás</th>
-                <th>Érvényes</th>
-                <th>Seed</th>
-                <th>Modell</th>
+                <th title="A legnagyobb valószínűséget kapott opció ebben a válaszban.">Válasz</th>
+                <th title="Style C elicitáció: a perszóna valószínűség-eloszlást ad az opciókra, nem egyetlen választ.">Megoszlás</th>
+                <th title="✓ érvényes válasz · — tartózkodás (bizonyítékhézag, nem hiba) · ✗ nem értelmezhető modellkimenet">Érvényes</th>
+                <th title="A modellhíváshoz használt seed. Ugyanaz a kérdés több seeddel megy ki, így mérhető az ismétlési stabilitás (RS).">Seed</th>
+                <th title="A szolgáltató által ténylegesen kiszolgáló modellverzió (model pinning ellenőrzéshez rögzítjük).">Modell</th>
               </tr>
             </thead>
             <tbody id="responsesTableBody">
@@ -282,6 +298,13 @@
     </section>
   </div>
 
+  <script src="format.js"></script>
+  <script src="markdown.js"></script>
+  <script src="metrics.js"></script>
+  <script src="routing.js"></script>
+  <script src="detail.js"></script>
   <script src="app.js"></script>
+  <script src="entity-view.js"></script>
+  <script src="run-view.js"></script>
 </body>
 </html>

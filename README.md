@@ -23,6 +23,12 @@ recorded with full experimental metadata so runs are reproducible and auditable.
   ```bash
   npx tsx scripts/seed.ts seeds/example-project.json
   ```
+- **Detail views**: projects, personas and questionnaires open on click. The persona
+  page is a **Persona Provenance Card** — full demographics, biography and the recorded
+  source of the demographic anchor core (a missing source is stated, not hidden).
+- **Self-explaining metrics**: every research indicator (PC, RS, abstention, invalid rate,
+  run status, token budget) carries a hover explanation, and abstention is labelled as
+  what it is — an evidentiary gap, never an error.
 - **Full response recording**: every model call is stored with prompt, permutation,
   model parameters, raw output and token usage.
 - **Bias mitigation built in**: balanced permutation of answer options, Style C
@@ -46,7 +52,7 @@ npm run dev            # http://localhost:3555
 
 Requires Node.js 24+ (uses the built-in `node:sqlite` — no native modules).
 
-Run tests with `npm test` (50 tests) or `npm run test:coverage`.
+Run tests with `npm test` (97 tests) or `npm run test:coverage`.
 
 For production, a systemd user service works well:
 

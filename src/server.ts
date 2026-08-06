@@ -182,13 +182,29 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
     return { success: true, data: { id } }
   })
 
+  // Projects carry no experimental record, so editing them in place is safe —
+  // unlike personas/responses, which are immutable snapshots by design.
+  app.put('/api/projects/:id', async (req, reply) => {
+    const { id } = req.params as { id: string }
+    const body = projectSchema.safeParse(req.body)
+    if (!body.success) return reply.code(400).send({ success: false, error: body.error.issues[0]?.message })
+    const existing = db.prepare('SELECT id FROM projects WHERE id = ?').get(id)
+    if (!existing) return reply.code(404).send({ success: false, error: 'Project not found' })
+    db.prepare('UPDATE projects SET name = ?, application_domain = ?, target_population = ? WHERE id = ?').run(
+      body.data.name, body.data.applicationDomain ?? null, body.data.targetPopulation ?? null, id
+    )
+    return { success: true, data: { id } }
+  })
+
   // --- Personas (project-scoped) ---
   const personaSchema = z.object({
     projectId: z.string().min(1),
     name: z.string().min(1),
     demographics: z.record(z.unknown()),
     biography: z.string().optional(),
-    renderingStyle: z.enum(['bulleted_profile', 'natural_language_sentence']).default('bulleted_profile')
+    renderingStyle: z.enum(['bulleted_profile', 'natural_language_sentence']).default('bulleted_profile'),
+    /** Where the demographic anchor core came from — surfaced as the Persona Provenance Card. */
+    provenance: z.record(z.unknown()).optional()
   })
 
   app.get('/api/personas', async (req) => {
@@ -206,8 +222,16 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
     if (!project) return reply.code(400).send({ success: false, error: 'Unknown project' })
     const id = randomUUID()
     db.prepare(
-      'INSERT INTO personas (id, project_id, name, demographics_json, biography, rendering_style) VALUES (?,?,?,?,?,?)'
-    ).run(id, body.data.projectId, body.data.name, JSON.stringify(body.data.demographics), body.data.biography ?? null, body.data.renderingStyle)
+      'INSERT INTO personas (id, project_id, name, demographics_json, biography, rendering_style, provenance_json) VALUES (?,?,?,?,?,?,?)'
+    ).run(
+      id,
+      body.data.projectId,
+      body.data.name,
+      JSON.stringify(body.data.demographics),
+      body.data.biography ?? null,
+      body.data.renderingStyle,
+      body.data.provenance ? JSON.stringify(body.data.provenance) : null
+    )
     return { success: true, data: { id } }
   })
 
@@ -478,7 +502,18 @@ function rowToPersona(r: Record<string, unknown>): Record<string, unknown> {
     demographics: JSON.parse(String(r['demographics_json'])),
     biography: r['biography'],
     renderingStyle: r['rendering_style'],
+    provenance: parseJsonOrNull(r['provenance_json']),
     createdAt: r['created_at']
+  }
+}
+
+/** Provenance is optional and was absent in older rows — a malformed value must not break the list. */
+function parseJsonOrNull(value: unknown): unknown {
+  if (typeof value !== 'string' || value === '') return null
+  try {
+    return JSON.parse(value)
+  } catch {
+    return null
   }
 }
 
