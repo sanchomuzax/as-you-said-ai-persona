@@ -99,6 +99,34 @@ describe('models & budget', () => {
   })
 })
 
+describe('restart recovery', () => {
+  it('auto-resumes runs left running by a previous process', async () => {
+    const db = createDb(':memory:')
+    const questionnaireId = 'q1'
+    const personaId = 'p1'
+    const runId = 'r1'
+    db.prepare('INSERT INTO questionnaires (id, name) VALUES (?,?)').run(questionnaireId, 'Q')
+    db.prepare('INSERT INTO questions (id, questionnaire_id, ord, text, options_json) VALUES (?,?,0,?,?)').run(
+      'qq1', questionnaireId, 'Q?', JSON.stringify(['a', 'b'])
+    )
+    db.prepare('INSERT INTO personas (id, name, demographics_json) VALUES (?,?,?)').run(personaId, 'P', '{}')
+    db.prepare("INSERT INTO runs (id, questionnaire_id, name, status, config_json) VALUES (?,?,?,'running',?)").run(
+      runId, questionnaireId, 'interrupted', JSON.stringify({ model: 'm', temperature: 1, seeds: [0] })
+    )
+    db.prepare('INSERT INTO run_personas (run_id, persona_id) VALUES (?,?)').run(runId, personaId)
+
+    const restarted = buildServer({ db, config: testConfig, models: testModels, client: new StubClient() })
+    await restarted.ready()
+    await new Promise((r) => setTimeout(r, 50))
+
+    const status = db.prepare('SELECT status FROM runs WHERE id = ?').get(runId) as { status: string }
+    expect(status.status).toBe('completed')
+    const rows = db.prepare('SELECT COUNT(*) c FROM responses WHERE run_id = ?').get(runId) as { c: number }
+    expect(rows.c).toBe(2)
+    await restarted.close()
+  })
+})
+
 describe('projects', () => {
   it('creates and lists projects', async () => {
     const created = await app.inject({

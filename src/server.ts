@@ -36,9 +36,16 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
   const runner = new SurveyRunner(db, client, budget)
   const rateLimiter = new LoginRateLimiter()
 
-  // Runs left 'running' by a previous process (restart/crash) have no live loop:
-  // mark them paused so they can be resumed from the UI.
-  db.prepare("UPDATE runs SET status = 'paused' WHERE status = 'running'").run()
+  // Runs left 'running' by a previous process (restart/crash) have no live loop.
+  // Mark them paused, then resume automatically: the interruption was operational,
+  // not a research decision. Already-recorded cells are skipped and the token
+  // budget hard stop still applies, so a resume cannot run away.
+  const interrupted = db
+    .prepare("SELECT id FROM runs WHERE status = 'running'")
+    .all() as unknown as { id: string }[]
+  if (interrupted.length > 0) {
+    db.prepare("UPDATE runs SET status = 'paused' WHERE status = 'running'").run()
+  }
 
   const totalCells = (runId: string): number => {
     const row = db
@@ -82,6 +89,10 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
   runEvents.on('run_finished', ({ runId }: { runId: string }) => {
     void runEvaluation(runId).catch(() => undefined)
   })
+
+  for (const { id } of interrupted) {
+    void runner.execute(id).catch(() => undefined)
+  }
 
   const app = Fastify({ logger: false })
   app.register(fastifyCookie)
