@@ -52,16 +52,57 @@
 
     <!-- Tabs -->
     <nav class="tabs">
-      <button class="tab-btn active" data-tab="personas">Perszónák</button>
+      <button class="tab-btn active" data-tab="projects">Projektek</button>
+      <button class="tab-btn" data-tab="personas">Perszónák</button>
       <button class="tab-btn" data-tab="questionnaires">Kérdőívek</button>
       <button class="tab-btn" data-tab="runs">Futtatások</button>
     </nav>
 
     <!-- Tab Content -->
     <main class="tab-content">
-      <!-- Personas Tab -->
-      <div id="tab-personas" class="tab-pane active">
+      <!-- Projects Tab -->
+      <div id="tab-projects" class="tab-pane active">
         <div class="tab-section">
+          <h2>Projekt létrehozása</h2>
+          <form id="projectForm" class="form-grid">
+            <div class="form-group">
+              <label for="projectName">Projekt neve *</label>
+              <input type="text" id="projectName" required>
+            </div>
+            <div class="form-group">
+              <label for="projectApplicationDomain">Alkalmazási terület (opcionális)</label>
+              <input type="text" id="projectApplicationDomain" placeholder="pl. E-commerce, Közösségi média">
+            </div>
+            <div class="form-group">
+              <label for="projectTargetPopulation">Célpopuláció (opcionális)</label>
+              <input type="text" id="projectTargetPopulation" placeholder="pl. 18-35 éves férfiak">
+            </div>
+            <button type="submit" class="btn btn-primary">Projekt hozzáadása</button>
+          </form>
+        </div>
+        <div class="tab-section">
+          <h2>Projektek listája</h2>
+          <div id="projectsList" class="list-container">
+            <p class="placeholder">Betöltés...</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- Personas Tab -->
+      <div id="tab-personas" class="tab-pane">
+        <div class="tab-section">
+          <h2>Perszónák szűrése és kezelése</h2>
+          <div class="filter-bar">
+            <div class="form-group" style="margin-bottom: 0;">
+              <label for="personaProjectSelect">Projekt</label>
+              <select id="personaProjectSelect">
+                <option value="">-- Válassz projektet --</option>
+              </select>
+            </div>
+          </div>
+          <p id="noProjectHint" class="hint" style="display: none;">Előbb hozz létre projektet</p>
+        </div>
+        <div class="tab-section" id="personaFormSection" style="display: none;">
           <h2>Perszónák létrehozása</h2>
           <form id="personaForm" class="form-grid">
             <div class="form-group">
@@ -83,7 +124,7 @@
                 <option value="natural_language_sentence">Természetes nyelv</option>
               </select>
             </div>
-            <button type="submit" class="btn btn-primary">Perszóna hozzáadása</button>
+            <button type="submit" id="personaSubmitBtn" class="btn btn-primary">Perszóna hozzáadása</button>
           </form>
         </div>
         <div class="tab-section">
@@ -123,6 +164,12 @@
         <div class="tab-section">
           <h2>Futtatás létrehozása</h2>
           <form id="runForm" class="form-grid">
+            <div class="form-group">
+              <label for="runProjectSelect">Projekt</label>
+              <select id="runProjectSelect" required>
+                <option value="">-- Válassz projektet --</option>
+              </select>
+            </div>
             <div class="form-group">
               <label for="runName">Futtatás neve</label>
               <input type="text" id="runName" required>

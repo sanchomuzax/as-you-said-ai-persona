@@ -99,13 +99,57 @@ describe('models & budget', () => {
   })
 })
 
+describe('projects', () => {
+  it('creates and lists projects', async () => {
+    const created = await app.inject({
+      method: 'POST',
+      url: '/api/projects',
+      cookies: cookie,
+      payload: { name: 'Startlap', applicationDomain: 'media', targetPopulation: 'HU internet users' }
+    })
+    expect(created.statusCode).toBe(200)
+    const list = await app.inject({ method: 'GET', url: '/api/projects', cookies: cookie })
+    expect(list.json().data[0].name).toBe('Startlap')
+    expect(list.json().data[0].applicationDomain).toBe('media')
+  })
+
+  it('rejects a persona with an unknown project', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/personas',
+      cookies: cookie,
+      payload: { projectId: 'nope', name: 'P', demographics: {} }
+    })
+    expect(res.statusCode).toBe(400)
+    expect(res.json().error).toContain('Unknown project')
+  })
+
+  it('filters personas by project', async () => {
+    const p1 = (await app.inject({ method: 'POST', url: '/api/projects', cookies: cookie, payload: { name: 'A' } })).json().data.id
+    const p2 = (await app.inject({ method: 'POST', url: '/api/projects', cookies: cookie, payload: { name: 'B' } })).json().data.id
+    await app.inject({ method: 'POST', url: '/api/personas', cookies: cookie, payload: { projectId: p1, name: 'inA', demographics: {} } })
+    await app.inject({ method: 'POST', url: '/api/personas', cookies: cookie, payload: { projectId: p2, name: 'inB', demographics: {} } })
+    const filtered = await app.inject({ method: 'GET', url: `/api/personas?project=${p1}`, cookies: cookie })
+    expect(filtered.json().data).toHaveLength(1)
+    expect(filtered.json().data[0].name).toBe('inA')
+    expect(filtered.json().data[0].projectId).toBe(p1)
+  })
+})
+
 describe('personas, questionnaires, runs end-to-end', () => {
   it('creates entities and executes a run recording responses', async () => {
+    const project = await app.inject({
+      method: 'POST',
+      url: '/api/projects',
+      cookies: cookie,
+      payload: { name: 'TestProj' }
+    })
+    const projectId = project.json().data.id
     const persona = await app.inject({
       method: 'POST',
       url: '/api/personas',
       cookies: cookie,
-      payload: { name: 'P1', demographics: { age: 40 }, renderingStyle: 'bulleted_profile' }
+      payload: { projectId, name: 'P1', demographics: { age: 40 }, renderingStyle: 'bulleted_profile' }
     })
     expect(persona.statusCode).toBe(200)
     const personaId = persona.json().data.id

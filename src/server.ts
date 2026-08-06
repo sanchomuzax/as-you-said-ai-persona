@@ -94,26 +94,60 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
     data: { global: budget.globalUsage(), limits: budget.limits() }
   }))
 
-  // --- Personas ---
+  // --- Projects ---
+  const projectSchema = z.object({
+    name: z.string().min(1),
+    applicationDomain: z.string().optional(),
+    targetPopulation: z.string().optional()
+  })
+
+  app.get('/api/projects', async () => ({
+    success: true,
+    data: (db.prepare('SELECT * FROM projects ORDER BY created_at DESC').all() as Record<string, unknown>[]).map((r) => ({
+      id: r['id'],
+      name: r['name'],
+      applicationDomain: r['application_domain'],
+      targetPopulation: r['target_population'],
+      createdAt: r['created_at']
+    }))
+  }))
+
+  app.post('/api/projects', async (req, reply) => {
+    const body = projectSchema.safeParse(req.body)
+    if (!body.success) return reply.code(400).send({ success: false, error: body.error.issues[0]?.message })
+    const id = randomUUID()
+    db.prepare('INSERT INTO projects (id, name, application_domain, target_population) VALUES (?,?,?,?)').run(
+      id, body.data.name, body.data.applicationDomain ?? null, body.data.targetPopulation ?? null
+    )
+    return { success: true, data: { id } }
+  })
+
+  // --- Personas (project-scoped) ---
   const personaSchema = z.object({
+    projectId: z.string().min(1),
     name: z.string().min(1),
     demographics: z.record(z.unknown()),
     biography: z.string().optional(),
     renderingStyle: z.enum(['bulleted_profile', 'natural_language_sentence']).default('bulleted_profile')
   })
 
-  app.get('/api/personas', async () => ({
-    success: true,
-    data: (db.prepare('SELECT * FROM personas ORDER BY created_at DESC').all() as Record<string, unknown>[]).map(rowToPersona)
-  }))
+  app.get('/api/personas', async (req) => {
+    const { project } = req.query as { project?: string }
+    const rows = project
+      ? db.prepare('SELECT * FROM personas WHERE project_id = ? ORDER BY created_at DESC').all(project)
+      : db.prepare('SELECT * FROM personas ORDER BY created_at DESC').all()
+    return { success: true, data: (rows as Record<string, unknown>[]).map(rowToPersona) }
+  })
 
   app.post('/api/personas', async (req, reply) => {
     const body = personaSchema.safeParse(req.body)
     if (!body.success) return reply.code(400).send({ success: false, error: body.error.issues[0]?.message })
+    const project = db.prepare('SELECT id FROM projects WHERE id = ?').get(body.data.projectId)
+    if (!project) return reply.code(400).send({ success: false, error: 'Unknown project' })
     const id = randomUUID()
     db.prepare(
-      'INSERT INTO personas (id, name, demographics_json, biography, rendering_style) VALUES (?,?,?,?,?)'
-    ).run(id, body.data.name, JSON.stringify(body.data.demographics), body.data.biography ?? null, body.data.renderingStyle)
+      'INSERT INTO personas (id, project_id, name, demographics_json, biography, rendering_style) VALUES (?,?,?,?,?,?)'
+    ).run(id, body.data.projectId, body.data.name, JSON.stringify(body.data.demographics), body.data.biography ?? null, body.data.renderingStyle)
     return { success: true, data: { id } }
   })
 
@@ -290,6 +324,7 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
 function rowToPersona(r: Record<string, unknown>): Record<string, unknown> {
   return {
     id: r['id'],
+    projectId: r['project_id'],
     name: r['name'],
     demographics: JSON.parse(String(r['demographics_json'])),
     biography: r['biography'],

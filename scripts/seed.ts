@@ -1,0 +1,69 @@
+/**
+ * Idempotent seeder: loads a project + personas definition from a JSON file
+ * and inserts anything not already present (matched by name).
+ *
+ * Usage: npx tsx scripts/seed.ts <path-to-seed.json>
+ * JSON shape: { project: {name, applicationDomain?, targetPopulation?},
+ *               personas: [{name, demographics, biography?, renderingStyle?, provenance?}] }
+ */
+import 'dotenv/config'
+import { readFileSync } from 'node:fs'
+import { randomUUID } from 'node:crypto'
+import { z } from 'zod'
+import { createDb } from '../src/db.js'
+
+const seedSchema = z.object({
+  project: z.object({
+    name: z.string().min(1),
+    applicationDomain: z.string().optional(),
+    targetPopulation: z.string().optional()
+  }),
+  personas: z.array(
+    z.object({
+      name: z.string().min(1),
+      demographics: z.record(z.unknown()),
+      biography: z.string().optional(),
+      renderingStyle: z.enum(['bulleted_profile', 'natural_language_sentence']).default('bulleted_profile'),
+      provenance: z.record(z.unknown()).optional()
+    })
+  )
+})
+
+const seedPath = process.argv[2]
+if (!seedPath) {
+  process.stderr.write('Usage: npx tsx scripts/seed.ts <path-to-seed.json>\n')
+  process.exit(1)
+}
+
+const seed = seedSchema.parse(JSON.parse(readFileSync(seedPath, 'utf8')))
+const db = createDb(process.env['DATABASE_PATH'] ?? './data/asys.sqlite')
+
+const existingProject = db
+  .prepare('SELECT id FROM projects WHERE name = ?')
+  .get(seed.project.name) as { id: string } | undefined
+const projectId = existingProject?.id ?? randomUUID()
+if (!existingProject) {
+  db.prepare('INSERT INTO projects (id, name, application_domain, target_population) VALUES (?,?,?,?)').run(
+    projectId, seed.project.name, seed.project.applicationDomain ?? null, seed.project.targetPopulation ?? null
+  )
+  process.stdout.write(`Created project "${seed.project.name}" (${projectId})\n`)
+} else {
+  process.stdout.write(`Project "${seed.project.name}" already exists (${projectId})\n`)
+}
+
+let created = 0
+for (const persona of seed.personas) {
+  const exists = db
+    .prepare('SELECT id FROM personas WHERE project_id = ? AND name = ?')
+    .get(projectId, persona.name)
+  if (exists) continue
+  db.prepare(
+    'INSERT INTO personas (id, project_id, name, demographics_json, biography, rendering_style, provenance_json) VALUES (?,?,?,?,?,?,?)'
+  ).run(
+    randomUUID(), projectId, persona.name, JSON.stringify(persona.demographics),
+    persona.biography ?? null, persona.renderingStyle,
+    persona.provenance ? JSON.stringify(persona.provenance) : null
+  )
+  created++
+}
+process.stdout.write(`Personas: ${created} created, ${seed.personas.length - created} already present\n`)

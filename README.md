@@ -11,8 +11,12 @@ recorded with full experimental metadata so runs are reproducible and auditable.
 
 ## Key features (planned)
 
-- **Web dashboard** to define questionnaires, personas and runs, and to follow persona
-  answers in near-real time.
+- **Web dashboard** to define projects, questionnaires, personas and runs, and to follow
+  persona answers in near-real time. Personas are scoped to projects (each research
+  project has its own persona set, with application domain and target population
+  recorded per the transparency checklist).
+- **Seeding**: `npx tsx scripts/seed.ts <seed.json>` loads a project + personas
+  definition idempotently (see script header for the JSON shape).
 - **Full response recording**: every model call is stored with prompt, permutation,
   model parameters, raw output and token usage.
 - **Bias mitigation built in**: balanced permutation of answer options, Style C

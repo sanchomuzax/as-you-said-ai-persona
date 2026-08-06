@@ -10,12 +10,30 @@ export function createDb(path: string): Db {
   db.exec('PRAGMA journal_mode = WAL')
   db.exec('PRAGMA foreign_keys = ON')
   db.exec(SCHEMA)
+  migrate(db)
   return db
 }
 
+/** Idempotent migrations for databases created by earlier schema versions. */
+function migrate(db: DatabaseSync): void {
+  const personaCols = db.prepare('PRAGMA table_info(personas)').all() as unknown as { name: string }[]
+  if (!personaCols.some((c) => c.name === 'project_id')) {
+    db.exec('ALTER TABLE personas ADD COLUMN project_id TEXT REFERENCES projects(id)')
+  }
+}
+
 const SCHEMA = `
+CREATE TABLE IF NOT EXISTS projects (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  application_domain TEXT,
+  target_population TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 CREATE TABLE IF NOT EXISTS personas (
   id TEXT PRIMARY KEY,
+  project_id TEXT REFERENCES projects(id),
   name TEXT NOT NULL,
   version INTEGER NOT NULL DEFAULT 1,
   demographics_json TEXT NOT NULL,

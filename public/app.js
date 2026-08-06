@@ -2,6 +2,8 @@
 let state = {
   authenticated: false,
   models: [],
+  projects: [],
+  selectedProjectId: null,
   personas: [],
   questionnaires: [],
   runs: [],
@@ -112,6 +114,59 @@ function setActiveTab(tabName) {
 }
 
 // List Rendering
+function renderProjectsList() {
+  const container = document.getElementById('projectsList');
+  if (state.projects.length === 0) {
+    container.innerHTML = '<p class="placeholder">Nincs projekt.</p>';
+    return;
+  }
+
+  container.innerHTML = state.projects.map(p => {
+    const metaParts = [];
+    if (p.applicationDomain) metaParts.push(escapeHtml(p.applicationDomain));
+    if (p.targetPopulation) metaParts.push(escapeHtml(p.targetPopulation));
+    const metaStr = metaParts.join(' | ');
+
+    return `
+      <div class="list-item">
+        <div>
+          <div class="list-item-title">${escapeHtml(p.name)}</div>
+          ${metaStr ? `<div class="list-item-meta">${metaStr}</div>` : ''}
+        </div>
+      </div>
+    `;
+  }).join('');
+}
+
+function updateProjectDropdowns() {
+  const selects = [
+    document.getElementById('personaProjectSelect'),
+    document.getElementById('runProjectSelect')
+  ];
+
+  selects.forEach(select => {
+    if (!select) return;
+    const currentValue = select.value;
+    select.innerHTML = '<option value="">-- Válassz projektet --</option>';
+    select.innerHTML += state.projects.map(p =>
+      `<option value="${p.id}">${escapeHtml(p.name)}</option>`
+    ).join('');
+    select.value = currentValue;
+  });
+}
+
+function updatePersonaFormVisibility() {
+  const section = document.getElementById('personaFormSection');
+  const hint = document.getElementById('noProjectHint');
+  if (state.projects.length === 0) {
+    section.style.display = 'none';
+    hint.style.display = 'block';
+  } else {
+    section.style.display = 'block';
+    hint.style.display = 'none';
+  }
+}
+
 function renderPersonasList() {
   const container = document.getElementById('personasList');
   if (state.personas.length === 0) {
@@ -314,6 +369,68 @@ function subscribeToEvents() {
 }
 
 // Form Handlers
+document.getElementById('projectForm')?.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  try {
+    const body = {
+      name: document.getElementById('projectName').value,
+      applicationDomain: document.getElementById('projectApplicationDomain').value || undefined,
+      targetPopulation: document.getElementById('projectTargetPopulation').value || undefined
+    };
+    const newProject = await apiCall('POST', '/api/projects', body);
+    document.getElementById('projectForm').reset();
+    const projects = await apiCall('GET', '/api/projects');
+    state.projects = projects;
+    renderProjectsList();
+    updateProjectDropdowns();
+    updatePersonaFormVisibility();
+    state.selectedProjectId = newProject.id;
+    document.getElementById('personaProjectSelect').value = newProject.id;
+    await reloadPersonasList();
+  } catch (err) {
+    alert('Projekt létrehozása sikertelen: ' + err.message);
+  }
+});
+
+document.getElementById('personaProjectSelect')?.addEventListener('change', async (e) => {
+  const projectId = e.target.value;
+  state.selectedProjectId = projectId;
+  const submitBtn = document.getElementById('personaSubmitBtn');
+  if (submitBtn) submitBtn.disabled = !projectId;
+  if (projectId) {
+    await reloadPersonasList();
+  } else {
+    state.personas = [];
+    renderPersonasList();
+    renderPersonasCheckboxes();
+  }
+});
+
+document.getElementById('runProjectSelect')?.addEventListener('change', async (e) => {
+  const projectId = e.target.value;
+  state.selectedProjectId = projectId;
+  if (projectId) {
+    await reloadPersonasList();
+  } else {
+    state.personas = [];
+    renderPersonasCheckboxes();
+  }
+});
+
+async function reloadPersonasList() {
+  try {
+    const url = state.selectedProjectId
+      ? `/api/personas?project=${state.selectedProjectId}`
+      : '/api/personas';
+    const personas = await apiCall('GET', url);
+    state.personas = personas;
+    renderPersonasList();
+    renderPersonasCheckboxes();
+  } catch (err) {
+    alert('Perszónák betöltése sikertelen: ' + err.message);
+  }
+}
+
 document.getElementById('loginForm')?.addEventListener('submit', async (e) => {
   e.preventDefault();
   const username = document.getElementById('username').value;
@@ -343,18 +460,20 @@ document.getElementById('logoutBtn')?.addEventListener('click', async () => {
 document.getElementById('personaForm')?.addEventListener('submit', async (e) => {
   e.preventDefault();
   try {
+    if (!state.selectedProjectId) {
+      alert('Válassz projektet!');
+      return;
+    }
     const body = {
       name: document.getElementById('personaName').value,
       demographics: parseDemographics(document.getElementById('personaDemographics').value),
       biography: document.getElementById('personaBiography').value || undefined,
-      renderingStyle: document.getElementById('personaStyle').value
+      renderingStyle: document.getElementById('personaStyle').value,
+      projectId: state.selectedProjectId
     };
     await apiCall('POST', '/api/personas', body);
     document.getElementById('personaForm').reset();
-    const personas = await apiCall('GET', '/api/personas');
-    state.personas = personas;
-    renderPersonasList();
-    renderPersonasCheckboxes();
+    await reloadPersonasList();
   } catch (err) {
     alert('Perszóna létrehozása sikertelen: ' + err.message);
   }
@@ -381,6 +500,10 @@ document.getElementById('questionnaireForm')?.addEventListener('submit', async (
 document.getElementById('runForm')?.addEventListener('submit', async (e) => {
   e.preventDefault();
   try {
+    if (!state.selectedProjectId) {
+      alert('Válassz projektet!');
+      return;
+    }
     const personaIds = Array.from(
       document.querySelectorAll('#runPersonas input[type="checkbox"]:checked')
     ).map(cb => cb.value);
@@ -390,7 +513,8 @@ document.getElementById('runForm')?.addEventListener('submit', async (e) => {
       questionnaireId: document.getElementById('runQuestionnaire').value,
       personaIds,
       model: document.getElementById('runModel').value,
-      temperature: parseFloat(document.getElementById('runTemperature').value)
+      temperature: parseFloat(document.getElementById('runTemperature').value),
+      projectId: state.selectedProjectId
     };
 
     await apiCall('POST', '/api/runs', body);
@@ -428,25 +552,32 @@ document.getElementById('runDetailModal')?.addEventListener('click', (e) => {
 // Initial Load
 async function loadInitialData() {
   try {
-    const [models, personas, questionnaires, runs] = await Promise.all([
+    const [models, projects, personas, questionnaires, runs] = await Promise.all([
       apiCall('GET', '/api/models'),
+      apiCall('GET', '/api/projects'),
       apiCall('GET', '/api/personas'),
       apiCall('GET', '/api/questionnaires'),
       apiCall('GET', '/api/runs')
     ]);
 
     state.models = models.models || [];
+    state.projects = projects;
     state.personas = personas;
     state.questionnaires = questionnaires;
     state.runs = runs;
 
+    renderProjectsList();
+    updateProjectDropdowns();
+    updatePersonaFormVisibility();
     renderPersonasList();
     renderQuestionnairesList();
     renderRunsList();
     renderPersonasCheckboxes();
     updateBudgetBar();
 
-    // Populate model select
+    const personaSubmitBtn = document.getElementById('personaSubmitBtn');
+    if (personaSubmitBtn) personaSubmitBtn.disabled = true;
+
     const modelSelect = document.getElementById('runModel');
     modelSelect.innerHTML = state.models.map(m =>
       `<option value="${m.id}" ${m.id === models.default ? 'selected' : ''}>${escapeHtml(m.label)}</option>`
