@@ -352,6 +352,16 @@ document.addEventListener('DOMContentLoaded', () => {
       await handleRunAction('stop', stopBtn.dataset.run);
       return;
     }
+    // Issue #29 review round 3, HIGH 4: calibrationRunRow (model-card.js) now
+    // renders a Folytatás control alongside Leállítás for every resumable
+    // status — same handleRunAction (runs-list.js) the Futtatások list and
+    // run detail view already use, so a 409 here gets the same stale-page
+    // refresh as those (its own MED fix).
+    const resumeBtn = e.target.closest('[data-action="resume"]');
+    if (resumeBtn) {
+      await handleRunAction('resume', resumeBtn.dataset.run);
+      return;
+    }
     const runRow = e.target.closest('[data-cal-run]');
     if (runRow) {
       rememberDetailTrigger('data-cal-run', runRow.dataset.calRun, detailBody);

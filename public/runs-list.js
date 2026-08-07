@@ -16,10 +16,31 @@ function runControlButtons(run, context, liveStatus) {
   if (status === 'running') {
     buttons.push(`<button class="btn btn-secondary btn-sm" data-action="pause" data-run="${escapeHtml(run.id)}">Szünet</button>`);
   }
-  if (status === 'paused' || status === 'budget_exhausted' || status === 'failed') {
+  // Mirrors src/runner.ts's RESUMABLE set (issue #29 review round 3, HIGH 4):
+  // 'pending' is resumable server-side (isResumable, src/server.ts) exactly
+  // like paused/budget_exhausted/failed, but had no resume control anywhere
+  // before this — a run stuck 'pending' (a throw before its first
+  // setStatus('running'), swallowed by the fire-and-forget launch) was a
+  // silent dead end.
+  if (status === 'paused' || status === 'budget_exhausted' || status === 'failed' || status === 'pending') {
     buttons.push(`<button class="btn btn-secondary btn-sm" data-action="resume" data-run="${escapeHtml(run.id)}">Folytatás</button>`);
   }
-  if (status === 'running' || status === 'paused') {
+  // Every status ACTIVE_CALIBRATION_STATUSES (src/model-profiles.ts /
+  // public/model-card.js) counts as blocking a new calibration launch needs a
+  // visible way out wherever this function is reused — the Futtatások list
+  // AND the run detail view (issue #29 review round 3, HIGH 4). 'failed' and
+  // 'budget_exhausted' used to offer Folytatás only, with no Leállítás: for a
+  // calibration that hit the token-budget hard stop 90% through, the only
+  // escape was resuming it — throwing the whole run away was not reachable
+  // without leaving the list entirely, the expensive wrong default on a
+  // token-budget research tool.
+  if (
+    status === 'running' ||
+    status === 'paused' ||
+    status === 'pending' ||
+    status === 'budget_exhausted' ||
+    status === 'failed'
+  ) {
     buttons.push(`<button class="btn btn-danger btn-sm" data-action="stop" data-run="${escapeHtml(run.id)}">Leállítás</button>`);
   }
   if (context === 'card') {
@@ -100,6 +121,40 @@ function renderRunCard(run) {
   `;
 }
 
+/**
+ * Issue #29 review round 3, CRITICAL 1: state.runProgress is a cache the
+ * periodic poll (pollRunningProgress below) writes into — but only for rows
+ * that are CURRENTLY 'running' (its own filter). Nothing ever invalidated an
+ * entry once its run stopped being 'running': the poll simply stops
+ * revisiting it, so a cached `{status: 'running', ...}` survives forever,
+ * and every reader of state.runProgress across the app (this file's
+ * renderRunCard, model-view.js's calibrationRunsFor, context-sidebar.js's
+ * contextSidebarRunningRun, overview.js's runLiveStatus) prefers that cached
+ * status over the fresh row (`live.status || row.status`) — so a run that
+ * actually completed/stopped/failed keeps showing "Fut" until an F5.
+ *
+ * GET /api/runs is the single source of truth every one of those readers
+ * already falls back to, and it is always at least as fresh as anything in
+ * the cache the moment this runs (it was just fetched). So the rule is
+ * simple: whenever a fresh row's status disagrees with what is cached for
+ * that run id, or the run no longer exists in the fresh list at all, the
+ * cache entry is dropped — the row wins because it is newer. This lives here
+ * (called from refreshRunsList, the one place a fresh WHOLE-list fetch lands
+ * in state) so it is a property of the cache itself, not a special case any
+ * of the four call sites above has to remember to apply on its own.
+ */
+function invalidateStaleRunProgress(freshRuns) {
+  const freshById = new Map(freshRuns.map((r) => [r.id, r]));
+  for (const id of Object.keys(state.runProgress)) {
+    const fresh = freshById.get(id);
+    const cached = state.runProgress[id];
+    if (!fresh || (cached && cached.status && cached.status !== fresh.status)) {
+      delete state.runProgress[id];
+      delete state.runProgressErrors[id];
+    }
+  }
+}
+
 function renderRunsList() {
   const container = document.getElementById('runsList');
   if (state.runs.length === 0) {
@@ -152,6 +207,14 @@ async function handleRunAction(action, runId) {
       await refreshRunDetailHeader(runId);
     }
   } catch (err) {
+    // Issue #29 review round 3, MED: a 409 (the calibration concurrency
+    // guard, src/model-profiles.ts, also enforced on resume) means another
+    // run is blocking this action RIGHT NOW — the calibrate launch path
+    // already refreshes before alerting on exactly this status
+    // (handleCalibrationLaunchError, model-view.js); pause/resume/stop went
+    // through this shared handler instead and just alerted, leaving a stale
+    // page with no sign of the run actually blocking it.
+    if (err.status === 409) await refreshRunsList();
     alert('Művelet sikertelen: ' + err.message);
   }
 }
@@ -160,6 +223,7 @@ async function refreshRunsList() {
   try {
     const runs = await apiCall('GET', '/api/runs');
     state.runs = runs;
+    invalidateStaleRunProgress(runs);
     renderRunsList();
     // This used to always follow up with pollRunningProgress(true) — a live
     // /progress fetch for EVERY run, not just running ones. GET /api/runs was
