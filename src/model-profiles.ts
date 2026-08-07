@@ -39,6 +39,20 @@ interface ProfileRow {
   valid_until: string
 }
 
+/**
+ * Whether a run's config marks it as a calibration launch (issue #35). The
+ * single source of truth for reading `RunConfig.calibration` on the backend,
+ * so every caller — the evaluation prompt today, anything else tomorrow —
+ * checks the SAME flag the SAME way. Deliberately NOT derived from the run
+ * name (a human-facing label the researcher can rename) and NOT from "this
+ * run happens to have zero personas": an ORDINARY research run can
+ * legitimately have zero personas too (e.g. control-arm-only exploration),
+ * and reading that as calibration would misclassify it.
+ */
+export function isCalibrationRun(config: RunConfig): boolean {
+  return config.calibration === true
+}
+
 function toStoredProfile(row: ProfileRow): StoredProfile {
   return {
     id: row.id,

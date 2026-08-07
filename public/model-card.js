@@ -17,7 +17,7 @@ const CALIBRATION_TOOLTIPS = {
     'Pozíciófüggő torzítás: a kiegyensúlyozott permutáció után minden opció ugyanannyiszor áll minden pozícióban, így egy tartalom alapján válaszoló modell egyenletesen oszlik el. Az érték a legnagyobb eltérés az egyenletes aránytól.',
   cells: 'Hány perszóna nélküli cella áll a profil mögött, és mennyibe került a mérés.',
   missing:
-    'Ehhez a modellhez még nincs mérés. Amíg nincs, a vele készült perszóna-eredményekhez nincs mihez viszonyítani: nem tudjuk elkülöníteni a perszóna hatását a modell alapértelmezett válaszától.'
+    'Profil nélkül az eredmények önmagukban olvasandók; nem tudjuk megmondani, mennyi a modell alapértelmezett viselkedése és mennyi a perszóna hatása.'
 };
 
 function calibrationStatusChip(status) {
@@ -257,6 +257,36 @@ function renderCalibrationWorkflow(entry, context) {
 }
 
 /**
+ * Generates an actionable message for a missing calibration profile. The message
+ * explains what the absence means and tells the researcher what to do next,
+ * based on whether there are completed calibration runs, probe questionnaires, etc.
+ */
+function renderMissingProfileMessage(context) {
+  const explanation = `A profil nélkül az eredmények önmagukban olvasandók; nincs mihez viszonyítani a perszóna hatását a modell alapértelmezett viselkedéséhez képest.`;
+
+  const probes = (context && context.probes) || [];
+  const calRuns = (context && context.calibrationRuns) || [];
+  const completed = calRuns.filter((r) => r.status === 'completed');
+
+  let nextStep = '';
+  if (completed.length > 0) {
+    const run = completed[0];
+    nextStep = `<p class="detail-note"><strong>Következő lépés:</strong> Rögzítsd a profilt a befejezett futásból — alább a "4. Profil rögzítése" lépésben.</p>`;
+  } else if (probes.length > 0) {
+    nextStep = `<p class="detail-note"><strong>Következő lépés:</strong> Indíts kalibrációs futtatást a próba-kérdőívvel — az alábbi lépéseket követve.</p>`;
+  } else {
+    nextStep = `<p class="detail-note"><strong>Következő lépés:</strong> Hozz létre egy próba-kérdőívet a Kérdőívek fülön, majd térj vissza a kalibrációhoz.</p>`;
+  }
+
+  return `
+    <div class="detail-section">
+      <p class="methodology-warning">${escapeHtml(explanation)}</p>
+      ${nextStep}
+    </div>
+  `;
+}
+
+/**
  * The model card. Deliberately states what the profile is NOT: a measured
  * default is a reference point for reading persona results, not a correction
  * applied to them — the raw log is never touched. `context` (probes +
@@ -266,9 +296,7 @@ function renderCalibrationWorkflow(entry, context) {
 function renderModelCard(entry, profile, context) {
   if (!profile) {
     return `
-      <div class="detail-section">
-        <p class="methodology-warning">${escapeHtml(CALIBRATION_TOOLTIPS.missing)}</p>
-      </div>
+      ${renderMissingProfileMessage(context)}
       ${renderCalibrationWorkflow({ ...entry, status: 'missing' }, context)}
     `;
   }

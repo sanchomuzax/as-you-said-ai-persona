@@ -34,19 +34,86 @@ export function buildEvaluationPrompt(
       /** The stack this run's OWN responses were actually served by. */
       runStack?: { modelVersion: string | null; provider: string | null }
     } | null
+    /**
+     * True when the run's OWN config carries `calibration: true` (issue #35;
+     * read via `isCalibrationRun` in src/model-profiles.ts — never re-derived
+     * here from the run name or from "this run happens to have zero
+     * personas", since an ordinary research run can legitimately have zero
+     * personas too). A calibration run has NO persona rows at all: every
+     * response is the control arm. The persona-research prompt below asks
+     * the judge to discuss persona differences, persona effect vs. control,
+     * and stereotyping risk — all meaningless (and actively misleading, see
+     * issue #35) when there is no persona to begin with. `buildCalibrationEvaluationPrompt`
+     * reuses the SAME per-question line rendering (via `buildQuestionLines`)
+     * but replaces the framing entirely.
+     */
+    calibration?: boolean
   } = {}
 ): string {
   const providers = context.providers ?? []
+  if (context.calibration) {
+    return buildCalibrationEvaluationPrompt(runName, results, providers)
+  }
   const calibrationSection = buildCalibrationSection(context.profile ?? null)
-  // Several providers for one model id means several implementations answered:
-  // part of the run-to-run variation is routing, not the persona or the seed.
-  const providerNote =
-    providers.length > 1
-      ? `\n- FIGYELEM: ezt a futtatást ${providers.length} különböző szolgáltató szolgálta ki ugyanazzal a modell-azonosítóval (${providers
-          .map((p) => `${p.provider}: ${p.count}`)
-          .join(', ')}). A szolgáltatók eltérő kvantálással futtatják a modellt, ezért az ismétlési stabilitás (RS) romlásának egy része ROUTINGBÓL ered, nem a perszónából vagy a seedből — ezt az értelmezésnél kötelező jelezned.`
+  const providerNote = buildProviderNote(providers)
+  const lines = buildQuestionLines(results)
+
+  return `Egy szintetikus AI-perszóna kérdőíves kutatás ("${runName}") lefutott eredményeit kell kiértékelned kutatói szemmel, magyarul.
+
+FONTOS SZABÁLYOK:
+- Légy kritikus és tárgyilagos. NE dicsérd az eredményeket és NE adj udvariassági pozitív értékelést — a túlzó pozitivitás (Pollyanna-torzítás) ismert hibád, kerüld tudatosan.
+- Kizárólag az alábbi, kódból számolt adatokra támaszkodj; új számokat ne találj ki.
+- Ahol a pozíció-konzisztencia (PC) 0.7 alatt van, ott az adott kérdés eredményét KÖTELEZŐ megbízhatatlannak jelölnöd (a válasz a felsorolás sorrendjétől függött).
+- A perszónák közti éles különbségeket fenntartással kezeld: az LLM-ek a csoportkülönbségeket tipikusan 2-4x felnagyítják (spurious split kockázat).
+- Ahol van KONTROLL-KAR, ott a perszónás eredményt KÖTELEZŐ ahhoz KÉPEST értelmezni: ha egy perszóna divergenciája a zajszinten belül van, mondd ki, hogy ott a perszóna nem térítette el a modellt a saját alapértelmezésétől — az eredmény a modell tulajdonsága, nem a perszónáé.
+- Az abstain nem hiba, hanem bizonyítékhézag: jelezd, mely témákban nem volt a perszónáknak megalapozott válasza.
+${providerNote}${
+    results.duplicateResponseCount > 0
+      ? `\n- FIGYELEM: ${results.duplicateResponseCount} válasz ugyanazt a cellát ismételte meg (adatgyűjtési anomália). Az aggregátum cellánként egy mérést használ, de a gyűjtés nem volt tiszta — ezt az értelmezésnél jelezd.`
       : ''
-  const lines = results.questions.map((q) => {
+  }
+- A többválaszos kérdések számai opciónkénti FÜGGETLEN támogatottságok: ezeket tilos egyválaszos kérdések eloszlásaival közvetlenül összehasonlítani, és nem összegződnek 100%-ra. Ott a PC/RS a kiválasztott opció-HALMAZOK átfedését méri (nem egyetlen topválasz egyezését), tehát szigorúbb mutató — ezt vedd figyelembe az értelmezésnél.
+- Ahol az adat "nincs értékelhető válasz", ott TILOS bármilyen tartalmi állítást tenni a kérdésről; csak a hiányt nevezd meg.
+${calibrationSection}
+
+ADATOK:
+Összes válasz: ${results.totalResponses}, invalid-ráta: ${(results.invalidRate * 100).toFixed(1)}%, abstain-ráta: ${(results.abstainRate * 100).toFixed(1)}%
+
+${lines.join('\n\n')}
+
+KIMENET (magyarul, tömören, max ~500 szó):
+1. Kalibrációs kontextus: mondd ki explicit, hogy ehhez a futtatáshoz volt-e érvényes kalibrációs profil, elavult volt-e (és miért), vagy nem volt egyáltalán — ez a lenti pontok értelmezését korlátozza, nem csak háttérinformáció.
+2. Fő mintázatok kérdésenként (csak ahol az adat megbízható).
+3. Megbízhatósági figyelmeztetések (alacsony PC/RS, magas invalid, abstain-témák).
+4. Perszónák közti eltérések — a spurious-split fenntartással.
+5. Zárás: kötelező TSTR-emlékeztető (a szintetikus eredmény hipotézis, humán validáció nélkül döntésre nem használható).`
+}
+
+/**
+ * Several providers for one model id means several implementations answered:
+ * part of the run-to-run variation is routing, not the persona or the seed.
+ * Shared by both the persona-research and the calibration prompt (issue #35)
+ * — the observation is about the model's serving stack, not about personas,
+ * so it applies identically to a persona-free run.
+ */
+function buildProviderNote(providers: { provider: string; count: number }[]): string {
+  return providers.length > 1
+    ? `\n- FIGYELEM: ezt a futtatást ${providers.length} különböző szolgáltató szolgálta ki ugyanazzal a modell-azonosítóval (${providers
+        .map((p) => `${p.provider}: ${p.count}`)
+        .join(', ')}). A szolgáltatók eltérő kvantálással futtatják a modellt, ezért az ismétlési stabilitás (RS) romlásának egy része ROUTINGBÓL ered, nem a perszónából vagy a seedből — ezt az értelmezésnél kötelező jelezned.`
+    : ''
+}
+
+/**
+ * The per-question data lines, shared verbatim by both the persona-research
+ * and the calibration prompt (issue #35). For a calibration run every
+ * question falls through the `aggregatedResponseCount === 0` + `q.baseline`
+ * branch below (issue #32 gave the control arm its own named group there
+ * already) — there is nothing calibration-specific to add to this part of
+ * the text, only to the framing AROUND it, which each caller supplies.
+ */
+function buildQuestionLines(results: RunResults): string[] {
+  return results.questions.map((q) => {
     const multi = q.elicitationMode === 'multi_choice'
     const legacyNote =
       q.legacyElicitationCount > 0
@@ -104,16 +171,45 @@ export function buildEvaluationPrompt(
   Invalid: ${q.invalidCount}/${q.totalResponses}, Abstain: ${q.abstainCount}/${q.totalResponses}
   ${stabilityLabel}: ${fmt(q.positionConsistency)}, Ismétlési stabilitás (RS): ${fmt(q.repetitionStability)}`
   })
+}
 
-  return `Egy szintetikus AI-perszóna kérdőíves kutatás ("${runName}") lefutott eredményeit kell kiértékelned kutatói szemmel, magyarul.
+/**
+ * The calibration-run judge prompt (issue #35). A calibration run has NO
+ * persona rows at all — every response is the control arm — so this is a
+ * SEPARATE prompt, not a flag threaded through the persona-research one:
+ * every persona-shaped instruction (persona differences, persona effect vs.
+ * control, stereotyping caveat, "no calibration profile exists for this
+ * model") is either meaningless or actively misleading here, per the
+ * project's own reporter-visible incident (issue #35's linked run).
+ *
+ * What this run DOES measure — and what the judge is asked to describe
+ * instead — is the model's own default behaviour: where it places itself,
+ * how position-sensitive it is (PC/RS), and — treated as a first-class
+ * finding, not a data gap — where it declines to answer at all. A model
+ * that abstains on self-report demographic items when no persona was given
+ * is behaving CORRECTLY (it is not confabulating a life for itself); the
+ * project's own probe run measured a 28.8% abstain rate concentrated there
+ * (issue #35), and a judge unaware of this distinction would misread that
+ * as a quality problem with the run.
+ */
+function buildCalibrationEvaluationPrompt(
+  runName: string,
+  results: RunResults,
+  providers: { provider: string; count: number }[]
+): string {
+  const providerNote = buildProviderNote(providers)
+  const lines = buildQuestionLines(results)
+
+  return `Egy modell-kalibrációs próbafutás ("${runName}") lefutott eredményeit kell kiértékelned kutatói szemmel, magyarul.
+
+Ez a futás SZÁNDÉKOSAN nem tartalmaz perszónákat: minden válasz a kontroll-kar, vagyis azt méri, mit válaszol a modell alapból, amikor senki nem mondja meg neki, kinek a bőrébe bújjon (docs/MODEL-CALIBRATION.md). A futás célja maga a kalibráció: ebből az adatból — ha a minősége megfelelő — modell-profil rögzíthető, amihez a JÖVŐBENI perszónás futtatások eredményét viszonyítani lehet majd.
 
 FONTOS SZABÁLYOK:
 - Légy kritikus és tárgyilagos. NE dicsérd az eredményeket és NE adj udvariassági pozitív értékelést — a túlzó pozitivitás (Pollyanna-torzítás) ismert hibád, kerüld tudatosan.
 - Kizárólag az alábbi, kódból számolt adatokra támaszkodj; új számokat ne találj ki.
-- Ahol a pozíció-konzisztencia (PC) 0.7 alatt van, ott az adott kérdés eredményét KÖTELEZŐ megbízhatatlannak jelölnöd (a válasz a felsorolás sorrendjétől függött).
-- A perszónák közti éles különbségeket fenntartással kezeld: az LLM-ek a csoportkülönbségeket tipikusan 2-4x felnagyítják (spurious split kockázat).
-- Ahol van KONTROLL-KAR, ott a perszónás eredményt KÖTELEZŐ ahhoz KÉPEST értelmezni: ha egy perszóna divergenciája a zajszinten belül van, mondd ki, hogy ott a perszóna nem térítette el a modellt a saját alapértelmezésétől — az eredmény a modell tulajdonsága, nem a perszónáé.
-- Az abstain nem hiba, hanem bizonyítékhézag: jelezd, mely témákban nem volt a perszónáknak megalapozott válasza.
+- Ahol a pozíció-konzisztencia (PC) 0.7 alatt van, ott az adott kérdés eredményét KÖTELEZŐ megbízhatatlannak jelölnöd (a válasz a felsorolás sorrendjétől függött) — ez itt a modell SAJÁT pozíció-torzítását méri, nem egy perszónáét.
+- TILOS bármilyen állítást tenni a szereplők (perszónák) egymáshoz viszonyított eltéréséről vagy perszóna-hatásról: ebben a futásban EGYETLEN perszóna sincs, minden válasz a kontroll-kar, tehát az ilyen jellegű csoport-összehasonlítás témája fel sem merülhet. Amit itt mérsz, a modell SAJÁT alapértelmezése — sose írd le perszóna-összehasonlításként.
+- Az abstain itt KITÜNTETETT jelentőségű, és ALAPESETBEN NEM hiba: ha a tartózkodás önkép-jellegű, demográfiai kérdéseken (pl. kor, lakóhely, végzettség, anyagi helyzet) koncentrálódik, azt EREDMÉNYKÉNT mondd ki — a modell helyesen nem konfabulál demográfiát saját magának, amikor nincs kire vonatkoztatnia a választ. Csak akkor jelezd hiányosságként, ha a tartózkodás egyenletesen szóródik a kérdések között, vagy olyan kérdéseken is megjelenik, amelyek nem önkép-jellegűek.
 ${providerNote}${
     results.duplicateResponseCount > 0
       ? `\n- FIGYELEM: ${results.duplicateResponseCount} válasz ugyanazt a cellát ismételte meg (adatgyűjtési anomália). Az aggregátum cellánként egy mérést használ, de a gyűjtés nem volt tiszta — ezt az értelmezésnél jelezd.`
@@ -121,7 +217,10 @@ ${providerNote}${
   }
 - A többválaszos kérdések számai opciónkénti FÜGGETLEN támogatottságok: ezeket tilos egyválaszos kérdések eloszlásaival közvetlenül összehasonlítani, és nem összegződnek 100%-ra. Ott a PC/RS a kiválasztott opció-HALMAZOK átfedését méri (nem egyetlen topválasz egyezését), tehát szigorúbb mutató — ezt vedd figyelembe az értelmezésnél.
 - Ahol az adat "nincs értékelhető válasz", ott TILOS bármilyen tartalmi állítást tenni a kérdésről; csak a hiányt nevezd meg.
-${calibrationSection}
+
+KALIBRÁCIÓS KONTEXTUS:
+- Ehhez a futáshoz nincs — és a jellegéből adódóan nem is kell hogy legyen — korábbi kalibrációs profil, amihez viszonyítani kellene: ez a futás MAGA a leendő profil forrása, nem egy profilhoz mért eredmény. Ezt NE írd le hiányosságként.
+- Ha az adatok minősége megfelelő (elegendő értékelhető cella, nem túl magas invalid-ráta, elfogadható PC/RS a nem-önkép kérdéseken), mondd ki explicit: "Ebből a futásból rögzíthető a profil."
 
 ADATOK:
 Összes válasz: ${results.totalResponses}, invalid-ráta: ${(results.invalidRate * 100).toFixed(1)}%, abstain-ráta: ${(results.abstainRate * 100).toFixed(1)}%
@@ -129,11 +228,11 @@ ADATOK:
 ${lines.join('\n\n')}
 
 KIMENET (magyarul, tömören, max ~500 szó):
-1. Kalibrációs kontextus: mondd ki explicit, hogy ehhez a futtatáshoz volt-e érvényes kalibrációs profil, elavult volt-e (és miért), vagy nem volt egyáltalán — ez a lenti pontok értelmezését korlátozza, nem csak háttérinformáció.
-2. Fő mintázatok kérdésenként (csak ahol az adat megbízható).
-3. Megbízhatósági figyelmeztetések (alacsony PC/RS, magas invalid, abstain-témák).
-4. Perszónák közti eltérések — a spurious-split fenntartással.
-5. Zárás: kötelező TSTR-emlékeztető (a szintetikus eredmény hipotézis, humán validáció nélkül döntésre nem használható).`
+1. Kalibrációs kontextus: mondd ki, hogy ez egy perszóna nélküli kalibrációs futás, aminek nincs — és nem is kell hogy legyen — korábbi profilja; és hogy az adatok minősége alapján rögzíthető-e belőle profil.
+2. A modell alapértelmezett válaszadói profilja kérdésenként: hova helyezi el magát, milyen az érték-/bizalmi mintázata — csak ahol az adat megbízható.
+3. Megbízhatósági figyelmeztetések: alacsony PC/RS (a modell saját pozíció-érzékenysége, nem perszónáé), magas invalid-ráta.
+4. Abstain-mintázat: hol tartózkodott a modell, és — ha az önkép-jellegű, demográfiai kérdéseken koncentrálódik — miért EREDMÉNY ez, nem hiba.
+5. Zárás: ez a modell alapértelmezett viselkedésének mérése, nem emberi minta; önmagában nem helyettesíti a humán validációt (TSTR-elv).`
 }
 
 function fmt(v: number | null): string {

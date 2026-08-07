@@ -98,7 +98,7 @@ function overviewModelWarning() {
   // tooltip text is single-model and describes only "missing" ("still no
   // measurement") — appended to a mixed missing+stale list it misdescribes a
   // stale profile, which DOES have a measurement, merely an outdated one.
-  return `<p class="detail-note detail-note-warning">Kalibrálatlan vagy elavult profilú modell(ek): ${names}. Kalibrálatlan modellnél nincs mihez viszonyítani a perszóna hatását a modell alapértelmezett válaszához képest; elavult profilnál van mérés, de az már nem érvényes a jelenlegi összeállításra.</p>`;
+  return `<p class="detail-note detail-note-warning">Figyelem: kalibrálatlan vagy elavult profilú modell(ek): ${names}. Nincs mihez viszonyítani a perszóna hatását a modell alapértelmezett válaszához képest; az eredmények így önmagukban olvasandók. A kalibráláshoz nyisd meg a Modellek fület.</p>`;
 }
 
 /**

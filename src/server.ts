@@ -14,7 +14,7 @@ import { buildEvaluationPrompt } from './lib/evaluate.js'
 import { toCsv } from './lib/csv.js'
 import { registerInterviewRoutes } from './interviews.js'
 import { registerCatalogRoutes } from './catalog.js'
-import { registerModelProfileRoutes, findProfileForRun } from './model-profiles.js'
+import { registerModelProfileRoutes, findProfileForRun, isCalibrationRun } from './model-profiles.js'
 import {
   checkCredentials,
   createSessionToken,
@@ -116,7 +116,8 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
         .prepare('SELECT provider, COUNT(*) c FROM responses WHERE run_id = ? AND provider IS NOT NULL GROUP BY provider')
         .all(runId) as unknown as { provider: string; c: number }[]
     ).map((r) => ({ provider: r.provider, count: r.c }))
-    const model = (JSON.parse(run.config_json) as RunConfig).model
+    const runConfigForEvaluation = JSON.parse(run.config_json) as RunConfig
+    const model = runConfigForEvaluation.model
     // Issue #17 M3: judged against the stack THIS RUN'S OWN responses were
     // served by (src/model-profiles.ts's findProfileForRun — see its docstring
     // for why "today's global stack" is the wrong comparison, review HIGH #1),
@@ -133,7 +134,15 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
     } catch {
       activeProfile = null
     }
-    const prompt = buildEvaluationPrompt(run.name, results, { providers: evaluationProviders, profile: activeProfile })
+    // Issue #35: a calibration run (config_json.calibration === true) has no
+    // personas at all — buildEvaluationPrompt needs to know this to pick the
+    // calibration-framed prompt instead of the persona-research one. Detected
+    // via isCalibrationRun (src/model-profiles.ts), not the run name.
+    const prompt = buildEvaluationPrompt(run.name, results, {
+      providers: evaluationProviders,
+      profile: activeProfile,
+      calibration: isCalibrationRun(runConfigForEvaluation)
+    })
 
     // Coverage snapshot, taken BEFORE the model call: the run keeps recording
     // responses during those seconds, and if it finishes meanwhile, a snapshot

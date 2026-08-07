@@ -450,7 +450,7 @@ function renderEvaluationProfileNote(ev) {
     return `<p class="detail-note">Kalibrációs profil a kiértékelés idején: ${calibrationStatusChip(ev.model_profile_status)}${detail}</p>`;
   }
   if (ev.model_profile_status === 'missing') {
-    return `<p class="detail-note detail-note-warning">Nincs kalibrációs profil ehhez a modellhez: ez a kiértékelés nem tudta a perszóna-eredményeket a modell mért alapértelmezéséhez viszonyítani.</p>`;
+    return `<p class="detail-note detail-note-warning">Nincs kalibrációs profil ehhez a modellhez. Az eredmények így önmagukban olvasandók; nem tudjuk megmondani, mennyi a modell alapértelmezett viselkedése és mennyi a perszóna hatása. A kalibrációs profil rögzítéséhez nyisd meg a Modellek fület.</p>`;
   }
   // model_profile_status is null/undefined: a pre-M3 row, where whether a
   // profile existed simply was not recorded — UNKNOWN, not a definite "none".
