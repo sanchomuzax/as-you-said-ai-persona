@@ -118,7 +118,7 @@
         {
           "text": "How concerned are you about how companies use your personal data?",
           "options": ["Not concerned at all", "Slightly concerned", "Moderately concerned", "Very concerned", "It determines which services I use"],
-          "scaleType": "ordinal_5",
+          "scaleType": "ordinal",
           "scaleDirection": "ascending"
         },
         {
