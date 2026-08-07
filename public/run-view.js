@@ -288,6 +288,7 @@ async function loadOverviewTab(runId) {
         </div>
         <details class="persona-breakdown-wrap">
           <summary>Perszóna szintű bontás</summary>
+          ${renderBaselineOnlyNotice(q)}
           ${renderPersonaBreakdown(q)}
         </details>
       </div>

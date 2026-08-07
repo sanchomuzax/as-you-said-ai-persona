@@ -102,7 +102,11 @@ export function computeRunResults(db: Db, runId: string): RunResults {
     const mode = elicitationModeFor(q.scale_type)
     const allRows = responses.filter((r) => r.question_id === q.id)
     // The control arm answers the same question with no subject: it must never be
-    // averaged into the persona result, only compared against it.
+    // averaged into the persona result, only compared against it. But it is still
+    // a real, recorded response — issue #32: totalResponses/invalidCount/abstainCount
+    // below must count it, or a run whose rows are ALL baseline (persona_id IS NULL,
+    // e.g. a calibration run) reports 0/0/0 for every question while the run-level
+    // totals (computed from the unfiltered response set) still show the real count.
     const baselineRows = allRows.filter((r) => r.condition === 'baseline')
     const rows = allRows.filter((r) => r.condition !== 'baseline')
     const parsable = rows.filter((r) => r.is_valid === 1 && r.abstained === 0 && r.parsed_distribution_json)
@@ -150,9 +154,12 @@ export function computeRunResults(db: Db, runId: string): RunResults {
       elicitationMode: mode,
       legacyElicitationCount,
       aggregatedResponseCount: valid.length,
-      totalResponses: rows.length,
-      invalidCount: rows.filter((r) => r.is_valid === 0).length,
-      abstainCount: rows.filter((r) => r.abstained === 1).length,
+      // All rows for this question — persona AND control-arm — not just `rows`
+      // (persona-condition only): the control arm's own invalid/abstain rows are
+      // real evidence gaps too, and a baseline-only run must not report 0 here.
+      totalResponses: allRows.length,
+      invalidCount: allRows.filter((r) => r.is_valid === 0).length,
+      abstainCount: allRows.filter((r) => r.abstained === 1).length,
       aggregated,
       byPersona,
       positionConsistency: consistency(valid, (r) => `${r.persona_id}|${r.seed}`, mode),

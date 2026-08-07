@@ -187,6 +187,19 @@ function renderLegacyOnlyNotice(question) {
 }
 
 /**
+ * Issue #32: a question can have real, recorded responses and still show an
+ * empty persona aggregate — a calibration run (or any control-arm-only run)
+ * has NO persona rows at all, so `byPersona` is empty even though the control
+ * arm answered. That must never read as "no data" (the bug's exact symptom):
+ * say explicitly that this is the control arm, named, not silently dropped.
+ */
+function renderBaselineOnlyNotice(question) {
+  const hasPersonaData = Object.keys(question.byPersona || {}).length > 0;
+  if (hasPersonaData || !question.baseline) return '';
+  return `<p class="detail-note detail-note-warning">Ehhez a kérdéshez nincs perszónás válasz — csak a kontroll-kar (Kontroll — perszóna nélkül) válaszolt. Az alábbi eloszlás a modell mért alapértelmezése, nem perszóna-eredmény.</p>`;
+}
+
+/**
  * Prompt cache hit indicator. Shows percentage and token count only when
  * both cachedTokens and promptTokens are present and truthy (zero cache is noise).
  */

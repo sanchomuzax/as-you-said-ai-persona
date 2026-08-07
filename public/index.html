@@ -260,8 +260,14 @@
               <input type="text" id="questionnaireName" required>
             </div>
             <div class="form-group">
-              <label for="questionsText">Kérdések (üres sor választ el)</label>
-              <textarea id="questionsText" rows="8" placeholder="Kérdés 1?&#10;- Válasz A&#10;- Válasz B&#10;&#10;Kérdés 2?&#10;- Válasz X&#10;- Válasz Y"></textarea>
+              <label for="questionnaireEditor">Kérdések (üres sor választ el)</label>
+              <div id="questionnaireEditor" class="questionnaire-editor">
+                <div class="questionnaire-editor-input">
+                  <textarea id="questionsText" rows="8" placeholder="Kérdés 1?&#10;- Válasz A&#10;- Válasz B&#10;&#10;Kérdés 2?&#10;- Válasz X&#10;- Válasz Y"></textarea>
+                </div>
+                <div class="questionnaire-editor-pickers" id="questionnaireScalePickers"></div>
+              </div>
+              <div class="form-note" id="questionnaireModeHint">Szerkeszd a kérdéseket fent — a típusok és irányok alul jelennek meg.</div>
             </div>
             <button type="submit" class="btn btn-primary">Kérdőív hozzáadása</button>
           </form>
@@ -590,6 +596,7 @@
 
   <script src="format.js"></script>
   <script src="parsers.js"></script>
+  <script src="scale-picker.js"></script>
   <script src="version-diff.js"></script>
   <script src="markdown.js"></script>
   <script src="metrics.js"></script>

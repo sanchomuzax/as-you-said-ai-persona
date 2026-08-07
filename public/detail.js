@@ -316,8 +316,14 @@ function questionnaireVersionForm(questionnaire) {
         <input type="text" id="questionnaireVersionName" value="${escapeHtml(questionnaire.name)}" required>
       </div>
       <div class="form-group">
-        <label for="questionnaireVersionText" title="A kérdés végén szögletes zárójelben a kérdés típusa áll (pl. [multi_choice]). Ez dönti el, hogyan kérdezzük meg: többválaszosnál opciónkénti független valószínűséget kérünk. Ha törlöd, a mentés hibát jelez — típus nélkül nem tippelünk.">Kérdések (üres sor választ el; a típus a kérdés végén, szögletes zárójelben)</label>
-        <textarea id="questionnaireVersionText" rows="12">${escapeHtml(text)}</textarea>
+        <label for="questionnaireVersionText">Kérdések (üres sor választ el)</label>
+        <div class="questionnaire-editor">
+          <div class="questionnaire-editor-input">
+            <textarea id="questionnaireVersionText" rows="12">${escapeHtml(text)}</textarea>
+          </div>
+          <div class="questionnaire-editor-pickers" id="questionnaireVersionScalePickers"></div>
+        </div>
+        <div class="form-note">Szerkeszd a kérdéseket fent — a típusok és irányok alul jelennek meg.</div>
       </div>
       <div class="detail-edit-actions">
         <button type="submit" class="btn btn-primary btn-sm">Új verzió mentése</button>

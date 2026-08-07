@@ -538,4 +538,54 @@ describe('computeRunResults — baseline control arm', () => {
     expect(q.baseline).toBeNull()
     expect(q.byPersona[p1]!.baselineDivergence).toBeNull()
   })
+
+  /**
+   * Issue #32 (CRITICAL): a calibration run has NO persona rows at all — every
+   * response is `persona_id IS NULL`, `condition = 'baseline'`. The per-question
+   * aggregation used to filter those rows out entirely before computing
+   * totalResponses/invalidCount/abstainCount/byPersona, so a run that is 100%
+   * control-arm reported 0/0/0 for every question while the top-level
+   * `results.totalResponses` (computed before that filter) still showed the
+   * real count — the exact header/detail contradiction the reporter saw.
+   */
+  it('a baseline-only run (all rows persona_id NULL) produces non-empty per-question aggregates', () => {
+    insertArm({ condition: 'baseline', persona: null, dist: { '0': 0.9, '1': 0.1 }, seed: 0 })
+    insertArm({ condition: 'baseline', persona: null, dist: { '0': 0.7, '1': 0.3 }, seed: 1 })
+    db.prepare(
+      `INSERT INTO responses (id, run_id, persona_id, question_id, model_requested, temperature, seed,
+         permutation_json, prompt_rendered, raw_response, parsed_distribution_json, parsed_answer,
+         is_valid, abstained, condition)
+       VALUES (?,?,NULL,?,'m',1,2,?,'p','r',NULL,NULL,0,0,'baseline')`
+    ).run(randomUUID(), runId, qid, JSON.stringify([0, 1]))
+    db.prepare(
+      `INSERT INTO responses (id, run_id, persona_id, question_id, model_requested, temperature, seed,
+         permutation_json, prompt_rendered, raw_response, parsed_distribution_json, parsed_answer,
+         is_valid, abstained, condition)
+       VALUES (?,?,NULL,?,'m',1,3,?,'p','r',NULL,NULL,1,1,'baseline')`
+    ).run(randomUUID(), runId, qid, JSON.stringify([0, 1]))
+
+    const r = computeRunResults(db, runId)
+    expect(r.totalResponses).toBe(4)
+    const q = r.questions[0]!
+    expect(q.totalResponses).toBe(4)
+    expect(q.invalidCount).toBe(1)
+    expect(q.abstainCount).toBe(1)
+    expect(q.baseline).toBeTruthy()
+    expect(q.baseline![0]).toBeCloseTo(0.8)
+  })
+
+  /**
+   * Issue #32, point 2: the evaluation prompt itself must present the control
+   * arm as its own named group when a question has no persona rows at all —
+   * never as "no evaluable data" (the reporter's exact symptom) and never
+   * silently dropped.
+   */
+  it('presents the control arm as a named group in the evaluation prompt instead of "no evaluable data"', () => {
+    insertArm({ condition: 'baseline', persona: null, dist: { '0': 0.9, '1': 0.1 }, seed: 0 })
+    insertArm({ condition: 'baseline', persona: null, dist: { '0': 0.7, '1': 0.3 }, seed: 1 })
+    const prompt = buildEvaluationPrompt('R', computeRunResults(db, runId))
+    expect(prompt).not.toContain('Nincs értékelhető válasz')
+    expect(prompt).toContain('Kontroll — perszóna nélkül')
+    expect(prompt).toContain('Yes: 80.0%')
+  })
 })

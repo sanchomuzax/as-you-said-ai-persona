@@ -620,10 +620,73 @@ document.getElementById('personaForm')?.addEventListener('submit', async (e) => 
   }
 });
 
+// Render scale pickers when questionnaire textarea changes
+const questionsTextarea = document.getElementById('questionsText');
+if (questionsTextarea) {
+  questionsTextarea.addEventListener('input', () => {
+    renderQuestionnaireScalePickers('questionnaireScalePickers', questionsTextarea.value);
+  });
+  questionsTextarea.addEventListener('change', () => {
+    renderQuestionnaireScalePickers('questionnaireScalePickers', questionsTextarea.value);
+  });
+}
+
+/**
+ * Renders scale pickers for each question found in the textarea.
+ */
+function renderQuestionnaireScalePickers(containerId, questionText) {
+  const container = document.getElementById(containerId);
+  if (!container) return;
+
+  const parsed = parseQuestions(questionText);
+  if (parsed.length === 0) {
+    container.innerHTML = '';
+    return;
+  }
+
+  let html = '';
+  parsed.forEach((q, idx) => {
+    const picker = createScalePickerHtml(idx, q.scaleType, q.scaleDirection);
+    html += picker.html;
+  });
+
+  container.innerHTML = html;
+
+  // Attach listeners to all pickers
+  parsed.forEach((q, idx) => {
+    const picker = createScalePickerHtml(idx, q.scaleType, q.scaleDirection);
+    attachScalePickerListener(picker.typeSelectId, picker.explanationId);
+  });
+}
+
 document.getElementById('questionnaireForm')?.addEventListener('submit', async (e) => {
   e.preventDefault();
   try {
-    const questions = parseQuestions(document.getElementById('questionsText').value);
+    const textarea = document.getElementById('questionsText');
+    const parsed = parseQuestions(textarea.value);
+
+    // Reconstruct questions with scale types/directions from pickers
+    const questions = parsed.map((q, idx) => {
+      const typeSelect = document.getElementById(`scale-type-${idx}`);
+      const directionSelect = document.getElementById(`scale-direction-${idx}`);
+
+      const scaleType = typeSelect?.value || q.scaleType || 'categorical';
+      const scaleDirection = directionSelect?.value || q.scaleDirection || 'ascending';
+
+      // Validate the scale type
+      const validation = validateScaleMarker(scaleType);
+      if (!validation.isValid) {
+        throw new Error(validation.error);
+      }
+
+      return {
+        text: q.text,
+        options: q.options,
+        scaleType,
+        scaleDirection
+      };
+    });
+
     const projectId = document.getElementById('questionnaireProjectSelect').value;
     const body = {
       name: document.getElementById('questionnaireName').value,
@@ -634,6 +697,7 @@ document.getElementById('questionnaireForm')?.addEventListener('submit', async (
     }
     await apiCall('POST', '/api/questionnaires', body);
     document.getElementById('questionnaireForm').reset();
+    document.getElementById('questionnaireScalePickers').innerHTML = '';
     const url = projectId ? `/api/questionnaires?project=${projectId}` : '/api/questionnaires';
     const questionnaires = await apiCall('GET', url);
     state.questionnaires = questionnaires;

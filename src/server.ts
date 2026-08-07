@@ -507,6 +507,15 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
     const { id } = req.params as { id: string }
     const run = db.prepare('SELECT status FROM runs WHERE id = ?').get(id) as { status: string } | undefined
     if (!run) return reply.code(404).send({ success: false, error: 'A futtatás nem található' })
+    if (run.status === 'completed') {
+      return reply.code(400).send({
+        success: false,
+        error: 'Nem lehet leállítani egy már befejezett futtatást — elveszne a kalibrációs profilhoz szükséges "completed" állapot'
+      })
+    }
+    if (run.status === 'stopped') {
+      return reply.code(400).send({ success: false, error: 'A futtatás már le van állítva' })
+    }
     if (run.status === 'running') requestStop(id)
     else db.prepare("UPDATE runs SET status = 'stopped' WHERE id = ?").run(id)
     return { success: true }

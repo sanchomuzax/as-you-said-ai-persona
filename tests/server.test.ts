@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import type { FastifyInstance } from 'fastify'
-import { createDb } from '../src/db.js'
+import { createDb, type Db } from '../src/db.js'
 import { buildServer } from '../src/server.js'
 import type { ChatClient, ChatResult } from '../src/openrouter.js'
 import type { AppConfig } from '../src/config.js'
@@ -128,6 +128,71 @@ describe('restart recovery', () => {
     expect(rows.c).toBe(2)
     await restarted.close()
   })
+})
+
+// A completed run is the only thing a model-profile calibration can be built from
+// (POST /api/model-profiles rejects anything else). Stop must not be able to demote
+// a completed run to 'stopped' — that would silently destroy an already-paid-for
+// calibration with no undo. Same reasoning protects an already-stopped run.
+describe('POST /api/runs/:id/stop', () => {
+  let db: Db
+  let server: FastifyInstance
+  let c: { asys_session: string }
+
+  beforeEach(async () => {
+    db = createDb(':memory:')
+    server = buildServer({ db, config: testConfig, models: testModels, client: new StubClient() })
+    await server.ready()
+    c = await login(server)
+    db.prepare('INSERT INTO questionnaires (id, name) VALUES (?,?)').run('q1', 'Q')
+  })
+
+  afterEach(() => server.close())
+
+  function insertRun(id: string, status: string): void {
+    db.prepare("INSERT INTO runs (id, questionnaire_id, name, status, config_json) VALUES (?,?,?,?,?)").run(
+      id, 'q1', id, status, JSON.stringify({ model: 'm', temperature: 1, seeds: [0] })
+    )
+  }
+
+  function statusOf(id: string): string {
+    return (db.prepare('SELECT status FROM runs WHERE id = ?').get(id) as { status: string }).status
+  }
+
+  it('refuses to stop a completed run and leaves it completed', async () => {
+    insertRun('r1', 'completed')
+    const res = await server.inject({ method: 'POST', url: '/api/runs/r1/stop', cookies: c })
+    expect(res.statusCode).toBe(400)
+    expect(res.json().success).toBe(false)
+    expect(statusOf('r1')).toBe('completed')
+  })
+
+  it('refuses to stop an already-stopped run and leaves it stopped', async () => {
+    insertRun('r2', 'stopped')
+    const res = await server.inject({ method: 'POST', url: '/api/runs/r2/stop', cookies: c })
+    expect(res.statusCode).toBe(400)
+    expect(res.json().success).toBe(false)
+    expect(statusOf('r2')).toBe('stopped')
+  })
+
+  it('still allows stopping a running run', async () => {
+    insertRun('r3', 'running')
+    const res = await server.inject({ method: 'POST', url: '/api/runs/r3/stop', cookies: c })
+    expect(res.statusCode).toBe(200)
+    expect(res.json().success).toBe(true)
+  })
+
+  it.each(['pending', 'paused', 'failed', 'budget_exhausted'])(
+    'still allows stopping a %s run',
+    async (initialStatus) => {
+      const id = `r-${initialStatus}`
+      insertRun(id, initialStatus)
+      const res = await server.inject({ method: 'POST', url: `/api/runs/${id}/stop`, cookies: c })
+      expect(res.statusCode).toBe(200)
+      expect(res.json().success).toBe(true)
+      expect(statusOf(id)).toBe('stopped')
+    }
+  )
 })
 
 describe('projects', () => {

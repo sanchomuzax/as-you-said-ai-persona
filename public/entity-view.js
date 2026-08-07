@@ -8,6 +8,37 @@ const ENTITY_KIND_LABELS = {
   questionnaires: 'Kérdőív'
 };
 
+/**
+ * Reconstructs questions with scale types/directions from the textarea and pickers.
+ * Used in the version edit form to ensure scale types are properly captured.
+ */
+function reconstructQuestionsWithScalePickers(textareaId, pickersContainerId) {
+  const textarea = document.getElementById(textareaId);
+  if (!textarea) return [];
+
+  const parsed = parseQuestions(textarea.value);
+  return parsed.map((q, idx) => {
+    const typeSelect = document.getElementById(`scale-type-${idx}`);
+    const directionSelect = document.getElementById(`scale-direction-${idx}`);
+
+    const scaleType = typeSelect?.value || q.scaleType || 'categorical';
+    const scaleDirection = directionSelect?.value || q.scaleDirection || 'ascending';
+
+    // Validate the scale type
+    const validation = validateScaleMarker(scaleType);
+    if (!validation.isValid) {
+      throw new Error(validation.error);
+    }
+
+    return {
+      text: q.text,
+      options: q.options,
+      scaleType,
+      scaleDirection
+    };
+  });
+}
+
 /** Loads the entity fresh from the API: a detail view may be opened straight from a URL. */
 async function fetchEntity(kind, id) {
   // Every kind has a by-id endpoint. For personas and questionnaires it also
@@ -142,7 +173,7 @@ async function saveNewVersion(kind, form) {
           }
         : {
             name: document.getElementById('questionnaireVersionName').value,
-            questions: parseQuestions(document.getElementById('questionnaireVersionText').value)
+            questions: reconstructQuestionsWithScalePickers('questionnaireVersionText', 'questionnaireVersionScalePickers')
           };
     const sourceId = kind === 'personas' ? form.dataset.personaId : form.dataset.questionnaireId;
     const created = await apiCall('POST', `/api/${kind}/${encodeURIComponent(sourceId)}/versions`, body);
@@ -266,6 +297,34 @@ function toggleVersionForm(formId, buttonAction, show) {
   if (!form || !button) return;
   form.style.display = show ? 'block' : 'none';
   button.style.display = show ? 'none' : 'inline-block';
+
+  // When showing a questionnaire version form, render scale pickers and attach listeners
+  if (show && formId === 'questionnaireVersionForm') {
+    const textarea = document.getElementById('questionnaireVersionText');
+    const pickersContainer = document.getElementById('questionnaireVersionScalePickers');
+    if (textarea && pickersContainer) {
+      renderQuestionnaireScalePickers('questionnaireVersionScalePickers', textarea.value);
+      attachQuestionnaireVersionFormListeners();
+    }
+  }
+}
+
+/**
+ * Attach scale picker listeners to the questionnaire version form textarea.
+ * Called once to avoid duplicate listeners.
+ */
+function attachQuestionnaireVersionFormListeners() {
+  const textarea = document.getElementById('questionnaireVersionText');
+  if (!textarea || textarea.dataset.scalepickerListenerAttached === 'true') return;
+
+  textarea.addEventListener('input', () => {
+    renderQuestionnaireScalePickers('questionnaireVersionScalePickers', textarea.value);
+  });
+  textarea.addEventListener('change', () => {
+    renderQuestionnaireScalePickers('questionnaireVersionScalePickers', textarea.value);
+  });
+
+  textarea.dataset.scalepickerListenerAttached = 'true';
 }
 
 document.getElementById('entityDetailBody')?.addEventListener('submit', (e) => {

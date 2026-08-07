@@ -25,6 +25,7 @@ const api = loadPublicScript<{
   renderMetricChips: (q: QuestionLike) => string
   runStatChips: (s: Record<string, number>) => string
   renderLegacyOnlyNotice: (q: { legacyElicitationCount?: number; aggregatedResponseCount?: number }) => string
+  renderBaselineOnlyNotice: (q: { byPersona?: Record<string, unknown>; baseline?: number[] | null }) => string
   renderCacheChip: (stats: { cachedTokens?: number; promptTokens?: number }) => string
   renderPartialEvaluationChip: (evaluation: {
     run_status?: string
@@ -38,10 +39,10 @@ const api = loadPublicScript<{
   TOOLTIPS: Record<string, string>
 }>(
   ['format.js', 'metrics.js'],
-  '{ escapeHtml, formatNumber, formatMetric, formatDateTime, statusLabel, statusTooltip, renderMetricChips, runStatChips, renderLegacyOnlyNotice, renderCacheChip, renderPartialEvaluationChip, renderModelCell, renderProviderChip, renderDuplicateNotice, TOOLTIPS }'
+  '{ escapeHtml, formatNumber, formatMetric, formatDateTime, statusLabel, statusTooltip, renderMetricChips, runStatChips, renderLegacyOnlyNotice, renderBaselineOnlyNotice, renderCacheChip, renderPartialEvaluationChip, renderModelCell, renderProviderChip, renderDuplicateNotice, TOOLTIPS }'
 )
 
-const { escapeHtml, formatNumber, formatMetric, formatDateTime, statusLabel, statusTooltip, renderMetricChips, runStatChips, renderLegacyOnlyNotice, renderCacheChip, renderPartialEvaluationChip, renderModelCell, renderProviderChip, renderDuplicateNotice, TOOLTIPS } = api
+const { escapeHtml, formatNumber, formatMetric, formatDateTime, statusLabel, statusTooltip, renderMetricChips, runStatChips, renderLegacyOnlyNotice, renderBaselineOnlyNotice, renderCacheChip, renderPartialEvaluationChip, renderModelCell, renderProviderChip, renderDuplicateNotice, TOOLTIPS } = api
 
 describe('escapeHtml', () => {
   it('escapes every character that could break out of text or attribute context', () => {
@@ -185,6 +186,24 @@ describe('renderLegacyOnlyNotice', () => {
   it('stays out of the way when there is something to aggregate', () => {
     expect(renderLegacyOnlyNotice({ legacyElicitationCount: 336, aggregatedResponseCount: 12 })).toBe('')
     expect(renderLegacyOnlyNotice({ legacyElicitationCount: 0, aggregatedResponseCount: 0 })).toBe('')
+  })
+})
+
+// Issue #32: a calibration (control-arm-only) question has an empty byPersona
+// but a populated baseline — that must read as a named control-arm group, not
+// as "no data".
+describe('renderBaselineOnlyNotice', () => {
+  it('names the control arm when a question has no persona data but does have a baseline', () => {
+    const html = renderBaselineOnlyNotice({ byPersona: {}, baseline: [0.8, 0.2] })
+    expect(html).toContain('Kontroll — perszóna nélkül')
+  })
+
+  it('stays out of the way when persona data exists', () => {
+    expect(renderBaselineOnlyNotice({ byPersona: { p1: {} }, baseline: [0.8, 0.2] })).toBe('')
+  })
+
+  it('stays out of the way when there is no baseline either (truly nothing to show)', () => {
+    expect(renderBaselineOnlyNotice({ byPersona: {}, baseline: null })).toBe('')
   })
 })
 

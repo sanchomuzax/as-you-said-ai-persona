@@ -56,6 +56,20 @@ export function buildEvaluationPrompt(
     // Zero usable responses must never be printed as zero percentages: the judge
     // would read a measured "nobody picked this" where nothing was measured.
     if (q.aggregatedResponseCount === 0) {
+      // Issue #32: a calibration (or any control-arm-only) run has NO persona
+      // rows at all, so aggregatedResponseCount is legitimately 0 — but the
+      // control arm itself DID answer, and that must never read as "no data".
+      // It gets its own named group here, never folded into a persona result
+      // and never silently dropped.
+      if (q.baseline) {
+        const baselineDist = q.baseline
+          .map((p, i) => `${q.options[i]}: ${(p * 100).toFixed(1)}%`)
+          .join(', ')
+        return `Kérdés: ${q.text}
+  Nincs perszónás válasz ehhez a kérdéshez (a futtatásnak nincs perszóna-kara, vagy egyik sem adott értékelhető választ).
+  Kontroll — perszóna nélkül: ${baselineDist}${legacyNote}
+  Invalid: ${q.invalidCount}/${q.totalResponses}, Abstain: ${q.abstainCount}/${q.totalResponses}`
+      }
       return `Kérdés: ${q.text}
   Nincs értékelhető válasz ehhez a kérdéshez.${legacyNote}
   Invalid: ${q.invalidCount}/${q.totalResponses}, Abstain: ${q.abstainCount}/${q.totalResponses}`
