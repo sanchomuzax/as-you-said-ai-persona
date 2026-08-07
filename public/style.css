@@ -204,6 +204,55 @@ body {
   gap: 12px;
 }
 
+/* Context sidebar (issue #19): active project, personas, running measurement,
+   token budget — a left column next to the tabs/content, visible on every tab. */
+.app-body {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+.app-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.context-sidebar {
+  width: 260px;
+  flex-shrink: 0;
+  padding: 20px 16px;
+  background: var(--color-bg-secondary);
+  border-right: 1px solid var(--color-border);
+  overflow-y: auto;
+}
+
+.context-sidebar-section {
+  margin-bottom: 24px;
+}
+
+.context-sidebar-section h3 {
+  font-size: 13px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--color-text-secondary);
+  margin-bottom: 10px;
+}
+
+.context-sidebar-section select {
+  width: 100%;
+}
+
+.context-sidebar-list .list-item {
+  padding: 10px 12px;
+}
+
+.context-sidebar-run .progress-bar {
+  margin: 6px 0;
+}
+
 /* Tabs */
 .tabs {
   display: flex;
@@ -642,6 +691,13 @@ body {
   50% { opacity: 0.4; transform: scale(1.4); }
 }
 
+/* Overview tab (issue #20) quick-action row */
+.overview-quick-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+}
+
 /* Runs Dashboard Grid */
 .runs-grid {
   display: grid;
@@ -1021,6 +1077,19 @@ body {
 
 /* Responsive */
 @media (max-width: 768px) {
+  /* Narrow viewport: the sidebar goes above the tabs/content instead of
+     beside them, so it never squeezes the main layout into a sliver. */
+  .app-body {
+    flex-direction: column;
+  }
+
+  .context-sidebar {
+    width: 100%;
+    border-right: none;
+    border-bottom: 1px solid var(--color-border);
+    max-height: 40vh;
+  }
+
   .app-header {
     flex-direction: column;
     gap: 12px;

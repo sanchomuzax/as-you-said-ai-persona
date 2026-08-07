@@ -39,10 +39,12 @@ const RUN_PROGRESS = {
   avgLatencyMs: 90,
   usage: { promptTokens: 100, completionTokens: 30, totalTokens: 130, cachedTokens: 0, costUsd: 0.002 }
 }
+// The server only ever emits byScope: { run, interview } (src/lib/budget.ts's
+// usageByScope()) — there is no "measurement" scope key.
 const BUDGET = {
   global: { totalTokens: 5000, costUsd: 0.5 },
   byScope: {
-    measurement: { totalTokens: 4000, costUsd: 0.4 },
+    run: { totalTokens: 4000, costUsd: 0.4 },
     interview: { totalTokens: 1000, costUsd: 0.1 }
   },
   limits: { globalBudget: 100000, perRunBudget: 0 }
@@ -229,11 +231,168 @@ describe('token budget', () => {
       '/api/questionnaires',
       '/api/runs',
       '/api/interviews',
-      '/api/budget'
+      '/api/budget',
+      // Fetched at boot by refreshModelList() (public/model-view.js), unrelated
+      // to the sidebar — predates issue #19. Left out of the "no new endpoint"
+      // check would fail the test for the wrong reason.
+      '/api/model-profiles'
     ]
     const unexpected = dom.calls
       .map((c) => c.url.split('?')[0]!)
       .filter((path) => !KNOWN.some((known) => path === known || path.startsWith(known + '/')))
     expect(unexpected).toEqual([])
+  })
+
+  // Code-review defect #7: on a failed fetch, updateBudgetBar's .catch() never
+  // calls renderContextSidebarBudget — the section is stuck on its initial
+  // "Betöltés..." placeholder forever, unlike the header widget, which degrades
+  // to "—".
+  it('degrades to a stated unknown instead of being stuck on Betöltés... when /api/budget fails (defect #7)', async () => {
+    dom = loadAppDom({ routes: routes({ 'GET /api/runs': [], 'GET /api/budget': undefined }) })
+    await dom.boot()
+    const budgetSection = dom.document.getElementById('contextSidebarBudget')!.textContent!
+    expect(budgetSection).not.toMatch(/betöltés/i)
+  })
+})
+
+// Code-review defect #2: focus-return.js's restoreDetailFocus uses
+// document.querySelector, which matches the FIRST element in document order.
+// The sidebar (personas) and the overview (runs) now render rows carrying the
+// exact same data-entity-id / data-run-card values EARLIER in the document
+// than #personasList / #runsList — so closing a detail opened from the real
+// list silently focuses the sidebar/overview's copy instead.
+describe('focus return is not hijacked by a duplicate row elsewhere in the DOM (code-review defect #2)', () => {
+  it('returns focus to the row inside #personasList, not the sidebar copy', async () => {
+    dom = loadAppDom({
+      routes: routes({
+        'GET /api/personas/per1': PERSONA,
+        'GET /api/personas/per1/versions': [PERSONA]
+      })
+    })
+    await dom.boot()
+    await selectProject(dom, 'personaProjectSelect', 'p1')
+    // Both containers now render the identical data-entity-id — that duplication
+    // is the precondition for the bug, not something to work around.
+    expect(dom.document.querySelector('#contextSidebarPersonas [data-entity-id="per1"]')).not.toBeNull()
+    dom.document.querySelector('#personasList [data-entity-id="per1"]')!.click()
+    await dom.settle()
+    dom.document.getElementById('entityDetailBackBtn')!.click()
+    await dom.settle()
+
+    const listRow = dom.document.querySelector('#personasList [data-entity-id="per1"]')
+    const sidebarRow = dom.document.querySelector('#contextSidebarPersonas [data-entity-id="per1"]')
+    expect(dom.document.activeElement).toBe(listRow)
+    expect(dom.document.activeElement).not.toBe(sidebarRow)
+  })
+
+  it('returns focus to the card inside #runsList, not the overview copy', async () => {
+    const paused = {
+      id: 'r1',
+      name: 'Szünetel',
+      status: 'paused',
+      questionnaire_id: 'qn1',
+      config_json: JSON.stringify({ model: 'm1', temperature: 1, seeds: [0] }),
+      response_count: 1,
+      invalid_count: 0,
+      created_at: '2026-08-06 10:00:00'
+    }
+    dom = loadAppDom({
+      routes: routes({
+        'GET /api/runs': [paused],
+        'GET /api/runs/r1/progress': {
+          status: 'paused',
+          providers: [],
+          staleVersions: { questionnaire: null, personas: [] },
+          totalCells: 4,
+          done: 1,
+          invalid: 0,
+          abstained: 0,
+          avgLatencyMs: 0,
+          usage: {}
+        },
+        'GET /api/runs/r1': { run: paused, responses: [], usage: {}, staleVersions: { questionnaire: null, personas: [] } },
+        'GET /api/runs/r1/results': {
+          totalResponses: 0,
+          cellIndexPresent: true,
+          invalidCount: 0,
+          abstainedCount: 0,
+          duplicateResponseCount: 0,
+          questions: [],
+          personas: []
+        },
+        'GET /api/runs/r1/evaluations': []
+      })
+    })
+    await dom.boot()
+    // 'paused' is a stalled status, so the overview's card duplicates this one.
+    expect(dom.document.querySelector('#overviewRunningList [data-run-card="r1"]')).not.toBeNull()
+    dom.document.querySelector('#runsList [data-run-card="r1"]')!.click()
+    await dom.settle()
+    dom.document.getElementById('runDetailBackBtn')!.click()
+    await dom.settle()
+
+    const listCard = dom.document.querySelector('#runsList [data-run-card="r1"]')
+    const overviewCard = dom.document.querySelector('#overviewRunningList [data-run-card="r1"]')
+    expect(dom.document.activeElement).toBe(listCard)
+    expect(dom.document.activeElement).not.toBe(overviewCard)
+  })
+})
+
+// Code-review defects #5/#6: the sidebar's own project-select handler
+// (context-sidebar.js) copied runProjectSelect's change handler, which never
+// touched the interview list — and on CLEARING the project, only resets
+// runPersonas' checkboxes, never repainting #personasList or #interviewPersona.
+describe('sidebar project switch keeps every dependent list in sync', () => {
+  it('requests the interview list for the newly selected project (defect #5)', async () => {
+    dom = loadAppDom({ routes: routes() })
+    await dom.boot()
+    const before = dom.calls.length
+    const select = dom.document.querySelector('#contextSidebar select')!
+    select.value = 'p1'
+    select.dispatchEvent(new dom.window.Event('change', { bubbles: true }))
+    await dom.settle()
+    const urls = dom.calls.slice(before).map((c) => c.url)
+    expect(urls.some((u) => u.startsWith('/api/interviews?project=p1'))).toBe(true)
+  })
+
+  it('clears stale personas from #personasList and #interviewPersona when the project is cleared (defect #6)', async () => {
+    dom = loadAppDom({ routes: routes() })
+    await dom.boot()
+    const select = dom.document.querySelector('#contextSidebar select')!
+    select.value = 'p1'
+    select.dispatchEvent(new dom.window.Event('change', { bubbles: true }))
+    await dom.settle()
+    expect(dom.document.getElementById('personasList')!.textContent).toContain('Anna')
+    expect(dom.document.getElementById('interviewPersona')!.textContent).toContain('Anna')
+
+    select.value = ''
+    select.dispatchEvent(new dom.window.Event('change', { bubbles: true }))
+    await dom.settle()
+
+    expect(dom.document.getElementById('personasList')!.textContent).not.toContain('Anna')
+    expect(dom.document.getElementById('interviewPersona')!.textContent).not.toContain('Anna')
+  })
+})
+
+// Code-review defect #8: renderContextSidebarRunning unconditionally reassigns
+// innerHTML on every poll tick, even when the data has not changed — which
+// destroys and rebuilds the focused row's DOM node, and with it, focus itself.
+describe('the running-measurement region does not blow away focus on an unchanged poll (code-review defect #8)', () => {
+  it('keeps focus on the row, and leaves the markup untouched, across a poll with identical data', async () => {
+    dom = loadAppDom({ routes: routes({ 'GET /api/runs': [RUNNING_RUN], 'GET /api/runs/r1/progress': RUN_PROGRESS }) })
+    await dom.boot()
+    const container = dom.document.getElementById('contextSidebarRunning')!
+    const before = container.innerHTML
+    const row = dom.document.querySelector('#contextSidebarRunning [data-run="r1"]')!
+    row.focus()
+    expect(dom.document.activeElement).toBe(row)
+
+    const w = dom.window as unknown as { pollRunningProgress: (includeAll?: boolean) => Promise<void> }
+    await w.pollRunningProgress(true)
+    await dom.settle()
+
+    expect(container.innerHTML).toBe(before)
+    expect(row.isConnected).toBe(true)
+    expect(dom.document.activeElement).toBe(row)
   })
 })

@@ -50,9 +50,49 @@
       </div>
     </header>
 
+    <div class="app-body">
+      <!-- Context sidebar (issue #19): active project, its personas, the one
+           running measurement and the token budget — visible on every tab.
+           Built by context-sidebar.js from state/endpoints the app already
+           fetches; see app.js (selectProjectEverywhere, updateProjectDropdowns)
+           and runs-list.js (pollRunningProgress) for the data it rides on. -->
+      <aside id="contextSidebar" class="context-sidebar" aria-label="Kontextus: aktív projekt, perszónák, futó mérés, token-keret">
+        <div class="context-sidebar-section">
+          <label for="contextSidebarProjectSelect">Aktív projekt</label>
+          <select id="contextSidebarProjectSelect">
+            <option value="">-- Válassz projektet --</option>
+          </select>
+        </div>
+
+        <div class="context-sidebar-section">
+          <h3>Perszónák</h3>
+          <div id="contextSidebarPersonas" class="context-sidebar-list">
+            <p class="placeholder">Válassz projektet.</p>
+          </div>
+        </div>
+
+        <div class="context-sidebar-section">
+          <h3>Futó mérés</h3>
+          <!-- Status and progress change while the researcher is on another tab;
+               a screen reader is otherwise never told that anything moved. -->
+          <div id="contextSidebarRunning" aria-live="polite">
+            <p class="detail-note">Nincs futó mérés.</p>
+          </div>
+        </div>
+
+        <div class="context-sidebar-section">
+          <h3>Token-keret</h3>
+          <div id="contextSidebarBudget">
+            <p class="placeholder">Betöltés...</p>
+          </div>
+        </div>
+      </aside>
+
+      <div class="app-main">
     <!-- Tabs -->
     <nav class="tabs">
-      <button class="tab-btn active" data-tab="projects">Projektek</button>
+      <button class="tab-btn active" data-tab="overview">Áttekintés</button>
+      <button class="tab-btn" data-tab="projects">Projektek</button>
       <button class="tab-btn" data-tab="personas">Perszónák</button>
       <button class="tab-btn" data-tab="questionnaires">Kérdőívek</button>
       <button class="tab-btn" data-tab="runs">Futtatások</button>
@@ -62,8 +102,41 @@
 
     <!-- Tab Content -->
     <main class="tab-content">
+      <!-- Overview Tab (issue #20): the default landing tab — running/stalled
+           measurements, recently completed runs, and warnings (uncalibrated
+           models, stale-version runs, near-exhausted budget). Built entirely
+           from data the app already fetches; see public/overview.js. -->
+      <div id="tab-overview" class="tab-pane active">
+        <div class="tab-section">
+          <h2>Futó és megszakadt mérések</h2>
+          <div id="overviewRunningList" class="runs-grid">
+            <p class="placeholder">Betöltés...</p>
+          </div>
+        </div>
+        <div class="tab-section">
+          <h2>Legutóbbi befejezett futtatások</h2>
+          <div id="overviewRecentRuns" class="list-container">
+            <p class="placeholder">Betöltés...</p>
+          </div>
+        </div>
+        <div class="tab-section">
+          <h2>Figyelmeztetések</h2>
+          <div id="overviewWarnings">
+            <p class="placeholder">Betöltés...</p>
+          </div>
+        </div>
+        <div class="tab-section">
+          <h2>Gyors belépés</h2>
+          <div class="overview-quick-actions">
+            <button type="button" id="overviewQuickRun" class="btn btn-primary">+ Új futtatás</button>
+            <button type="button" id="overviewQuickInterview" class="btn btn-primary">+ Új interjú</button>
+            <button type="button" id="overviewQuickCalibration" class="btn btn-secondary">Kalibráció</button>
+          </div>
+        </div>
+      </div>
+
       <!-- Projects Tab -->
-      <div id="tab-projects" class="tab-pane active">
+      <div id="tab-projects" class="tab-pane">
         <div class="tab-section">
           <h2>Projektek listája</h2>
           <div id="projectsList" class="list-container">
@@ -486,6 +559,8 @@
         <div id="evaluationsList"><p class="placeholder">Betöltés...</p></div>
       </div>
     </section>
+      </div>
+    </div>
   </div>
 
   <script src="format.js"></script>
@@ -506,5 +581,7 @@
   <script src="run-view.js"></script>
   <script src="interview-view.js"></script>
   <script src="model-view.js"></script>
+  <script src="context-sidebar.js"></script>
+  <script src="overview.js"></script>
 </body>
 </html>

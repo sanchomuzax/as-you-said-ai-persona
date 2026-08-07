@@ -6,8 +6,18 @@ async function refreshModelList() {
   if (!container) return;
   try {
     state.modelProfiles = await apiCall('GET', '/api/model-profiles');
+    state.modelProfilesError = false;
   } catch (err) {
+    // Recorded separately from modelProfiles being empty (code-review defect
+    // #1): the overview's warning must say "not checked", not silently read
+    // this the same as "no uncalibrated models found".
+    state.modelProfilesError = true;
     container.innerHTML = `<p class="placeholder">A kalibrációs állapot betöltése nem sikerült: ${escapeHtml(err.message)}</p>`;
+    // window.-prefixed (code-review M8): a plain bare-identifier call still
+    // throws ReferenceError when the other script failed to load — `?.` only
+    // guards a declared-but-undefined value, not an undeclared one. Property
+    // access on `window` does not have that gap.
+    window.renderOverviewTab?.();
     return;
   }
   try {
@@ -17,6 +27,9 @@ async function refreshModelList() {
   }
   container.innerHTML = renderModelList(state.modelProfiles);
   renderCalibrationForm();
+  // The overview tab's uncalibrated/stale-model warning (issue #20) rides on
+  // this same state.modelProfiles fetch.
+  window.renderOverviewTab?.();
 }
 
 /** The probe is DATA, not code: the researcher picks which questionnaire it is. */
@@ -87,7 +100,7 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('modelsList')?.addEventListener('click', (e) => {
     const row = e.target.closest('[data-model]');
     if (row) {
-      rememberDetailTrigger('data-model', row.dataset.model);
+      rememberDetailTrigger('data-model', row.dataset.model, e.currentTarget);
       void openModelDetail(row.dataset.model);
     }
   });
@@ -97,7 +110,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const row = e.target.closest('[data-model]');
     if (!row) return;
     e.preventDefault();
-    rememberDetailTrigger('data-model', row.dataset.model);
+    rememberDetailTrigger('data-model', row.dataset.model, e.currentTarget);
     void openModelDetail(row.dataset.model);
   });
 

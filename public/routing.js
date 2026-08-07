@@ -1,7 +1,12 @@
 // Hash routing: #<tab> for a list, #<tab>/<id> for a detail view.
 // Pure functions (no DOM access) so the route table is unit-testable.
 
-const VALID_TABS = ['projects', 'personas', 'questionnaires', 'runs', 'interviews', 'models'];
+// 'overview' (issue #20) is a plain tab route like the rest here — it just has
+// no detail sub-route of its own. The empty-hash DEFAULT stays 'projects'
+// below: tests/frontend-routing.test.ts pins that contract for parseHash
+// itself, so the overview-as-default behaviour is applied one layer up, in
+// app.js's currentRoute(), instead of changing what this function returns for ''.
+const VALID_TABS = ['overview', 'projects', 'personas', 'questionnaires', 'runs', 'interviews', 'models'];
 const DETAIL_HASH = /^(projects|personas|questionnaires|runs|interviews|models)\/(.+)$/;
 
 const EMPTY_ROUTE = { tab: 'projects', runId: null, entityId: null, interviewId: null, modelId: null };

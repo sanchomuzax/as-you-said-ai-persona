@@ -18,8 +18,24 @@ let state = {
   interviews: [],
   currentInterviewId: null,
   modelProfiles: [],
+  // True after a FAILED /api/model-profiles fetch (model-view.js's
+  // refreshModelList) — distinct from modelProfiles just being genuinely
+  // empty/all-valid, which is why overview.js's warnings check it first
+  // (code-review defect #1: "hangos hiány", never confuse "not checked" with
+  // "all clear").
+  modelProfilesError: false,
+  // Per-run: true when the last /api/runs/:id/progress fetch failed
+  // (runs-list.js's pollRunningProgress) — that payload is also where
+  // staleVersions comes from, so a failed fetch must not read as "not stale".
+  runProgressErrors: {},
   probeQuestionnaires: [],
-  currentModelId: null
+  currentModelId: null,
+  // Last /api/budget response (issue #20's overview reads it for the 80%
+  // warning); updateBudgetBar below is the only writer.
+  budgetData: null,
+  // True after a FAILED /api/budget fetch — see modelProfilesError above for why
+  // this is tracked separately from budgetData being merely null/unset.
+  budgetError: false
 };
 
 // API wrapper
@@ -91,7 +107,13 @@ function renderDistribution(parsed_json, isMultiChoice) {
 
 // ----- Hash routing (route table lives in routing.js) -----
 function currentRoute() {
-  return parseHash(location.hash);
+  const route = parseHash(location.hash);
+  // A blank address bar lands on the overview (issue #20), the new default
+  // landing tab. This is decided HERE, not in parseHash: that function's own
+  // empty-hash default is pinned to 'projects' by tests/frontend-routing.test.ts,
+  // so the app-level default is layered on top instead of changing it.
+  if (!location.hash || location.hash === '#') return { ...route, tab: 'overview' };
+  return route;
 }
 
 function setHash(tab, detailId) {
@@ -183,7 +205,10 @@ function updateProjectDropdowns() {
     document.getElementById('personaProjectSelect'),
     document.getElementById('runProjectSelect'),
     document.getElementById('questionnaireProjectSelect'),
-    document.getElementById('interviewProjectSelect')
+    document.getElementById('interviewProjectSelect'),
+    // The context sidebar's project select (issue #19) is just one more entry
+    // here, so it is populated the same way and can never drift from the rest.
+    document.getElementById('contextSidebarProjectSelect')
   ];
 
   selects.forEach(select => {
@@ -204,7 +229,7 @@ function selectProjectEverywhere(projectId) {
   } else {
     localStorage.removeItem('selectedProjectId');
   }
-  ['personaProjectSelect', 'runProjectSelect', 'questionnaireProjectSelect', 'interviewProjectSelect'].forEach(id => {
+  ['personaProjectSelect', 'runProjectSelect', 'questionnaireProjectSelect', 'interviewProjectSelect', 'contextSidebarProjectSelect'].forEach(id => {
     const el = document.getElementById(id);
     if (el) el.value = projectId || '';
   });
@@ -286,28 +311,56 @@ function renderPersonasCheckboxes() {
   `).join('');
 }
 
-function updateBudgetBar() {
-  apiCall('GET', '/api/budget')
-    .then(data => {
-      const used = data.global.totalTokens || 0;
-      const limit = data.limits.globalBudget;
-      // limit 0 = a hard stop ki van kapcsolva
-      const unlimited = !limit;
-      const pct = unlimited ? 0 : Math.min((used / limit) * 100, 100);
+/**
+ * The fetch and the rendering are kept in separate try/catch scopes
+ * (code-review defect #7/H3): the old single .then/.catch meant an exception
+ * thrown while RENDERING (e.g. a bug in renderOverviewTab) was caught by the
+ * same .catch as a failed FETCH, and misreported as "budget fetch failed"
+ * instead of surfacing as the rendering bug it actually is.
+ */
+async function updateBudgetBar() {
+  let data;
+  try {
+    data = await apiCall('GET', '/api/budget');
+  } catch {
+    state.budgetError = true;
+    state.budgetData = null;
+    document.getElementById('budgetTokens').textContent = '—';
+    document.getElementById('budgetLimit').textContent = '—';
+    document.getElementById('budgetCost').textContent = '—';
+    // Code-review defect #7: previously only the header widget above degraded
+    // on failure — the sidebar's budget section was left on "Betöltés..."
+    // forever. renderContextSidebarBudget(null, true) already has a "failed"
+    // state; use it. window.-prefixed (code-review M8): a bare-identifier
+    // call still throws ReferenceError if the other script failed to load —
+    // `?.` alone only guards a declared-but-undefined value, not an
+    // undeclared one — so a script-load failure would otherwise be
+    // misreported here as a budget-fetch failure.
+    window.renderContextSidebarBudget?.(null, true);
+    window.renderOverviewTab?.();
+    return;
+  }
+  state.budgetError = false;
+  state.budgetData = data;
 
-      document.getElementById('budgetTokens').textContent = formatNumber(used);
-      document.getElementById('budgetLimit').textContent = unlimited ? '∞' : formatNumber(limit);
-      document.getElementById('budgetCost').textContent = formatCost(data.global.costUsd || 0);
-      document.getElementById('budgetProgress').style.width = pct + '%';
-      document.querySelector('.budget-widget').title = unlimited
-        ? TOOLTIPS.budgetBar + ' A keret-korlát jelenleg KI van kapcsolva (limit=0); a fogyás: ' + formatNumber(used) + ' token.'
-        : TOOLTIPS.budgetBar + ' Jelenleg: ' + formatMetric(pct) + '% (' + formatNumber(used) + ' / ' + formatNumber(limit) + ' token).';
-    })
-    .catch(() => {
-      document.getElementById('budgetTokens').textContent = '—';
-      document.getElementById('budgetLimit').textContent = '—';
-      document.getElementById('budgetCost').textContent = '—';
-    });
+  const used = data.global.totalTokens || 0;
+  const limit = data.limits.globalBudget;
+  // limit 0 = a hard stop ki van kapcsolva
+  const unlimited = !limit;
+  const pct = unlimited ? 0 : Math.min((used / limit) * 100, 100);
+
+  document.getElementById('budgetTokens').textContent = formatNumber(used);
+  document.getElementById('budgetLimit').textContent = unlimited ? '∞' : formatNumber(limit);
+  document.getElementById('budgetCost').textContent = formatCost(data.global.costUsd || 0);
+  document.getElementById('budgetProgress').style.width = pct + '%';
+  document.querySelector('.budget-widget').title = unlimited
+    ? TOOLTIPS.budgetBar + ' A keret-korlát jelenleg KI van kapcsolva (limit=0); a fogyás: ' + formatNumber(used) + ' token.'
+    : TOOLTIPS.budgetBar + ' Jelenleg: ' + formatMetric(pct) + '% (' + formatNumber(used) + ' / ' + formatNumber(limit) + ' token).';
+  // The context sidebar's budget section (issue #19) and the overview
+  // tab's 80% warning (issue #20) both ride on this same /api/budget
+  // response — no second fetch for the same data.
+  window.renderContextSidebarBudget?.(data);
+  window.renderOverviewTab?.();
 }
 
 // Event Subscription
@@ -433,6 +486,14 @@ async function reloadPersonasList() {
     renderPersonasList();
     renderPersonasCheckboxes();
     renderInterviewPersonaOptions();
+    // Every caller of reloadPersonasList (every project select's change
+    // handler, and the initial project restore below) needs the sidebar's
+    // persona list to follow along — one hook instead of one per caller.
+    // window.-prefixed (code-review M8): an un-guarded bare call here throws
+    // "renderContextSidebar is not defined" if context-sidebar.js failed to
+    // load, and this catch block would then misreport that as a persona-load
+    // failure — the personas themselves loaded fine.
+    window.renderContextSidebar?.();
   } catch (err) {
     alert('Perszónák betöltése sikertelen: ' + err.message);
   }
@@ -618,6 +679,10 @@ async function loadInitialData() {
     } else {
       renderPersonasList();
       renderPersonasCheckboxes();
+      // window.-prefixed (code-review M8): see reloadPersonasList above — an
+      // un-guarded bare call would misreport a missing context-sidebar.js as
+      // "Adatbetöltés sikertelen" via this function's own catch below.
+      window.renderContextSidebar?.();
     }
     // After the stored project is restored, so the list is not fetched twice —
     // the first, unfiltered fetch used to paint under a "no interview in this
@@ -625,6 +690,25 @@ async function loadInitialData() {
     await refreshInterviewsList();
     await refreshModelList();
 
+    // One progress fetch up front so the sidebar's running-measurement section
+    // (issue #19) has real totals as soon as the app appears, instead of
+    // waiting for the first 5s tick of the timer started just below.
+    //
+    // Code-review H5 (Pi performance) flagged this as a fan-out risk on a
+    // large research database (state.runProgress starts empty, so every run
+    // looks "uncached" here). Left un-narrowed on purpose: the overview's
+    // stale-version warning (defect #1) needs staleVersions for COMPLETED
+    // runs too, fetched exactly here — narrowing this call to only
+    // running/stalled rows silently made that warning wrong instead of slow
+    // (verified by tests/frontend-overview.test.ts's "flags a run made with a
+    // since-superseded ... version"). A real fix needs either a batched
+    // /api/runs/progress endpoint or a lower per-run cost server-side; a
+    // client-side scope cut is not safe without one of those.
+    await pollRunningProgress();
+    // Runs, their progress (incl. staleVersions) and the model profiles are
+    // all loaded by this point; renderOverviewTab's own hooks (pollRunningProgress,
+    // refreshModelList, updateBudgetBar) keep it current after this.
+    window.renderOverviewTab?.();
     subscribeToEvents();
     startProgressPolling();
 

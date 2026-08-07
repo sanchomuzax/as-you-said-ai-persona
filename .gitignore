@@ -27,3 +27,6 @@ logs/
 # --- OS / editor ---
 .DS_Store
 Thumbs.db
+
+# Local agent settings — one "git add -A" away from the public repo otherwise
+.claude/

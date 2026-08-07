@@ -7,8 +7,11 @@ function badgeClassForStatus(status) {
   return 'badge badge-' + (status || 'pending');
 }
 
-function runControlButtons(run, context) {
-  const status = run.status;
+function runControlButtons(run, context, liveStatus) {
+  // Code-review defect #4: the badge already prefers the live progress-poll
+  // status over the stale row status; the controls must agree with it, or the
+  // badge and buttons can tell two different stories for the same card.
+  const status = liveStatus || run.status;
   const buttons = [];
   if (status === 'running') {
     buttons.push(`<button class="btn btn-secondary btn-sm" data-action="pause" data-run="${escapeHtml(run.id)}">Szünet</button>`);
@@ -60,7 +63,7 @@ function renderRunCard(run) {
         ${runStatChips({ done, totalCells, invalid, abstained, totalTokens, cachedTokens, promptTokens, costUsd, invPct })}
       </div>
       <div class="run-card-controls">
-        ${runControlButtons(run, 'card')}
+        ${runControlButtons(run, 'card', status)}
       </div>
     </div>
   `;
@@ -85,7 +88,7 @@ document.getElementById('runsList')?.addEventListener('click', async (e) => {
   // Clicking anywhere on the card opens it, like every other list in the app.
   const card = e.target.closest('.run-card[data-run-card]');
   if (card) {
-    rememberDetailTrigger('data-run-card', card.dataset.runCard);
+    rememberDetailTrigger('data-run-card', card.dataset.runCard, e.currentTarget);
     await handleRunAction('details', card.dataset.runCard);
   }
 });
@@ -146,11 +149,32 @@ async function pollRunningProgress(includeAll = false) {
     try {
       const progress = await apiCall('GET', `/api/runs/${r.id}/progress`);
       state.runProgress[r.id] = progress;
+      state.runProgressErrors[r.id] = false;
     } catch {
-      // ignore
+      // Recorded (code-review defect #1) so the overview's stale-version
+      // warning can tell "this run's staleness is genuinely unknown" apart
+      // from "checked, and it is current" — both leave runProgress[r.id]
+      // untouched/absent otherwise.
+      state.runProgressErrors[r.id] = true;
     }
   }));
   renderRunsList();
+  // The context sidebar's running-measurement section (issue #19) and the
+  // overview tab (issue #20, incl. its stale-version warning, which reads
+  // staleVersions off this same progress payload) both ride on this same
+  // poll — neither starts a second timer of its own.
+  //
+  // Only the running-measurement section, not the whole sidebar (code-review
+  // defect #8/H4): renderContextSidebar() also repaints the persona list,
+  // which has nothing to do with run progress — repainting it here just to
+  // pick up a progress tick destroys focus on a persona row for no reason.
+  // window.-prefixed `?.` guards (code-review M8): these are cross-script
+  // calls into context-sidebar.js/overview.js, and a bare-identifier call
+  // still throws ReferenceError if that script failed to load — property
+  // access on `window` does not have that gap, so a load failure surfaces as
+  // itself instead of masquerading as a progress-poll error.
+  window.renderContextSidebarRunning?.();
+  window.renderOverviewTab?.();
   if (state.currentRunId && targets.some(r => r.id === state.currentRunId)) {
     renderRunDetailHeaderFromCache(state.currentRunId);
   }

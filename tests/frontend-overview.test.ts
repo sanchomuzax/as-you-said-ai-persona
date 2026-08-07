@@ -19,9 +19,11 @@ const VALID_MODEL_PROFILES = [
   { model: 'm1', label: 'Modell 1', status: 'valid', reasons: [], summary: null, profile: null }
 ]
 
+// The server only ever emits byScope: { run, interview } (src/lib/budget.ts's
+// usageByScope()) — there is no "measurement" scope key.
 const LOW_BUDGET = {
   global: { totalTokens: 100, costUsd: 0.01 },
-  byScope: { measurement: { totalTokens: 100, costUsd: 0.01 }, interview: { totalTokens: 0, costUsd: 0 } },
+  byScope: { run: { totalTokens: 100, costUsd: 0.01 }, interview: { totalTokens: 0, costUsd: 0 } },
   limits: { globalBudget: 100000, perRunBudget: 0 }
 }
 
@@ -232,7 +234,7 @@ describe('warnings', () => {
         'GET /api/runs': [],
         'GET /api/budget': {
           global: { totalTokens: 85000, costUsd: 8 },
-          byScope: { measurement: { totalTokens: 85000, costUsd: 8 }, interview: { totalTokens: 0, costUsd: 0 } },
+          byScope: { run: { totalTokens: 85000, costUsd: 8 }, interview: { totalTokens: 0, costUsd: 0 } },
           limits: { globalBudget: 100000, perRunBudget: 0 }
         }
       })
@@ -276,6 +278,91 @@ describe('quick actions', () => {
     await dom.settle()
     expect(dom.document.getElementById('tab-models')!.className).toContain('active')
     expect(dom.window.location.hash).toBe('#models')
+  })
+})
+
+// Code-review defect #1: renderOverviewWarnings (public/overview.js) treats "no
+// warning produced" as "all clear", but state.modelProfiles, a run's
+// staleVersions and state.budgetData are all just as empty when their fetch
+// FAILED as when everything is genuinely fine. The two must read differently.
+describe('warnings degrade honestly when a source could not be checked (code-review defect #1)', () => {
+  it('says the model calibration state could not be checked, not that nothing is wrong', async () => {
+    dom = loadAppDom({ routes: routes({ 'GET /api/runs': [], 'GET /api/model-profiles': undefined }) })
+    await dom.boot()
+    const warnings = dom.document.getElementById('overviewWarnings')!.textContent!
+    expect(warnings).not.toMatch(/nincs figyelmeztetés/i)
+    expect(warnings).toMatch(/nem ellenőr/i)
+  })
+
+  it('says the budget could not be checked, not that it is fine', async () => {
+    dom = loadAppDom({ routes: routes({ 'GET /api/runs': [], 'GET /api/budget': undefined }) })
+    await dom.boot()
+    const warnings = dom.document.getElementById('overviewWarnings')!.textContent!
+    expect(warnings).not.toMatch(/nincs figyelmeztetés/i)
+    expect(warnings).toMatch(/nem ellenőr/i)
+  })
+
+  it("says a run's version staleness could not be checked, not that it is current", async () => {
+    const completed = runRow('c1', 'Ellenőrizhetetlen', 'completed')
+    dom = loadAppDom({
+      routes: routes({
+        'GET /api/runs': [completed],
+        'GET /api/runs/c1/progress': undefined
+      })
+    })
+    await dom.boot()
+    const warnings = dom.document.getElementById('overviewWarnings')!.textContent!
+    expect(warnings).not.toMatch(/nincs figyelmeztetés/i)
+    expect(warnings).toMatch(/nem ellenőr/i)
+  })
+})
+
+// Code-review defect #3: a `failed` run is in neither OVERVIEW_STALLED_STATUSES
+// (running|paused|budget_exhausted) nor the recent-completed block
+// (status === 'completed') — it silently disappears from Áttekintés even
+// though runControlButtons already offers Folytatás for it.
+describe('a failed run must not disappear from the overview (code-review defect #3)', () => {
+  it('shows a failed run somewhere on Áttekintés, with its Folytatás control reachable', async () => {
+    const failed = runRow('r1', 'Meghiúsult', 'failed')
+    dom = loadAppDom({ routes: routes({ 'GET /api/runs': [failed], ...detailRoutesFor(failed) }) })
+    await dom.boot()
+    const overview = dom.document.getElementById('tab-overview')!.textContent!
+    expect(overview).toContain('Meghiúsult')
+    expect(
+      dom.document.querySelector('#tab-overview [data-run-card="r1"] [data-action="resume"]')
+    ).not.toBeNull()
+  })
+})
+
+// Code-review defect #4: renderRunCard (public/runs-list.js) picks the live
+// status (from the progress poll) for its BADGE, but passes the raw run row
+// to runControlButtons, which reads run.status — the stale value from the
+// /api/runs fetch. The overview reuses this same card.
+describe('run-card controls follow the live status, not the stale row status (code-review defect #4)', () => {
+  it('offers Folytatás, not Szünet, when the live progress says budget_exhausted for a row still marked running', async () => {
+    const row = runRow('r1', 'Réginek jelzett', 'running')
+    dom = loadAppDom({
+      routes: routes({
+        'GET /api/runs': [row],
+        'GET /api/runs/r1/progress': {
+          status: 'budget_exhausted',
+          providers: [],
+          staleVersions: { questionnaire: null, personas: [] },
+          totalCells: 4,
+          done: 4,
+          invalid: 0,
+          abstained: 0,
+          avgLatencyMs: 0,
+          usage: {}
+        }
+      })
+    })
+    await dom.boot()
+    // budget_exhausted is a stalled status, so the live-status card shows up here
+    const card = dom.document.querySelector('#tab-overview [data-run-card="r1"]')
+    expect(card).not.toBeNull()
+    expect(dom.document.querySelector('#tab-overview [data-run-card="r1"] [data-action="resume"]')).not.toBeNull()
+    expect(dom.document.querySelector('#tab-overview [data-run-card="r1"] [data-action="pause"]')).toBeNull()
   })
 })
 

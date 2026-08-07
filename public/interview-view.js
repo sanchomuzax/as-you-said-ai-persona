@@ -201,7 +201,7 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('interviewsList')?.addEventListener('click', (e) => {
     const row = e.target.closest('[data-interview-id]');
     if (row) {
-      rememberDetailTrigger('data-interview-id', row.dataset.interviewId);
+      rememberDetailTrigger('data-interview-id', row.dataset.interviewId, e.currentTarget);
       void openInterviewDetail(row.dataset.interviewId);
     }
   });
@@ -211,7 +211,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const row = e.target.closest('[data-interview-id]');
     if (!row) return;
     e.preventDefault();
-    rememberDetailTrigger('data-interview-id', row.dataset.interviewId);
+    rememberDetailTrigger('data-interview-id', row.dataset.interviewId, e.currentTarget);
     void openInterviewDetail(row.dataset.interviewId);
   });
 

@@ -223,8 +223,15 @@ async function saveProjectEdit(form) {
   }
 }
 
-/** One delegated handler for every clickable entity row, list or detail view alike. */
-async function handleEntityClick(target) {
+/**
+ * One delegated handler for every clickable entity row, list or detail view
+ * alike. `container` (the list element the delegated listener is attached
+ * to) is threaded through to rememberDetailTrigger so focus-return can scope
+ * its lookup to the list the row was actually clicked in — this handler is
+ * shared by several containers (personasList, contextSidebar, ...) that can
+ * render rows with the same data-run / data-entity-id (code-review defect #2).
+ */
+async function handleEntityClick(target, container) {
   const actionBtn = target.closest('button[data-action]');
   if (actionBtn) {
     const action = actionBtn.dataset.action;
@@ -240,7 +247,7 @@ async function handleEntityClick(target) {
   }
   const runRow = target.closest('[data-run]:not(button)');
   if (runRow) {
-    rememberDetailTrigger('data-run', runRow.dataset.run);
+    rememberDetailTrigger('data-run', runRow.dataset.run, container);
     setHash('runs', runRow.dataset.run);
     state.activeTab = 'runs';
     setActiveTab('runs');
@@ -249,7 +256,7 @@ async function handleEntityClick(target) {
   }
   const row = target.closest('[data-entity][data-entity-id]');
   if (!row) return;
-  rememberDetailTrigger('data-entity-id', row.dataset.entityId);
+  rememberDetailTrigger('data-entity-id', row.dataset.entityId, container);
   await openEntityDetail(row.dataset.entity, row.dataset.entityId, true);
 }
 
@@ -268,14 +275,16 @@ document.getElementById('entityDetailBody')?.addEventListener('submit', (e) => {
   if (e.target.id === 'questionnaireVersionForm') void saveNewVersion('questionnaires', e.target);
 });
 
-['projectsList', 'personasList', 'questionnairesList', 'entityDetailBody'].forEach(id => {
+// overviewRecentRuns (public/overview.js, issue #20) rides on this same
+// delegated handler for its `[data-run]` rows — no second open-detail path.
+['projectsList', 'personasList', 'questionnairesList', 'entityDetailBody', 'overviewRecentRuns'].forEach(id => {
   const container = document.getElementById(id);
   if (!container) return;
-  container.addEventListener('click', (e) => { void handleEntityClick(e.target); });
+  container.addEventListener('click', (e) => { void handleEntityClick(e.target, e.currentTarget); });
   container.addEventListener('keydown', (e) => {
     if (e.key !== 'Enter' && e.key !== ' ') return;
     if (!e.target.closest('[data-entity-id], [data-run]')) return;
     e.preventDefault();
-    void handleEntityClick(e.target);
+    void handleEntityClick(e.target, e.currentTarget);
   });
 });
