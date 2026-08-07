@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto'
 import { createDb, type Db } from '../src/db.js'
 import { computeRunResults } from '../src/lib/results.js'
 import { buildEvaluationPrompt } from '../src/lib/evaluate.js'
+import type { StoredProfile, ProfileStatus } from '../src/lib/profile.js'
 
 let db: Db
 let runId: string
@@ -89,6 +90,201 @@ describe('buildEvaluationPrompt', () => {
     expect(prompt).toContain('Pollyanna')
     expect(prompt).toContain('TSTR')
     expect(prompt).toContain('spurious split')
+  })
+})
+
+/**
+ * Issue #17 M3 (docs/MODEL-CALIBRATION.md §4): the judge prompt gains a
+ * model-calibration section computed in code — the active profile's
+ * positivity offset and prior-bias summary. This is a NEW section, distinct
+ * from the per-question control-arm/divergence lines M1 already added (still
+ * covered above via `q.baseline`) — it comes from the model_profiles
+ * registry, not from any one run's own responses.
+ *
+ * `context` is passed via a typed local variable, not an inline object
+ * literal, only because that also sidesteps TypeScript's excess-property
+ * check if this file is ever compiled against an older buildEvaluationPrompt
+ * signature — the current one already declares `profile`.
+ *
+ * Review finding (M3 review, false-green #1): assertions here must be
+ * anchored to the MODELL-KALIBRÁCIÓ block specifically
+ * (`calibrationSectionOf` below), not to the whole prompt — M1's pre-existing
+ * KONTROLL-KAR line (src/lib/evaluate.ts) already contains generic phrases
+ * like "ahhoz képest" and "nem térítette el", so an unanchored regex can stay
+ * green even with buildCalibrationSection deleted outright. Verified by
+ * temporarily stashing src/lib/evaluate.ts's calibration section: the
+ * anchored versions of these two assertions go red, the unanchored ones did
+ * not.
+ */
+function calibrationSectionOf(prompt: string): string {
+  const start = prompt.indexOf('MODELL-KALIBRÁCIÓ')
+  if (start === -1) return ''
+  const end = prompt.indexOf('\n\nADATOK:', start)
+  return prompt.slice(start, end === -1 ? undefined : end)
+}
+describe('buildEvaluationPrompt — model-calibration section (issue #17 M3)', () => {
+  const PROFILE: StoredProfile = {
+    id: 'prof-1',
+    modelRequested: 'm',
+    modelVersion: 'm-2026-05',
+    provider: 'DeepInfra',
+    promptTemplateHash: 'abc123def456',
+    probeQuestionnaireId: 'probe-qn',
+    language: 'hu',
+    runIds: ['cal-1'],
+    createdAt: '2026-08-01 10:00:00',
+    validUntil: '2026-10-30 10:00:00',
+    metrics: {
+      perQuestion: [],
+      priorBias: { byPosition: [0.1, 0.15, 0.75], maxDeviation: 0.42, strongestPosition: 2, optionCount: 3 },
+      positivityOffset: 0.267,
+      invalidRate: 0,
+      abstainRate: 0,
+      provenance: { runIds: ['cal-1'], cellCount: 10, duplicateCellCount: 0, costUsd: 0.01, firstResponseAt: null, lastResponseAt: null }
+    }
+  }
+
+  function contextWithProfile(status: ProfileStatus = 'valid'): {
+    providers?: { provider: string; count: number }[]
+    profile?: { profile: StoredProfile; status: ProfileStatus } | null
+  } {
+    return { profile: { profile: PROFILE, status } }
+  }
+
+  it("includes the active profile's measured positivity offset and prior-bias summary", () => {
+    insertResponse({ dist: { '0': 0.9, '1': 0.1 } })
+    const prompt = buildEvaluationPrompt('R', computeRunResults(db, runId), contextWithProfile('valid'))
+    expect(prompt).toContain('0.267')
+    expect(prompt).toContain('0.42')
+  })
+
+  it('says explicitly when there is no calibration profile for the run’s model, rather than omitting the section', () => {
+    insertResponse({ dist: { '0': 0.9, '1': 0.1 } })
+    const noProfile: {
+      providers?: { provider: string; count: number }[]
+      profile?: { profile: StoredProfile; status: ProfileStatus } | null
+    } = { profile: null }
+    const prompt = buildEvaluationPrompt('R', computeRunResults(db, runId), noProfile)
+    expect(prompt).toMatch(/nincs.*kalibráci/i)
+  })
+})
+
+/** Issue #17 M3, §4's mandatory instructions for the calibration section. */
+describe('buildEvaluationPrompt — mandatory calibration instructions (§4, issue #17 M3)', () => {
+  const PROFILE: StoredProfile = {
+    id: 'prof-1',
+    modelRequested: 'm',
+    modelVersion: 'm-2026-05',
+    provider: 'DeepInfra',
+    promptTemplateHash: 'abc123def456',
+    probeQuestionnaireId: 'probe-qn',
+    language: 'hu',
+    runIds: ['cal-1'],
+    createdAt: '2026-08-01 10:00:00',
+    validUntil: '2026-10-30 10:00:00',
+    metrics: {
+      perQuestion: [],
+      priorBias: { byPosition: [0.1, 0.15, 0.75], maxDeviation: 0.42, strongestPosition: 2, optionCount: 3 },
+      positivityOffset: 0.267,
+      invalidRate: 0,
+      abstainRate: 0,
+      provenance: { runIds: ['cal-1'], cellCount: 10, duplicateCellCount: 0, costUsd: 0.01, firstResponseAt: null, lastResponseAt: null }
+    }
+  }
+
+  function promptWithProfile(): string {
+    insertResponse({ dist: { '0': 0.9, '1': 0.1 } })
+    const context: {
+      providers?: { provider: string; count: number }[]
+      profile?: { profile: StoredProfile; status: ProfileStatus } | null
+    } = {
+      profile: { profile: PROFILE, status: 'valid' }
+    }
+    return buildEvaluationPrompt('R', computeRunResults(db, runId), context)
+  }
+
+  // Review false-green #1: anchored to the MODELL-KALIBRÁCIÓ block itself, not
+  // the whole prompt — M1's pre-existing KONTROLL-KAR line already contains
+  // "ahhoz képest", so an unanchored match stays green even with
+  // buildCalibrationSection deleted outright.
+  it('says, inside the calibration section, to interpret persona results relative to the baseline', () => {
+    const section = calibrationSectionOf(promptWithProfile())
+    expect(section).not.toBe('')
+    expect(section).toMatch(/kontrollhoz? képest|ahhoz képest|baseline.*képest/i)
+  })
+
+  it('says, inside the calibration section, that a persona within the noise floor added nothing', () => {
+    const section = calibrationSectionOf(promptWithProfile())
+    expect(section).not.toBe('')
+    expect(section).toMatch(/nem tett hozzá|nem térítette el/i)
+  })
+
+  it('says to read positive results against the measured positivity offset', () => {
+    const section = calibrationSectionOf(promptWithProfile())
+    expect(section).toMatch(/pozitivitás-eltolás|mért pozitivitás|Pollyanna-eltolás/i)
+  })
+
+  it('states the stereotyping caveat: persona differences are upper bounds, not findings, until human data exists', () => {
+    const section = calibrationSectionOf(promptWithProfile())
+    expect(section).toMatch(/felső korlát/i)
+    expect(section).toMatch(/nem (megállapítás|eredmény)/i)
+  })
+
+  // Review HIGH #4: the model card's own caveat for positivityOffset
+  // (public/model-card.js) is that it is NOT the trap-item-specific Pollyanna
+  // measure the design calls for — it is the mean over EVERY directed scale,
+  // "a broader and weaker statement" ("tágabb és gyengébb állítás"), because
+  // the probe does not mark product-evaluation trap items yet. The judge
+  // prompt must carry the SAME caveat, not narrow the number onto
+  // product-concept results as if it had been measured specifically there.
+  it('carries the same "broader, weaker" caveat as the model card, instead of overclaiming the offset was measured on product-concept items', () => {
+    const section = calibrationSectionOf(promptWithProfile())
+    expect(section).toMatch(/tágabb/i)
+    expect(section).toMatch(/gyengébb/i)
+  })
+
+  // Review MEDIUM #7: the no-profile branch used to say "a mért
+  // alap-pozitivitáshoz ... nincs mihez viszonyítani" — which PRESUPPOSES a
+  // measured positivity exists (the very thing "nincs kalibrációs profil"
+  // just denied). Encoded as a negative match on the inverted phrase plus a
+  // positive match on the corrected meaning, without pinning exact prose.
+  it('does not presuppose a measured positivity/bias exists when there is no calibration profile', () => {
+    const noProfile: {
+      providers?: { provider: string; count: number }[]
+      profile?: { profile: StoredProfile; status: ProfileStatus } | null
+    } = { profile: null }
+    insertResponse({ dist: { '0': 0.9, '1': 0.1 } })
+    const section = calibrationSectionOf(buildEvaluationPrompt('R', computeRunResults(db, runId), noProfile))
+    expect(section).not.toBe('')
+    // The inverted phrasing: "a mért ... -hoz nincs mihez viszonyítani" claims
+    // a measured quantity exists and only the comparison is missing.
+    expect(section).not.toMatch(/a mért alap-pozitivitáshoz[^.]*nincs mihez viszonyítani/i)
+    // The corrected meaning: there IS NO measurement at all, not "a
+    // measurement exists but nothing to compare it to".
+    expect(section).toMatch(/nincs mért|nem mérve|nem mérhető|nincs mérés/i)
+  })
+})
+
+/**
+ * Constraint from issue #17 M3: this milestone adds CONTEXT for the judge —
+ * it must never correct or otherwise touch the recorded data. computeRunResults
+ * does not even take a profile argument; this guards that a future change
+ * cannot make its output depend on whether a model_profiles row exists.
+ */
+describe('computeRunResults is unaffected by model-calibration context (issue #17 M3)', () => {
+  it('produces identical results whether or not a model profile exists for the run’s model', () => {
+    insertResponse({ dist: { '0': 0.9, '1': 0.1 } })
+    const before = computeRunResults(db, runId)
+
+    db.prepare('INSERT INTO questionnaires (id, lineage_id, name) VALUES (?,?,?)').run('probe-qn', 'probe-qn', 'Próba')
+    db.prepare(
+      `INSERT INTO model_profiles
+         (id, model_requested, model_version, prompt_template_hash, probe_questionnaire_id, run_ids_json, metrics_json, valid_until)
+       VALUES (?,?,?,?,?,?,?,?)`
+    ).run('prof-1', 'm', 'm-2026-05', 'hash', 'probe-qn', '[]', '{}', '2099-01-01 00:00:00')
+
+    const after = computeRunResults(db, runId)
+    expect(after).toEqual(before)
   })
 })
 

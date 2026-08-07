@@ -78,8 +78,27 @@ function migrate(db: DatabaseSync): void {
   }
   // Older evaluations have no coverage snapshot; NULL means "unknown", which the
   // UI shows as an unmarked evaluation rather than claiming it was complete.
+  // model_profile_id/status (issue #17 M3) are NULL for a row written before
+  // this milestone — genuinely UNKNOWN whether a profile existed, never to be
+  // read as a claim that it didn't (issue #17 M3 review MED #6). A row written
+  // BY this milestone that found no profile stores the literal status
+  // 'missing' instead of NULL, so the two cases stay distinguishable.
+  // model_profile_model_version/provider/measured_at snapshot what the CITED
+  // profile itself measured, and model_profile_reasons_json snapshots why it
+  // was judged stale — both AT EVALUATION TIME, so the audit trail reflects
+  // what was true then even if the profile is later superseded (review MED #5).
   const evaluationCols = db.prepare('PRAGMA table_info(run_evaluations)').all() as unknown as { name: string }[]
-  for (const column of ['run_status TEXT', 'done_cells INTEGER', 'total_cells INTEGER']) {
+  for (const column of [
+    'run_status TEXT',
+    'done_cells INTEGER',
+    'total_cells INTEGER',
+    'model_profile_id TEXT REFERENCES model_profiles(id)',
+    'model_profile_status TEXT',
+    'model_profile_model_version TEXT',
+    'model_profile_provider TEXT',
+    'model_profile_measured_at TEXT',
+    'model_profile_reasons_json TEXT'
+  ]) {
     const name = column.split(' ')[0]!
     if (!evaluationCols.some((c) => c.name === name)) {
       db.exec(`ALTER TABLE run_evaluations ADD COLUMN ${column}`)
@@ -368,6 +387,24 @@ CREATE TABLE IF NOT EXISTS run_evaluations (
   run_status TEXT,
   done_cells INTEGER,
   total_cells INTEGER,
+  -- which model_profiles row (docs/MODEL-CALIBRATION.md M3) the judge prompt was
+  -- built against, judged against the STACK THIS RUN OWN CALLS USED (not
+  -- today's global stack — issue #17 M3 review HIGH #2), and its status AT
+  -- THAT TIME — a profile stale now may have been valid when this evaluation
+  -- ran, and the audit trail must say which. model_profile_status NULL means
+  -- UNKNOWN (a row written before M3); the literal string 'missing' means M3
+  -- looked and genuinely found no profile — the two must stay distinguishable.
+  model_profile_id TEXT REFERENCES model_profiles(id),
+  model_profile_status TEXT,
+  -- snapshot of what the CITED profile itself measured, so the UI can name it
+  -- (not just its status) without a second lookup against a row that may have
+  -- since been superseded by a newer profile for the same model
+  model_profile_model_version TEXT,
+  model_profile_provider TEXT,
+  model_profile_measured_at TEXT,
+  -- the concrete reason(s) it was judged stale FOR THIS RUN, JSON-encoded;
+  -- NULL when valid/missing/unknown
+  model_profile_reasons_json TEXT,
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 

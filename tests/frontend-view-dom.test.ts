@@ -327,6 +327,80 @@ describe('run detail view', () => {
     expect(dom.document.getElementById('evaluationsList')!.textContent).toMatch(/nincs|Nincs/)
   })
 
+  // Issue #17 M3: the evaluation record now carries which calibration profile
+  // (docs/MODEL-CALIBRATION.md §4) was in context — an evaluation view that
+  // stays silent about it would let a researcher read persona numbers as
+  // absolute when the judge actually reasoned against a (possibly stale, or
+  // entirely absent) baseline.
+  describe('evaluation calibration-profile reference (issue #17 M3)', () => {
+    async function openEvaluationTab(evaluations: unknown[]): Promise<void> {
+      dom = loadAppDom({ routes: runRoutes({ 'GET /api/runs/r1/evaluations': evaluations }) })
+      await dom.boot()
+      ;(dom.document.querySelector('[data-run-card="r1"]')!).click()
+      await dom.settle()
+      ;(dom.document.querySelector('[data-subtab="evaluation"]')!).click()
+      await dom.settle()
+    }
+
+    it('names the valid profile an evaluation used', async () => {
+      await openEvaluationTab([
+        {
+          id: 'ev1', model: 'm1-2026-05', content: 'Szöveg', prompt_tokens: 10, completion_tokens: 5,
+          cost_usd: 0.001, created_at: '2026-08-06 10:00:00', model_profile_id: 'prof-1', model_profile_status: 'valid'
+        }
+      ])
+      const text = dom!.document.getElementById('evaluationsList')!.textContent!
+      expect(text).toMatch(/kalibráci/i)
+      // Same status wording model-card.js's calibrationStatusChip already uses
+      // for 'valid' — one vocabulary for calibration status across the app.
+      expect(text).toMatch(/érvényes/i)
+    })
+
+    it('names the profile as stale when it was already outdated at evaluation time', async () => {
+      await openEvaluationTab([
+        {
+          id: 'ev1', model: 'm1-2026-05', content: 'Szöveg', prompt_tokens: 10, completion_tokens: 5,
+          cost_usd: 0.001, created_at: '2026-08-06 10:00:00', model_profile_id: 'prof-1', model_profile_status: 'stale'
+        }
+      ])
+      const text = dom!.document.getElementById('evaluationsList')!.textContent!
+      expect(text).toMatch(/elavult/i)
+    })
+
+    it('states plainly that no calibration profile was available, rather than staying silent', async () => {
+      await openEvaluationTab([
+        {
+          id: 'ev1', model: 'm1-2026-05', content: 'Szöveg', prompt_tokens: 10, completion_tokens: 5,
+          cost_usd: 0.001, created_at: '2026-08-06 10:00:00', model_profile_id: null, model_profile_status: null
+        }
+      ])
+      const text = dom!.document.getElementById('evaluationsList')!.textContent!
+      expect(text).toMatch(/nincs.*kalibráci|nem volt kalibrációs profil/i)
+    })
+
+    // M3 review MEDIUM #6: a bare status chip alone does not identify WHICH
+    // profile was used — two different profiles for the same model (different
+    // measurement date, cell count, provider) would render identically. §6 of
+    // the spec requires every evaluation to cite its profile. The id is
+    // already in the API payload; the card must also name the measured stack
+    // and date so two profiles are visibly distinguishable.
+    it('names the profile’s model version, provider and measurement date, not just its status', async () => {
+      await openEvaluationTab([
+        {
+          id: 'ev1', model: 'm1-2026-05', content: 'Szöveg', prompt_tokens: 10, completion_tokens: 5,
+          cost_usd: 0.001, created_at: '2026-08-06 10:00:00', model_profile_id: 'prof-1',
+          model_profile_status: 'valid', model_profile_model_version: 'm1-2026-05',
+          model_profile_provider: 'DeepInfra', model_profile_measured_at: '2026-07-01 09:00:00'
+        }
+      ])
+      const text = dom!.document.getElementById('evaluationsList')!.textContent!
+      expect(text).toContain('DeepInfra')
+      // Any date rendering (hu-HU locale, ISO, etc.) will keep the year and
+      // month digits — a stable fragment that survives formatting choices.
+      expect(text).toMatch(/2026[.\-/]\s*0?7/)
+    })
+  })
+
   it('points the CSV export at the open run', async () => {
     dom = loadAppDom({ routes: runRoutes() })
     await dom.boot()

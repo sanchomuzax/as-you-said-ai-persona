@@ -14,7 +14,7 @@ import { buildEvaluationPrompt } from './lib/evaluate.js'
 import { toCsv } from './lib/csv.js'
 import { registerInterviewRoutes } from './interviews.js'
 import { registerCatalogRoutes } from './catalog.js'
-import { registerModelProfileRoutes } from './model-profiles.js'
+import { registerModelProfileRoutes, findProfileForRun } from './model-profiles.js'
 import {
   checkCredentials,
   createSessionToken,
@@ -116,8 +116,24 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
         .prepare('SELECT provider, COUNT(*) c FROM responses WHERE run_id = ? AND provider IS NOT NULL GROUP BY provider')
         .all(runId) as unknown as { provider: string; c: number }[]
     ).map((r) => ({ provider: r.provider, count: r.c }))
-    const prompt = buildEvaluationPrompt(run.name, results, { providers: evaluationProviders })
     const model = (JSON.parse(run.config_json) as RunConfig).model
+    // Issue #17 M3: judged against the stack THIS RUN'S OWN responses were
+    // served by (src/model-profiles.ts's findProfileForRun — see its docstring
+    // for why "today's global stack" is the wrong comparison, review HIGH #1),
+    // and recorded on the row below so the audit trail reflects what was true
+    // AT EVALUATION TIME, not whatever the profile's status is later.
+    //
+    // Defensive (review HIGH #2): the profile lookup must never fail the
+    // evaluation itself. A corrupt/partial model_profiles row degrading to "no
+    // profile" is far preferable to losing the whole evaluation silently
+    // through the auto-eval path's `.catch(() => undefined)` below.
+    let activeProfile: ReturnType<typeof findProfileForRun> = null
+    try {
+      activeProfile = findProfileForRun(db, runId, model)
+    } catch {
+      activeProfile = null
+    }
+    const prompt = buildEvaluationPrompt(run.name, results, { providers: evaluationProviders, profile: activeProfile })
 
     // Coverage snapshot, taken BEFORE the model call: the run keeps recording
     // responses during those seconds, and if it finishes meanwhile, a snapshot
@@ -132,14 +148,24 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
 
     const result = await client.complete(model, prompt, { temperature: 0.3, seed: 0 })
     const id = randomUUID()
+    // 'missing' (not NULL) records that M3 DID look and found nothing — a NULL
+    // model_profile_status must stay reserved for rows written before this
+    // milestone ever ran, where whether a profile existed is genuinely unknown
+    // (review MED #6: NULL must never be read as "there was no profile").
     db.prepare(
       `INSERT INTO run_evaluations
-         (id, run_id, model, prompt, content, prompt_tokens, completion_tokens, cost_usd, run_status, done_cells, total_cells)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?)`
+         (id, run_id, model, prompt, content, prompt_tokens, completion_tokens, cost_usd, run_status, done_cells, total_cells,
+          model_profile_id, model_profile_status, model_profile_model_version, model_profile_provider,
+          model_profile_measured_at, model_profile_reasons_json)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
     ).run(
       id, runId, result.modelVersion, prompt, result.content,
       result.promptTokens, result.completionTokens, result.costUsd,
-      coverage.status, coverage.done, coverage.total
+      coverage.status, coverage.done, coverage.total,
+      activeProfile?.profile.id ?? null, activeProfile?.status ?? 'missing',
+      activeProfile?.profile.modelVersion ?? null, activeProfile?.profile.provider ?? null,
+      activeProfile?.profile.createdAt ?? null,
+      activeProfile && activeProfile.reasons.length > 0 ? JSON.stringify(activeProfile.reasons) : null
     )
     budget.record(runId, {
       promptTokens: result.promptTokens,
@@ -565,7 +591,12 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
     return {
       success: true,
       data: db
-        .prepare('SELECT id, model, content, prompt_tokens, completion_tokens, cost_usd, run_status, done_cells, total_cells, created_at FROM run_evaluations WHERE run_id = ? ORDER BY created_at DESC')
+        .prepare(
+          `SELECT id, model, content, prompt_tokens, completion_tokens, cost_usd, run_status, done_cells, total_cells,
+                  model_profile_id, model_profile_status, model_profile_model_version, model_profile_provider,
+                  model_profile_measured_at, model_profile_reasons_json, created_at
+             FROM run_evaluations WHERE run_id = ? ORDER BY created_at DESC`
+        )
         .all(id)
     }
   })

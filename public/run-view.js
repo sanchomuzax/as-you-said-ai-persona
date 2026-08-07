@@ -414,6 +414,42 @@ document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') closeProvenancePanel();
 });
 
+/**
+ * Names the calibration profile the judge had in context when it wrote this
+ * evaluation (issue #17 M3, docs/MODEL-CALIBRATION.md §4). Recorded on the
+ * evaluation row at evaluation time, so a profile that has since gone stale is
+ * still reported with the status it actually had THEN — never today's status.
+ * Reuses model-card.js's calibrationStatusChip/labels: one vocabulary for
+ * calibration status ("érvényes"/"elavult"/"hiányzik") across the app.
+ *
+ * Review MEDIUM #6: a bare status chip does not distinguish two different
+ * profiles for the same model (different measurement date, cell count,
+ * provider) — so a cited profile also names its measured stack and date, not
+ * just its status. And a NULL model_profile_status (a row written before
+ * issue #17 M3 ever ran) must never be shown as the factual "there was no
+ * profile" — that is what the distinct 'missing' status means; NULL means the
+ * question was never even asked for this row, which is a weaker, different claim.
+ */
+function renderEvaluationProfileNote(ev) {
+  if (ev.model_profile_id) {
+    const stackParts = [ev.model_profile_model_version, ev.model_profile_provider]
+      .filter(Boolean)
+      .map(escapeHtml);
+    const detailParts = [...stackParts];
+    if (ev.model_profile_measured_at) {
+      detailParts.push('mérve: ' + escapeHtml(formatDateTime(ev.model_profile_measured_at)));
+    }
+    const detail = detailParts.length > 0 ? ` (${detailParts.join(', ')})` : '';
+    return `<p class="detail-note">Kalibrációs profil a kiértékelés idején: ${calibrationStatusChip(ev.model_profile_status)}${detail}</p>`;
+  }
+  if (ev.model_profile_status === 'missing') {
+    return `<p class="detail-note detail-note-warning">Nincs kalibrációs profil ehhez a modellhez: ez a kiértékelés nem tudta a perszóna-eredményeket a modell mért alapértelmezéséhez viszonyítani.</p>`;
+  }
+  // model_profile_status is null/undefined: a pre-M3 row, where whether a
+  // profile existed simply was not recorded — UNKNOWN, not a definite "none".
+  return `<p class="detail-note detail-note-warning">Nem rögzítve, hogy volt-e kalibrációs profil ennél a korábbi kiértékelésnél — nincs kalibrációs kontextus, amihez a perszóna-eredményeket viszonyítani lehetne.</p>`;
+}
+
 function renderEvaluationCard(ev) {
   const created = formatDateTime(ev.created_at);
   return `
@@ -423,6 +459,7 @@ function renderEvaluationCard(ev) {
         ${renderPartialEvaluationChip(ev)}
         <span class="evaluation-date">${escapeHtml(created)}</span>
       </div>
+      ${renderEvaluationProfileNote(ev)}
       <div class="evaluation-content">${renderMarkdown(ev.content || '')}</div>
       <div class="evaluation-meta">
         <span class="stat-chip" title="${escapeHtml(TOOLTIPS.tokens)}">${formatNumber(ev.prompt_tokens || 0)} prompt token</span>

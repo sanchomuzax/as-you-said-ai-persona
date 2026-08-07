@@ -12,6 +12,7 @@ import {
   PROFILE_VALIDITY_DAYS,
   type ProfileKey,
   type ProfileMetrics,
+  type ProfileStatus,
   type StoredProfile
 } from './lib/profile.js'
 
@@ -54,6 +55,184 @@ function toStoredProfile(row: ProfileRow): StoredProfile {
   }
 }
 
+/**
+ * What the stack looks like RIGHT NOW for one model, read from the most recent
+ * call actually made with it. This is how provider drift and a silent upstream
+ * version bump are detected: the profile says what was measured, the last
+ * response says what is being served.
+ */
+function observedStack(
+  db: Db,
+  model: string,
+  since: string
+): { modelVersion: string | null; provider: string | null } {
+  // Every response SINCE the profile was measured, not just the newest one:
+  // with only the latest row a single call served by another provider makes
+  // the profile stale and the next one makes it valid again, so the drift
+  // event would flicker instead of sticking.
+  const rows = db
+    .prepare(
+      `SELECT DISTINCT model_version, provider FROM responses
+        WHERE model_requested = ? AND created_at > ? AND model_version IS NOT NULL`
+    )
+    .all(model, since) as unknown as { model_version: string; provider: string | null }[]
+  if (rows.length === 0) return { modelVersion: null, provider: null }
+  const version = rows.find((r) => r.model_version !== null)?.model_version ?? null
+  // A NULL provider is a call OpenRouter did not attribute — no news, not
+  // different news. Only an actual, different provider name counts as drift.
+  const named = rows.map((r) => r.provider).filter((p): p is string => p !== null)
+  return { modelVersion: version, provider: named[0] ?? null }
+}
+
+/**
+ * The most recently created profile for a model. Exported (alongside
+ * `currentKeyFor` and `findProfileForRun` below) so callers outside this
+ * module can look up the same profile without re-implementing the staleness
+ * comparison themselves (issue #17 M3).
+ */
+export function latestProfileFor(db: Db, model: string): StoredProfile | null {
+  const row = db
+    // rowid breaks the tie: created_at is second-granular, so two profiles
+    // stored in the same second would otherwise order arbitrarily.
+    .prepare('SELECT * FROM model_profiles WHERE model_requested = ? ORDER BY created_at DESC, rowid DESC LIMIT 1')
+    .get(model) as ProfileRow | undefined
+  return row ? toStoredProfile(row) : null
+}
+
+/**
+ * The key the profile is compared against for "is this profile current
+ * TODAY" (the "Modellek" tab's question). Where nothing has been observed
+ * since the profile was measured, the profile's own values are used: no news
+ * is not evidence of drift, and marking a profile stale for lack of traffic
+ * would cry wolf.
+ */
+export function currentKeyFor(db: Db, profile: StoredProfile): ProfileKey {
+  const observed = observedStack(db, profile.modelRequested, profile.createdAt)
+  return keyFromStack(db, profile, observed)
+}
+
+/**
+ * The key a profile is compared against for ONE EVALUATED RUN (issue #17 M3
+ * review, HIGH 1) — "does this profile describe the calls THIS RUN made",
+ * which is a different question than "is it current today". A run answered by
+ * Together/m1-2025-01 must never be judged against a later profile measured on
+ * DeepInfra/m1-2026-05 just because nothing else has called the model since —
+ * that "no news" fallback is correct for the global/"today" question above,
+ * but would silently borrow a stack this run never used.
+ */
+function runKeyFor(db: Db, profile: StoredProfile, runStack: ObservedStack): ProfileKey {
+  return keyFromStack(db, profile, runStack)
+}
+
+function keyFromStack(db: Db, profile: StoredProfile, observed: ObservedStack): ProfileKey {
+  return {
+    modelRequested: profile.modelRequested,
+    modelVersion: observed.modelVersion ?? profile.modelVersion,
+    provider: observed.provider ?? profile.provider,
+    promptTemplateHash: promptTemplateHash(),
+    // The probe itself is versioned: a newer version of the same lineage means
+    // the profile describes questions that have since been reworded.
+    probeQuestionnaireId: latestProbeVersionOf(db, profile.probeQuestionnaireId),
+    language: profile.language
+  }
+}
+
+type ObservedStack = { modelVersion: string | null; provider: string | null }
+
+/**
+ * The stack ONE RUN's own responses were actually served by — as opposed to
+ * `observedStack`, which looks at everything the model has answered globally.
+ * This is the fix for HIGH 1: a finished run's evaluation must be judged
+ * against what answered THAT run, not against "whatever has been observed
+ * since the profile was measured" (which a run that finished earlier than the
+ * profile contributes nothing to, making comparisons vacuously pass).
+ */
+function observedRunStack(db: Db, runId: string): ObservedStack {
+  const rows = db
+    .prepare(
+      `SELECT DISTINCT model_version, provider FROM responses
+        WHERE run_id = ? AND model_version IS NOT NULL`
+    )
+    .all(runId) as unknown as { model_version: string; provider: string | null }[]
+  if (rows.length === 0) return { modelVersion: null, provider: null }
+  const version = rows.find((r) => r.model_version !== null)?.model_version ?? null
+  const named = rows.map((r) => r.provider).filter((p): p is string => p !== null)
+  return { modelVersion: version, provider: named[0] ?? null }
+}
+
+/**
+ * The newest version in the probe's lineage. Spec §2 lists "probe
+ * questionnaire revised" as a re-test trigger; without this lookup the
+ * comparison would be the profile's own id against itself and could never fire.
+ */
+function latestProbeVersionOf(db: Db, questionnaireId: string): string {
+  const row = db
+    .prepare(
+      `SELECT latest.id FROM questionnaires used
+         JOIN questionnaires latest ON latest.lineage_id = used.lineage_id
+        WHERE used.id = ?
+        ORDER BY latest.version DESC LIMIT 1`
+    )
+    .get(questionnaireId) as { id: string } | undefined
+  return row?.id ?? questionnaireId
+}
+
+/**
+ * Why a profile is stale, so the UI/prompt can say the ACTUAL reason instead
+ * of a generic list of every possible one. `db` is not needed — both `profile`
+ * and `current` are already fully resolved keys by the time this runs.
+ */
+export function stalenessReasons(profile: StoredProfile, current: ProfileKey, nowIso: string): string[] {
+  const reasons: string[] = []
+  if (profile.modelVersion !== current.modelVersion) {
+    reasons.push(`A modellverzió megváltozott (${profile.modelVersion} → ${current.modelVersion}).`)
+  }
+  if (profile.provider !== current.provider) {
+    reasons.push(
+      `A kiszolgáló szolgáltató megváltozott (${profile.provider ?? 'nincs rögzítve'} → ${current.provider ?? 'nincs rögzítve'}).`
+    )
+  }
+  if (profile.promptTemplateHash !== current.promptTemplateHash) {
+    reasons.push('Az elicitációs sablon azóta módosult, így a profil egy már nem létező promptot ír le.')
+  }
+  if (profile.probeQuestionnaireId !== current.probeQuestionnaireId) {
+    reasons.push('A próba-kérdőívnek azóta új verziója készült, tehát a profil más kérdéseket ír le.')
+  }
+  if (Date.parse(sqliteToIso(profile.validUntil)) <= Date.parse(nowIso)) {
+    reasons.push(`A profil érvényessége lejárt (${PROFILE_VALIDITY_DAYS} nap).`)
+  }
+  return reasons
+}
+
+/**
+ * The single lookup `runEvaluation` (src/server.ts) needs: which profile (if
+ * any) is active for the run being evaluated, judged against the STACK THAT
+ * RUN ACTUALLY USED (issue #17 M3 review, HIGH 1 — see `runKeyFor` above), not
+ * "today's" global stack. Both the profile's own measured stack and the run's
+ * own observed stack are returned so the judge prompt can show both.
+ *
+ * Never throws on a partial/corrupt `metrics_json`: `profile.metrics` may be
+ * null or missing fields (older profiles, or a future schema change), and this
+ * function only touches the profile KEY (model/provider/template/probe/lang),
+ * never `.metrics` — a caller reading `profile.metrics` still needs its own
+ * optional chaining (see buildCalibrationSection in src/lib/evaluate.ts).
+ */
+export function findProfileForRun(
+  db: Db,
+  runId: string,
+  model: string,
+  now: () => Date = () => new Date()
+): { profile: StoredProfile; status: ProfileStatus; reasons: string[]; runStack: ObservedStack } | null {
+  const profile = latestProfileFor(db, model)
+  if (!profile) return null
+  const runStack = observedRunStack(db, runId)
+  const current = runKeyFor(db, profile, runStack)
+  const nowIso = now().toISOString()
+  const status = profileStatus(profile, current, nowIso)
+  const reasons = status === 'stale' ? stalenessReasons(profile, current, nowIso) : []
+  return { profile, status, reasons, runStack }
+}
+
 export interface ProfileDeps {
   db: Db
   models: ModelsConfig
@@ -66,112 +245,21 @@ export function registerModelProfileRoutes(app: FastifyInstance, deps: ProfileDe
   const { db, models, runner } = deps
   const now = deps.now ?? ((): Date => new Date())
 
-  /**
-   * What the stack looks like RIGHT NOW for one model, read from the most recent
-   * call actually made with it. This is how provider drift and a silent upstream
-   * version bump are detected: the profile says what was measured, the last
-   * response says what is being served.
-   */
-  const observedStack = (
-    model: string,
-    since: string
-  ): { modelVersion: string | null; provider: string | null } => {
-    // Every response SINCE the profile was measured, not just the newest one:
-    // with only the latest row a single call served by another provider makes
-    // the profile stale and the next one makes it valid again, so the drift
-    // event would flicker instead of sticking.
-    const rows = db
-      .prepare(
-        `SELECT DISTINCT model_version, provider FROM responses
-          WHERE model_requested = ? AND created_at > ? AND model_version IS NOT NULL`
-      )
-      .all(model, since) as unknown as { model_version: string; provider: string | null }[]
-    if (rows.length === 0) return { modelVersion: null, provider: null }
-    const version = rows.find((r) => r.model_version !== null)?.model_version ?? null
-    // A NULL provider is a call OpenRouter did not attribute — no news, not
-    // different news. Only an actual, different provider name counts as drift.
-    const named = rows.map((r) => r.provider).filter((p): p is string => p !== null)
-    return { modelVersion: version, provider: named[0] ?? null }
-  }
-
-  const latestProfileFor = (model: string): StoredProfile | null => {
-    const row = db
-      // rowid breaks the tie: created_at is second-granular, so two profiles
-      // stored in the same second would otherwise order arbitrarily.
-      .prepare('SELECT * FROM model_profiles WHERE model_requested = ? ORDER BY created_at DESC, rowid DESC LIMIT 1')
-      .get(model) as ProfileRow | undefined
-    return row ? toStoredProfile(row) : null
-  }
-
-  /**
-   * The key the profile is compared against. Where nothing has been observed
-   * since, the profile's own values are used: no news is not evidence of drift,
-   * and marking a profile stale for lack of traffic would cry wolf.
-   */
-  const currentKeyFor = (profile: StoredProfile): ProfileKey => {
-    const observed = observedStack(profile.modelRequested, profile.createdAt)
-    return {
-      modelRequested: profile.modelRequested,
-      modelVersion: observed.modelVersion ?? profile.modelVersion,
-      provider: observed.provider ?? profile.provider,
-      promptTemplateHash: promptTemplateHash(),
-      // The probe itself is versioned: a newer version of the same lineage means
-      // the profile describes questions that have since been reworded.
-      probeQuestionnaireId: latestProbeVersionOf(profile.probeQuestionnaireId),
-      language: profile.language
-    }
-  }
-
-  /**
-   * The newest version in the probe's lineage. Spec §2 lists "probe
-   * questionnaire revised" as a re-test trigger; without this lookup the
-   * comparison would be the profile's own id against itself and could never fire.
-   */
-  const latestProbeVersionOf = (questionnaireId: string): string => {
-    const row = db
-      .prepare(
-        `SELECT latest.id FROM questionnaires used
-           JOIN questionnaires latest ON latest.lineage_id = used.lineage_id
-          WHERE used.id = ?
-          ORDER BY latest.version DESC LIMIT 1`
-      )
-      .get(questionnaireId) as { id: string } | undefined
-    return row?.id ?? questionnaireId
-  }
-
-  /** Why a profile is stale, so the UI can say it instead of showing a bare chip. */
-  const stalenessReasons = (profile: StoredProfile, current: ProfileKey): string[] => {
-    const reasons: string[] = []
-    if (profile.modelVersion !== current.modelVersion) {
-      reasons.push(`A modellverzió megváltozott (${profile.modelVersion} → ${current.modelVersion}).`)
-    }
-    if (profile.provider !== current.provider) {
-      reasons.push(
-        `A kiszolgáló szolgáltató megváltozott (${profile.provider ?? 'nincs rögzítve'} → ${current.provider ?? 'nincs rögzítve'}).`
-      )
-    }
-    if (profile.promptTemplateHash !== current.promptTemplateHash) {
-      reasons.push('Az elicitációs sablon azóta módosult, így a profil egy már nem létező promptot ír le.')
-    }
-    if (profile.probeQuestionnaireId !== current.probeQuestionnaireId) {
-      reasons.push('A próba-kérdőívnek azóta új verziója készült, tehát a profil más kérdéseket ír le.')
-    }
-    if (Date.parse(sqliteToIso(profile.validUntil)) <= now().getTime()) {
-      reasons.push(`A profil érvényessége lejárt (${PROFILE_VALIDITY_DAYS} nap).`)
-    }
-    return reasons
-  }
-
+  // Fully optional-chained (HIGH 2, issue #17 M3 review): a partial
+  // metrics_json — e.g. {positivityOffset: 0.1} with no priorBias at all,
+  // which a future schema change (M4) can produce for every profile M2 ever
+  // wrote — must degrade to "not measured", never throw and take the whole
+  // request down with it.
   const summarize = (profile: StoredProfile): Record<string, unknown> => {
     const metrics = profile.metrics
     return {
       positivityOffset: metrics?.positivityOffset ?? null,
-      priorBiasMaxDeviation: metrics?.priorBias.maxDeviation ?? null,
+      priorBiasMaxDeviation: metrics?.priorBias?.maxDeviation ?? null,
       invalidRate: metrics?.invalidRate ?? null,
       abstainRate: metrics?.abstainRate ?? null,
-      questionCount: metrics?.perQuestion.length ?? 0,
-      cellCount: metrics?.provenance.cellCount ?? 0,
-      costUsd: metrics?.provenance.costUsd ?? null
+      questionCount: metrics?.perQuestion?.length ?? 0,
+      cellCount: metrics?.provenance?.cellCount ?? 0,
+      costUsd: metrics?.provenance?.costUsd ?? null
     }
   }
 
@@ -181,17 +269,17 @@ export function registerModelProfileRoutes(app: FastifyInstance, deps: ProfileDe
   app.get('/api/model-profiles', async () => ({
     success: true,
     data: models.models.map((model) => {
-      const profile = latestProfileFor(model.id)
+      const profile = latestProfileFor(db, model.id)
       if (!profile) {
         return { model: model.id, label: model.label, status: 'missing', profile: null, reasons: [], summary: null }
       }
-      const current = currentKeyFor(profile)
+      const current = currentKeyFor(db, profile)
       const status = profileStatus(profile, current, now().toISOString())
       return {
         model: model.id,
         label: model.label,
         status,
-        reasons: status === 'stale' ? stalenessReasons(profile, current) : [],
+        reasons: status === 'stale' ? stalenessReasons(profile, current, now().toISOString()) : [],
         summary: summarize(profile),
         profile: {
           id: profile.id,
@@ -213,7 +301,7 @@ export function registerModelProfileRoutes(app: FastifyInstance, deps: ProfileDe
     const row = db.prepare('SELECT * FROM model_profiles WHERE id = ?').get(id) as ProfileRow | undefined
     if (!row) return reply.code(404).send({ success: false, error: 'A modell-profil nem található' })
     const profile = toStoredProfile(row)
-    const current = currentKeyFor(profile)
+    const current = currentKeyFor(db, profile)
     const status = profileStatus(profile, current, now().toISOString())
     const questionnaire = db
       .prepare('SELECT name, version FROM questionnaires WHERE id = ?')
@@ -223,7 +311,7 @@ export function registerModelProfileRoutes(app: FastifyInstance, deps: ProfileDe
       data: {
         ...profile,
         status,
-        reasons: status === 'stale' ? stalenessReasons(profile, current) : [],
+        reasons: status === 'stale' ? stalenessReasons(profile, current, now().toISOString()) : [],
         probeName: questionnaire?.name ?? null,
         probeVersion: questionnaire?.version ?? null
       }
