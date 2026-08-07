@@ -27,7 +27,14 @@ function closeRunDetail(updateHash) {
 
 document.getElementById('runDetailBackBtn')?.addEventListener('click', () => {
   closeRunDetail(true);
-  setActiveTab('runs');
+  // Same expression closeRunDetail() just used to pick the hash (issue #23):
+  // Vissza returns to whichever tab the researcher actually opened this run
+  // from, not always Futtatások. A card opened from Áttekintés never touches
+  // state.activeTab, so hard-coding 'runs' here left the address bar and the
+  // visible pane disagreeing after Back. The entity-row entry point already
+  // sets state.activeTab = 'runs' itself (public/entity-view.js), so it keeps
+  // landing on Futtatások exactly as before.
+  setActiveTab(state.activeTab || 'runs');
   // The list is re-rendered here, so focus is restored only after the new
   // markup is in place — on the card with the same id, not the discarded node.
   void refreshRunsList().then(restoreDetailFocus);
