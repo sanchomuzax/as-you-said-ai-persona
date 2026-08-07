@@ -208,6 +208,12 @@ function selectProjectEverywhere(projectId) {
     const el = document.getElementById(id);
     if (el) el.value = projectId || '';
   });
+  // Picking a project on ANY tab (not just Personák) must unlock persona
+  // creation: the persona form is reachable from the Runs/Interviews tabs too
+  // once its project is set here, and previously only personaProjectSelect's
+  // own change handler flipped this flag, leaving it disabled everywhere else.
+  const personaSubmitBtn = document.getElementById('personaSubmitBtn');
+  if (personaSubmitBtn) personaSubmitBtn.disabled = !projectId;
 }
 
 function updatePersonaFormVisibility() {

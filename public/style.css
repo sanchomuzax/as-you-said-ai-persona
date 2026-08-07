@@ -260,6 +260,20 @@ body {
   color: var(--color-text);
 }
 
+/* Toggle button that reveals a creator/editor form (issue #18) — the h2 sits
+   next to it instead of above it, so the row reads as one control. */
+.collapsible-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+.collapsible-header h2 {
+  margin-bottom: 0;
+}
+
 /* Forms */
 .filter-bar {
   background: var(--color-bg-secondary);

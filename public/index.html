@@ -65,8 +65,17 @@
       <!-- Projects Tab -->
       <div id="tab-projects" class="tab-pane active">
         <div class="tab-section">
-          <h2>Projekt létrehozása</h2>
-          <form id="projectForm" class="form-grid">
+          <h2>Projektek listája</h2>
+          <div id="projectsList" class="list-container">
+            <p class="placeholder">Betöltés...</p>
+          </div>
+        </div>
+        <div class="tab-section">
+          <div class="collapsible-header">
+            <h2>Projekt létrehozása</h2>
+            <button type="button" class="btn btn-secondary collapsible-toggle" aria-expanded="false" aria-controls="projectForm">+ Új projekt</button>
+          </div>
+          <form id="projectForm" class="form-grid" style="display: none;">
             <div class="form-group">
               <label for="projectName">Projekt neve *</label>
               <input type="text" id="projectName" required>
@@ -81,12 +90,6 @@
             </div>
             <button type="submit" class="btn btn-primary">Projekt hozzáadása</button>
           </form>
-        </div>
-        <div class="tab-section">
-          <h2>Projektek listája</h2>
-          <div id="projectsList" class="list-container">
-            <p class="placeholder">Betöltés...</p>
-          </div>
         </div>
       </div>
 
@@ -104,9 +107,18 @@
           </div>
           <p id="noProjectHint" class="hint" style="display: none;">Előbb hozz létre projektet</p>
         </div>
+        <div class="tab-section">
+          <h2>Perszónák listája</h2>
+          <div id="personasList" class="list-container">
+            <p class="placeholder">Betöltés...</p>
+          </div>
+        </div>
         <div class="tab-section" id="personaFormSection" style="display: none;">
-          <h2>Perszónák létrehozása</h2>
-          <form id="personaForm" class="form-grid">
+          <div class="collapsible-header">
+            <h2>Perszónák létrehozása</h2>
+            <button type="button" class="btn btn-secondary collapsible-toggle" aria-expanded="false" aria-controls="personaForm">+ Új perszóna</button>
+          </div>
+          <form id="personaForm" class="form-grid" style="display: none;">
             <div class="form-group">
               <label for="personaName">Név</label>
               <input type="text" id="personaName" required>
@@ -133,12 +145,6 @@
             <button type="submit" id="personaSubmitBtn" class="btn btn-primary">Perszóna hozzáadása</button>
           </form>
         </div>
-        <div class="tab-section">
-          <h2>Perszónák listája</h2>
-          <div id="personasList" class="list-container">
-            <p class="placeholder">Betöltés...</p>
-          </div>
-        </div>
       </div>
 
       <!-- Questionnaires Tab -->
@@ -155,8 +161,17 @@
           </div>
         </div>
         <div class="tab-section">
-          <h2>Kérdőív létrehozása</h2>
-          <form id="questionnaireForm" class="form-grid">
+          <h2>Kérdőívek listája</h2>
+          <div id="questionnairesList" class="list-container">
+            <p class="placeholder">Betöltés...</p>
+          </div>
+        </div>
+        <div class="tab-section">
+          <div class="collapsible-header">
+            <h2>Kérdőív létrehozása</h2>
+            <button type="button" class="btn btn-secondary collapsible-toggle" aria-expanded="false" aria-controls="questionnaireForm">+ Új kérdőív</button>
+          </div>
+          <form id="questionnaireForm" class="form-grid" style="display: none;">
             <div class="form-group">
               <label for="questionnaireName">Kérdőív neve</label>
               <input type="text" id="questionnaireName" required>
@@ -168,19 +183,22 @@
             <button type="submit" class="btn btn-primary">Kérdőív hozzáadása</button>
           </form>
         </div>
-        <div class="tab-section">
-          <h2>Kérdőívek listája</h2>
-          <div id="questionnairesList" class="list-container">
-            <p class="placeholder">Betöltés...</p>
-          </div>
-        </div>
       </div>
 
       <!-- Runs Tab -->
       <div id="tab-runs" class="tab-pane">
         <div class="tab-section">
-          <h2>Futtatás létrehozása</h2>
-          <form id="runForm" class="form-grid">
+          <h2>Futtatások</h2>
+          <div id="runsList" class="runs-grid">
+            <p class="placeholder">Betöltés...</p>
+          </div>
+        </div>
+        <div class="tab-section">
+          <div class="collapsible-header">
+            <h2>Futtatás létrehozása</h2>
+            <button type="button" class="btn btn-secondary collapsible-toggle" aria-expanded="false" aria-controls="runForm">+ Új futtatás</button>
+          </div>
+          <form id="runForm" class="form-grid" style="display: none;">
             <div class="form-group">
               <label for="runProjectSelect">Projekt</label>
               <select id="runProjectSelect" required>
@@ -226,12 +244,6 @@
             <button type="submit" class="btn btn-primary">Futtatás indítása</button>
           </form>
         </div>
-        <div class="tab-section">
-          <h2>Futtatások</h2>
-          <div id="runsList" class="runs-grid">
-            <p class="placeholder">Betöltés...</p>
-          </div>
-        </div>
       </div>
       <!-- Interviews Tab -->
       <div id="tab-interviews" class="tab-pane">
@@ -250,8 +262,17 @@
           </div>
         </div>
         <div class="tab-section">
-          <h2>Interjú indítása</h2>
-          <form id="interviewForm" class="form-grid">
+          <h2>Interjúk</h2>
+          <div id="interviewsList" class="list-container">
+            <p class="placeholder">Betöltés...</p>
+          </div>
+        </div>
+        <div class="tab-section">
+          <div class="collapsible-header">
+            <h2>Interjú indítása</h2>
+            <button type="button" class="btn btn-secondary collapsible-toggle" aria-expanded="false" aria-controls="interviewForm">+ Új interjú</button>
+          </div>
+          <form id="interviewForm" class="form-grid" style="display: none;">
             <div class="form-group">
               <label for="interviewTitle">Az interjú címe</label>
               <input type="text" id="interviewTitle" required placeholder="pl. Akciókeresési szokások — feltárás">
@@ -281,12 +302,6 @@
             <button type="submit" class="btn btn-primary">Interjú indítása</button>
           </form>
         </div>
-        <div class="tab-section">
-          <h2>Interjúk</h2>
-          <div id="interviewsList" class="list-container">
-            <p class="placeholder">Betöltés...</p>
-          </div>
-        </div>
       </div>
       <!-- Models / calibration Tab -->
       <div id="tab-models" class="tab-pane">
@@ -302,8 +317,11 @@
           </div>
         </div>
         <div class="tab-section">
-          <h2>Kalibráció indítása</h2>
-          <form id="calibrationForm" class="form-grid">
+          <div class="collapsible-header">
+            <h2>Kalibráció indítása</h2>
+            <button type="button" class="btn btn-secondary collapsible-toggle" aria-expanded="false" aria-controls="calibrationForm">+ Kalibráció indítása</button>
+          </div>
+          <form id="calibrationForm" class="form-grid" style="display: none;">
             <div class="form-group">
               <label for="calibrationModel">Modell</label>
               <select id="calibrationModel" required></select>
@@ -322,8 +340,11 @@
           </form>
         </div>
         <div class="tab-section">
-          <h2>Profil rögzítése befejezett futtatásokból</h2>
-          <form id="profileFromRunsForm" class="form-grid">
+          <div class="collapsible-header">
+            <h2>Profil rögzítése befejezett futtatásokból</h2>
+            <button type="button" class="btn btn-secondary collapsible-toggle" aria-expanded="false" aria-controls="profileFromRunsForm">+ Profil rögzítése</button>
+          </div>
+          <form id="profileFromRunsForm" class="form-grid" style="display: none;">
             <div class="form-group">
               <label for="profileModel">Modell</label>
               <select id="profileModel" required></select>
@@ -474,6 +495,7 @@
   <script src="metrics.js"></script>
   <script src="routing.js"></script>
   <script src="focus-return.js"></script>
+  <script src="collapsible.js"></script>
   <script src="detail.js"></script>
   <script src="provenance.js"></script>
   <script src="interview.js"></script>
