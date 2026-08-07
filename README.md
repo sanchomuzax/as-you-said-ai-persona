@@ -88,7 +88,7 @@ npm run dev            # http://localhost:3555
 
 Requires Node.js 24+ (uses the built-in `node:sqlite` — no native modules).
 
-Run tests with `npm test` (565 tests) or `npm run test:coverage`.
+Run tests with `npm test` (567 tests) or `npm run test:coverage`.
 
 For production, a systemd user service works well:
 
