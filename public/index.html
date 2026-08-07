@@ -315,8 +315,11 @@
               <select id="runModel" required></select>
             </div>
             <div class="form-group">
-              <label for="runProvider" title="Ugyanazt a modellt az OpenRouter több szolgáltatóhoz irányíthatja, eltérő kvantálással — így a futtatás nem egyetlen modellt mér. Ha megadsz egy szolgáltatót, minden hívás oda megy, fallback nélkül (ha nem elérhető, a hívás hibázik).">Szolgáltató rögzítése (opcionális)</label>
-              <input type="text" id="runProvider" placeholder="pl. DeepInfra">
+              <label for="runProvider" title="Ha megadsz egy szolgáltatót, minden hívás oda megy, fallback nélkül (ha nem elérhető, a hívás hibázik).">Szolgáltató rögzítése (opcionális)</label>
+              <select id="runProvider">
+                <option value="">Nem rögzítem (bármelyik szolgáltató)</option>
+              </select>
+              <p class="form-note">Ugyanaz a modell szolgáltatónként — sőt kvantálásonként (pl. fp4, fp8: a modellsúlyok tömörítési szintje, ami a válasz sebességét, költségét és néha kis mértékben a minőségét is befolyásolja) — kicsit másképp válaszolhat. A választás rögzíti, KITŐL jöjjön a válasz, hogy a mérés megismételhető legyen. „Nem rögzítem” esetén az OpenRouter szabadon válogat a szolgáltatók között: kényelmesebb, de a futtatás kevésbé lesz reprodukálható, mert a következő hívás akár másik szolgáltatótól is jöhet.</p>
             </div>
             <div class="form-group">
               <label for="runTemperature">Hőmérséklet (0-2)</label>
@@ -377,8 +380,11 @@
               <select id="interviewModel" required></select>
             </div>
             <div class="form-group">
-              <label for="interviewProvider" title="Ugyanazt a modellt az OpenRouter több szolgáltatóhoz irányíthatja, eltérő kvantálással. Ha megadsz egyet, minden forduló oda megy, fallback nélkül.">Szolgáltató rögzítése (opcionális)</label>
-              <input type="text" id="interviewProvider" placeholder="pl. DeepInfra">
+              <label for="interviewProvider" title="Ha megadsz egyet, minden forduló oda megy, fallback nélkül.">Szolgáltató rögzítése (opcionális)</label>
+              <select id="interviewProvider">
+                <option value="">Nem rögzítem (bármelyik szolgáltató)</option>
+              </select>
+              <p class="form-note">Ugyanaz a modell szolgáltatónként — sőt kvantálásonként (pl. fp4, fp8: a modellsúlyok tömörítési szintje, ami a válasz sebességét, költségét és néha kis mértékben a minőségét is befolyásolja) — kicsit másképp válaszolhat. A választás rögzíti, KITŐL jöjjön a válasz. „Nem rögzítem” esetén az OpenRouter szabadon válogat a szolgáltatók között: kényelmesebb, de az interjú kevésbé lesz reprodukálható, mert a következő forduló akár másik szolgáltatótól is jöhet.</p>
             </div>
             <div class="form-group">
               <label for="interviewTemperature">Hőmérséklet (0-2)</label>
@@ -436,7 +442,10 @@
             </div>
             <div class="form-group">
               <label for="calibrationProvider" title="Szolgáltató rögzítése nélkül a profil nem egyetlen kiszolgálót ír le, és a szolgáltató-váltás azonnal elavulttá teszi.">Szolgáltató rögzítése (ajánlott)</label>
-              <input type="text" id="calibrationProvider" placeholder="pl. DeepInfra">
+              <select id="calibrationProvider">
+                <option value="">Nem rögzítem (bármelyik szolgáltató)</option>
+              </select>
+              <p class="form-note">Ugyanaz a modell szolgáltatónként — sőt kvantálásonként (pl. fp4, fp8: a modellsúlyok tömörítési szintje, ami a válasz sebességét, költségét és néha kis mértékben a minőségét is befolyásolja) — kicsit másképp válaszolhat. A választás rögzíti, KITŐL jöjjön a válasz, hogy a mérés megismételhető legyen. „Nem rögzítem” esetén az OpenRouter szabadon válogat a szolgáltatók között: kényelmesebb, de a profil kevésbé lesz reprodukálható, mert a következő hívás akár másik szolgáltatótól is jöhet.</p>
             </div>
             <button type="submit" class="btn btn-primary">Kalibrációs futtatás indítása</button>
           </form>
@@ -607,6 +616,7 @@
   <script src="provenance.js"></script>
   <script src="interview.js"></script>
   <script src="model-card.js"></script>
+  <script src="provider-field.js"></script>
   <script src="app.js"></script>
   <script src="entity-view.js"></script>
   <script src="runs-list.js"></script>

@@ -30,6 +30,15 @@ export interface ChatMessage {
   content: string
 }
 
+/** One upstream endpoint OpenRouter currently routes a model to (issue #28). */
+export interface CatalogEndpoint {
+  /** The exact string `ChatOptions.provider` / `provider.order` expects to pin THIS variant. */
+  tag: string
+  providerName: string
+  /** 'unknown' is OpenRouter saying it does not know — never a real level. */
+  quantization: string
+}
+
 export interface ChatClient {
   /**
    * A bare string is the single-question case (a questionnaire cell, sent in a
@@ -37,6 +46,13 @@ export interface ChatClient {
    * interview mode uses it, and its results live in their own tables.
    */
   complete(model: string, prompt: string | readonly ChatMessage[], opts: ChatOptions): Promise<ChatResult>
+  /**
+   * Optional (issue #28): the provider dropdown's live catalog source. Not
+   * every ChatClient needs to implement it — a test stub, for one — and a
+   * caller must treat a missing method exactly like a network failure: the
+   * catalog is unreachable, fall back to what the database has observed.
+   */
+  listEndpoints?(model: string): Promise<CatalogEndpoint[]>
 }
 
 /** Thin OpenRouter chat-completions client with retry/backoff. */
@@ -123,6 +139,47 @@ export class OpenRouterClient implements ChatClient {
       cacheDiscountUsd: data.usage?.cache_discount ?? 0,
       requestId: data.id ?? null,
       latencyMs: Date.now() - started
+    }
+  }
+
+  /**
+   * OpenRouter's endpoint list for one model: every upstream provider
+   * currently serving it, with the exact slug to pin it (`tag`, e.g.
+   * `deepinfra/fp4` — NOT the display name `DeepInfra`, which `provider.order`
+   * does not reliably resolve) and its quantization. Bounded by a short
+   * timeout and never retried: this backs an optional UI convenience (issue
+   * #28's provider dropdown), not a measurement — a slow OpenRouter must not
+   * stall the form that's asking for it.
+   */
+  async listEndpoints(model: string): Promise<CatalogEndpoint[]> {
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort(), 5000)
+    try {
+      const res = await this.fetchFn(`${this.baseUrl}/models/${model}/endpoints`, {
+        headers: { Authorization: `Bearer ${this.apiKey}` },
+        signal: controller.signal
+      })
+      if (!res.ok) {
+        const body = await res.text().catch(() => '')
+        throw new Error(`OpenRouter HTTP ${res.status}: ${body.slice(0, 300)}`)
+      }
+      const data = (await res.json()) as {
+        data?: {
+          endpoints?: Array<{ tag?: string; provider_name?: string; quantization?: string }>
+        }
+      }
+      // An endpoint with no tag has nothing a run could actually pin — offering
+      // it would recreate the exact "type in a value that doesn't work" defect
+      // this catalog exists to fix.
+      return (data.data?.endpoints ?? [])
+        .filter((e): e is { tag: string; provider_name?: string; quantization?: string } => !!e.tag)
+        .map((e) => ({
+          tag: e.tag,
+          providerName: e.provider_name ?? e.tag,
+          quantization: e.quantization ?? 'unknown'
+        }))
+    } finally {
+      clearTimeout(timeout)
     }
   }
 }

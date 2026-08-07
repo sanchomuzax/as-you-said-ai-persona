@@ -80,11 +80,30 @@ function calibrationRunsFor(modelId) {
     .sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)));
 }
 
+/**
+ * Issue #28: the provider dropdown's options for one model, cached per model
+ * id so the on-card workflow and every repaint (rerenderModelDetailBody) read
+ * it synchronously instead of refetching on every runs-poll repaint. A failed
+ * fetch (network error, or the route rejecting an unstubbed/unknown model)
+ * degrades to "no options but 'Nem rögzítem' still works" — it must never
+ * block the card from rendering.
+ */
+async function ensureProviderOptions(modelId) {
+  if (!state.providerOptionsCache) state.providerOptionsCache = {};
+  if (state.providerOptionsCache[modelId]) return;
+  try {
+    state.providerOptionsCache[modelId] = await apiCall('GET', `/api/models/${encodeURIComponent(modelId)}/providers`);
+  } catch {
+    state.providerOptionsCache[modelId] = { options: [], catalogAvailable: false, catalogError: true };
+  }
+}
+
 /** Everything the on-card workflow needs, computed from already-fetched state. */
 function modelCardContext(modelId) {
   return {
     probes: state.probeQuestionnaires || [],
-    calibrationRuns: calibrationRunsFor(modelId)
+    calibrationRuns: calibrationRunsFor(modelId),
+    providerOptions: (state.providerOptionsCache && state.providerOptionsCache[modelId]?.options) || []
   };
 }
 
@@ -107,6 +126,9 @@ function renderCalibrationForm() {
     '<option value="">-- Válassz próba-kérdőívet --</option>' +
     probes.map((q) => `<option value="${escapeHtml(q.id)}">${escapeHtml(q.name)}</option>`).join('');
   renderProfileRunPicker();
+  // refreshCalibrationProviderSelect lives in provider-field.js, shared with
+  // the run and interview forms' equivalent "Szolgáltató rögzítése" fields.
+  void refreshCalibrationProviderSelect();
 }
 
 /**
@@ -167,6 +189,12 @@ async function openModelDetail(modelId, updateHash = true) {
   body.innerHTML = '<p class="placeholder">Betöltés...</p>';
   document.getElementById('modelDetailTitle').focus();
 
+  // Issue #28: the on-card launch form's provider options, fetched once per
+  // model and cached (modelCardContext reads the cache synchronously below).
+  // A failed fetch still lets the card render — see ensureProviderOptions.
+  await ensureProviderOptions(modelId);
+  if (state.currentModelId !== modelId) return;
+
   if (!entry.profile) {
     state.currentModelProfile = null;
     body.innerHTML = renderModelCard(entry, null, modelCardContext(modelId));
@@ -188,7 +216,7 @@ async function openModelDetail(modelId, updateHash = true) {
  * Repaints the open model card from state — runs-list.js calls this after every
  * runs refresh so the workflow's run statuses (step 3/4) stay live while a
  * calibration executes. Skipped while focus is inside the card (a repaint would
- * pull the keyboard out of the probe select or the provider field mid-typing)
+ * pull the keyboard out of the probe select or the provider select mid-choice)
  * and when nothing changed (same diff-guard as the sidebar's running section).
  */
 function rerenderModelDetailBody() {
@@ -280,6 +308,8 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   document.getElementById('profileModel')?.addEventListener('change', () => renderProfileRunPicker());
+  // The calibrationModel 'change' listener that refreshes #calibrationProvider
+  // lives in provider-field.js (shared with the run/interview forms).
 
   document.getElementById('profileFromRunsForm')?.addEventListener('submit', async (e) => {
     e.preventDefault();
@@ -315,7 +345,7 @@ document.addEventListener('DOMContentLoaded', () => {
       return;
     }
     try {
-      await launchCalibration(form.dataset.model, questionnaireId, form.querySelector('.model-card-provider-input')?.value.trim());
+      await launchCalibration(form.dataset.model, questionnaireId, form.querySelector('.model-card-provider-select')?.value.trim());
     } catch (err) {
       alert('A kalibráció indítása nem sikerült: ' + err.message);
     }

@@ -190,6 +190,10 @@ document.addEventListener('DOMContentLoaded', () => {
         provider: document.getElementById('interviewProvider').value.trim() || undefined
       });
       document.getElementById('interviewForm').reset();
+      // reset() does not fire 'change' on interviewModel — without this the
+      // provider list would keep showing the just-submitted model's options.
+      // refreshInterviewProviderSelect lives in provider-field.js.
+      void refreshInterviewProviderSelect();
       await refreshInterviewsList();
       await openInterviewDetail(created.id);
     } catch (err) {

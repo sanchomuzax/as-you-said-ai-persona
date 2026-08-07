@@ -15,6 +15,7 @@ import { toCsv } from './lib/csv.js'
 import { registerInterviewRoutes } from './interviews.js'
 import { registerCatalogRoutes } from './catalog.js'
 import { registerModelProfileRoutes, findProfileForRun, isCalibrationRun } from './model-profiles.js'
+import { buildProviderOptions } from './lib/provider-options.js'
 import {
   checkCredentials,
   createSessionToken,
@@ -256,6 +257,46 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
 
   // --- Config / models ---
   app.get('/api/models', async () => ({ success: true, data: models }))
+
+  /**
+   * Issue #28: the data behind the "Szolgáltató rögzítése" dropdown. Real
+   * observed data (responses.provider for this model) always wins over a
+   * hardcoded list; OpenRouter's live endpoint catalog is merged in when the
+   * injected ChatClient supports it and answers before the client's own
+   * timeout — a slow or unreachable catalog degrades to "observed only",
+   * never to a 500 that would take the whole form down with it.
+   */
+  app.get('/api/models/:model/providers', async (req, reply) => {
+    const { model } = req.params as { model: string }
+    if (!models.models.some((m) => m.id === model)) {
+      return reply.code(400).send({ success: false, error: `Ismeretlen modell: ${model}` })
+    }
+    const observed = (
+      db
+        .prepare(
+          'SELECT provider, COUNT(*) c FROM responses WHERE model_requested = ? AND provider IS NOT NULL GROUP BY provider'
+        )
+        .all(model) as unknown as { provider: string; c: number }[]
+    ).map((r) => ({ provider: r.provider, count: r.c }))
+    let catalog: Awaited<ReturnType<NonNullable<typeof client.listEndpoints>>> | null = null
+    let catalogError = false
+    if (client.listEndpoints) {
+      try {
+        catalog = await client.listEndpoints(model)
+      } catch {
+        catalog = null
+        catalogError = true
+      }
+    }
+    return {
+      success: true,
+      data: {
+        options: buildProviderOptions(observed, catalog),
+        catalogAvailable: catalog !== null,
+        catalogError
+      }
+    }
+  })
 
   app.get('/api/budget', async () => ({
     success: true,

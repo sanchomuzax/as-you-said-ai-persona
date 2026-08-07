@@ -732,6 +732,8 @@ document.getElementById('runForm')?.addEventListener('submit', async (e) => {
 
     await apiCall('POST', '/api/runs', body);
     document.getElementById('runForm').reset();
+    // reset() fires no 'change' on runModel (provider-field.js's listener).
+    void refreshRunProviderSelect();
     await refreshRunsList();
     updateBudgetBar();
   } catch (err) {
@@ -784,7 +786,9 @@ async function loadInitialData() {
     modelSelect.innerHTML = state.models.map(m =>
       `<option value="${escapeHtml(m.id)}" ${m.id === models.default ? 'selected' : ''}>${escapeHtml(m.label)}</option>`
     ).join('');
+    void refreshRunProviderSelect();
     renderInterviewModelOptions(models.default);
+    void refreshInterviewProviderSelect();
     renderInterviewDisclaimers();
     renderInterviewPersonaOptions();
 

@@ -8,6 +8,72 @@ const CALIBRATION_STATUS_LABELS = {
   missing: 'hiányzik'
 };
 
+/**
+ * Issue #28: "Szolgáltató rögzítése" used to be a free-text field expecting the
+ * researcher — a media professional, not a developer — to type OpenRouter's
+ * internal provider slug from memory (e.g. `deepinfra/fp4`, not the display
+ * name `DeepInfra` — the two are not interchangeable, and nothing explained
+ * that). Shared by every form that pins a provider (run, interview,
+ * calibration — tab-level and this on-card one), so the explanation and the
+ * "don't silently default" choice read identically wherever it appears.
+ * Deliberately NOT hover-only (issue #12's own lesson, see calibrationStatusChip
+ * above): a title attribute reaches neither a keyboard-only nor a touch user,
+ * so this is rendered as visible text next to the field, not just a tooltip.
+ */
+const PROVIDER_NONE_VALUE = '';
+const PROVIDER_FIELD_NOTE =
+  'Ugyanaz a modell szolgáltatónként — sőt kvantálásonként (pl. fp4, fp8: a modellsúlyok tömörítési szintje, ' +
+  'ami a válasz sebességét, költségét és néha kis mértékben a minőségét is befolyásolja) — kicsit másképp ' +
+  'válaszolhat. A választás rögzíti, KITŐL jöjjön a válasz, hogy a mérés megismételhető legyen. „Nem rögzítem” ' +
+  'esetén az OpenRouter szabadon válogat a szolgáltatók között: kényelmesebb, de a profil/futtatás kevésbé lesz ' +
+  'reprodukálható, mert a következő hívás akár másik szolgáltatótól is jöhet.';
+
+/** "DeepInfra — fp4 kvantálás", or just the name when no quantization is known. */
+function providerOptionLabel(opt) {
+  return opt.quantization ? `${opt.providerName} — ${opt.quantization} kvantálás` : opt.providerName;
+}
+
+/** Per-option detail: hover bonus, never the only place the explanation lives. */
+function providerOptionTitle(opt) {
+  const parts = [];
+  if (opt.quantization) {
+    parts.push(
+      `${opt.quantization} kvantálás: a modellsúlyok tömörített változata — gyorsabb és olcsóbb, de a válasz ` +
+        'kis mértékben eltérhet a teljes pontosságú változattól.'
+    );
+  }
+  if (opt.observedCount) {
+    parts.push(`Ezt a szolgáltatót korábban ${opt.observedCount} alkalommal használta ez a modell ebben a rendszerben.`);
+  } else if (opt.source === 'catalog') {
+    parts.push('Az OpenRouter szerint jelenleg kínálja ezt a modellt, de ebben a rendszerben még nem szolgálta ki.');
+  }
+  return parts.join(' ');
+}
+
+/**
+ * The dropdown's `<option>`s: "Nem rögzítem" first and selected by default
+ * unless `selectedValue` names a real option, then every provider actually
+ * observed for this model (state/DB) or, when reachable, offered by
+ * OpenRouter's live catalog — never a hardcoded list (issue #28 requirement
+ * 1: real data rots less than a maintained list).
+ */
+function renderProviderSelectOptions(options, selectedValue) {
+  const opts = Array.isArray(options) ? options : [];
+  const noneSelected = !opts.some((o) => o.value === selectedValue);
+  const noneOption =
+    `<option value="${escapeHtml(PROVIDER_NONE_VALUE)}" ${noneSelected ? 'selected' : ''} ` +
+    `title="A profil/futtatás kevésbé lesz reprodukálható: a következő hívás bármelyik szolgáltatótól jöhet.">` +
+    `Nem rögzítem (bármelyik szolgáltató)</option>`;
+  const providerOptionsHtml = opts
+    .map(
+      (o) =>
+        `<option value="${escapeHtml(o.value)}" ${o.value === selectedValue ? 'selected' : ''} ` +
+        `title="${escapeHtml(providerOptionTitle(o))}">${escapeHtml(providerOptionLabel(o))}</option>`
+    )
+    .join('');
+  return noneOption + providerOptionsHtml;
+}
+
 const CALIBRATION_TOOLTIPS = {
   status:
     'A profil azt méri, mit válaszol a modell perszóna NÉLKÜL. Csak arra a pontos összeállításra érvényes, amin mérték: modellverzió, szolgáltató, elicitációs sablon, próba-kérdőív verziója és nyelv. Bármelyik változik, a profil elavul.',
@@ -203,8 +269,11 @@ function renderCalibrationWorkflow(entry, context) {
           </div>
           <div class="form-group">
             <label title="Szolgáltató rögzítése nélkül a profil nem egyetlen kiszolgálót ír le, és a szolgáltató-váltás azonnal elavulttá teszi.">Szolgáltató rögzítése (ajánlott)
-              <input type="text" class="model-card-provider-input" placeholder="pl. DeepInfra" ${runningCalibration ? 'disabled' : ''}>
+              <select class="model-card-provider-select" ${runningCalibration ? 'disabled' : ''}>
+                ${renderProviderSelectOptions((context && context.providerOptions) || [], '')}
+              </select>
             </label>
+            <p class="form-note">${escapeHtml(PROVIDER_FIELD_NOTE)}</p>
           </div>
           <button type="submit" class="btn btn-primary" ${runningCalibration ? 'disabled' : ''}>Kalibrációs futtatás indítása</button>
         </form>`;
