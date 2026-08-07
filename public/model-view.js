@@ -93,7 +93,7 @@ function closeModelDetail(updateHash = true) {
   view.style.display = 'none';
   document.querySelector('.tab-content').style.display = 'block';
   state.currentModelId = null;
-  if (updateHash) setHash('models', null);
+  if (updateHash) setHash(state.activeTab || 'models', null);
 }
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -116,6 +116,14 @@ document.addEventListener('DOMContentLoaded', () => {
 
   document.getElementById('modelDetailBackBtn')?.addEventListener('click', () => {
     closeModelDetail();
+    // Same expression closeModelDetail() just used to pick the hash (issue #24,
+    // following #23's fix for the run detail): Vissza returns to whichever tab
+    // the researcher actually opened this model card from, not always Modellek.
+    // A future cross-tab entry point would open the detail directly, bypassing
+    // applyRoute, so it never touches state.activeTab — hard-coding 'models'
+    // here would leave the address bar and the visible pane disagreeing after
+    // Back.
+    setActiveTab(state.activeTab || 'models');
     restoreDetailFocus();
   });
 

@@ -34,8 +34,10 @@ function overviewRecentCompletedRuns() {
 }
 
 function overviewRunCellsAndInvalidMeta(run) {
+  // Issue #22: total_cells arrives with GET /api/runs itself now; the live
+  // progress poll still wins when it has ticked for this run.
   const progress = state.runProgress[run.id] || {};
-  const totalCells = progress.totalCells ?? run.totalCells ?? 0;
+  const totalCells = progress.totalCells ?? run.total_cells ?? 0;
   const invalid = progress.invalid ?? run.invalid_count ?? 0;
   if (!totalCells) return 'nincs cellaadat';
   return `${formatNumber(totalCells)} cella · ${Math.round(invalidPct(invalid, totalCells))}% érvénytelen`;
@@ -99,18 +101,36 @@ function overviewModelWarning() {
   return `<p class="detail-note detail-note-warning">Kalibrálatlan vagy elavult profilú modell(ek): ${names}. Kalibrálatlan modellnél nincs mihez viszonyítani a perszóna hatását a modell alapértelmezett válaszához képest; elavult profilnál van mérés, de az már nem érvényes a jelenlegi összeállításra.</p>`;
 }
 
+/**
+ * Issue #22: stale_versions now arrives with every GET /api/runs row itself
+ * (src/server.ts, one SQL statement) — no per-run /progress fetch needed at
+ * boot to know this. A run whose detail view has been opened (or whose live
+ * poll has ticked) carries the richer staleVersions object in
+ * state.runProgress; prefer that when present, since it is the freshest.
+ */
 function overviewRunHasStaleVersion(run) {
-  const staleVersions = state.runProgress[run.id] && state.runProgress[run.id].staleVersions;
-  if (!staleVersions) return false;
-  const staleQuestionnaire =
-    staleVersions.questionnaire && staleVersions.questionnaire.used !== staleVersions.questionnaire.latest;
-  const stalePersonas = Array.isArray(staleVersions.personas) && staleVersions.personas.length > 0;
-  return Boolean(staleQuestionnaire || stalePersonas);
+  const liveStaleVersions = state.runProgress[run.id] && state.runProgress[run.id].staleVersions;
+  if (liveStaleVersions) {
+    const staleQuestionnaire =
+      liveStaleVersions.questionnaire && liveStaleVersions.questionnaire.used !== liveStaleVersions.questionnaire.latest;
+    const stalePersonas = Array.isArray(liveStaleVersions.personas) && liveStaleVersions.personas.length > 0;
+    return Boolean(staleQuestionnaire || stalePersonas);
+  }
+  return Boolean(run.stale_versions);
 }
 
-/** A run whose /progress fetch failed (runs-list.js's pollRunningProgress) — staleness genuinely unknown, not "current". */
+/**
+ * A run whose staleness genuinely could not be established: either its live
+ * /progress fetch failed (runs-list.js's pollRunningProgress, code-review
+ * defect #1), or the /api/runs row did not carry stale_versions at all — the
+ * real server always sends a 0/1 for it (src/server.ts), so this second case
+ * only fires against a row that never went through that query.
+ */
 function overviewRunProgressUnchecked(run) {
-  return Boolean(state.runProgressErrors && state.runProgressErrors[run.id]);
+  if (state.runProgressErrors && state.runProgressErrors[run.id]) return true;
+  const liveStaleVersions = state.runProgress[run.id] && state.runProgress[run.id].staleVersions;
+  if (liveStaleVersions) return false;
+  return run.stale_versions === undefined || run.stale_versions === null;
 }
 
 /**

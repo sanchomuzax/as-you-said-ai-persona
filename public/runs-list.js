@@ -33,17 +33,48 @@ function invalidPct(invalid, total) {
   return (invalid / total) * 100;
 }
 
+/**
+ * Builds a progress-shaped object straight from a GET /api/runs row's own
+ * fields (total_cells/done_cells/abstained_count/invalid_count/usage —
+ * issue #22 and its follow-up, src/server.ts, one SQL statement). Used
+ * wherever a live GET /api/runs/:id/progress fetch is unavailable (a
+ * non-running run is never polled for it — see pollRunningProgress below) or
+ * failed, so the real, already-known spend/cell-count is shown instead of a
+ * fabricated 0 (code-review blocker #1: run-view.js's refreshRunDetailHeader
+ * used to fall back to `state.runProgress[runId] || {}`, which is empty for
+ * every run this applies to, and render "0 / 0 cella · 0 token · 0.0000 USD"
+ * for a run that may have spent real tokens).
+ */
+function runProgressFromRow(run) {
+  return {
+    totalCells: run.total_cells ?? 0,
+    done: run.done_cells ?? run.response_count ?? 0,
+    invalid: run.invalid_count ?? 0,
+    abstained: run.abstained_count ?? 0,
+    usage: {
+      totalTokens: run.total_tokens ?? 0,
+      cachedTokens: run.cached_tokens ?? 0,
+      promptTokens: run.prompt_tokens ?? 0,
+      costUsd: run.cost_usd ?? 0
+    }
+  };
+}
+
 function renderRunCard(run) {
+  // The live progress poll (state.runProgress), when present for this run,
+  // still wins over the row's own fields, since it is fresher for a run
+  // actually executing right now.
+  const fallback = runProgressFromRow(run);
   const progress = state.runProgress[run.id] || {};
-  const totalCells = progress.totalCells ?? run.totalCells ?? 0;
-  const done = progress.done ?? run.response_count ?? 0;
-  const invalid = progress.invalid ?? run.invalid_count ?? 0;
-  const abstained = progress.abstained ?? run.abstained_count ?? 0;
-  const usage = progress.usage || {};
-  const totalTokens = usage.totalTokens ?? run.total_tokens ?? 0;
+  const totalCells = progress.totalCells ?? fallback.totalCells;
+  const done = progress.done ?? fallback.done;
+  const invalid = progress.invalid ?? fallback.invalid;
+  const abstained = progress.abstained ?? fallback.abstained;
+  const usage = progress.usage || fallback.usage;
+  const totalTokens = usage.totalTokens ?? 0;
   const cachedTokens = usage.cachedTokens ?? 0;
-  const promptTokens = usage.promptTokens ?? run.prompt_tokens ?? 0;
-  const costUsd = usage.costUsd ?? run.cost_usd ?? 0;
+  const promptTokens = usage.promptTokens ?? 0;
+  const costUsd = usage.costUsd ?? 0;
   const pct = totalCells > 0 ? Math.min((done / totalCells) * 100, 100) : 0;
   const invPct = invalidPct(invalid, totalCells);
   const status = progress.status || run.status;
@@ -130,20 +161,39 @@ async function refreshRunsList() {
     const runs = await apiCall('GET', '/api/runs');
     state.runs = runs;
     renderRunsList();
-    await pollRunningProgress(true);
+    // This used to always follow up with pollRunningProgress(true) — a live
+    // /progress fetch for EVERY run, not just running ones. GET /api/runs was
+    // just re-fetched on the line above and already carries every field that
+    // call was fetching (total_cells/done_cells/abstained_count/usage,
+    // src/server.ts) — re-polling it here was pure waste. Worse: this
+    // function runs on every SSE 'status' event (app.js), which fires on
+    // every response, every pause/resume/stop and every evaluation — on a
+    // 200-run database, one run finishing used to fire 200 /progress requests
+    // (~1200 SQL statements) while a run was executing. The periodic 5s timer
+    // (startProgressPolling) still keeps a genuinely running run's live
+    // figures (avg latency, providers) current; nothing here needs to
+    // duplicate that.
+    window.renderContextSidebarRunning?.();
+    window.renderOverviewTab?.();
   } catch (err) {
     // silent - keep last known state
   }
 }
 
 /**
- * Fetches progress for runs. Finished runs also need it once (cell totals, tokens,
- * cost are only available here) — without it their cards show 0 totals.
+ * Fetches live progress for running runs (tokens/cost/live status/staleness
+ * detail are only available here — cell totals/done/abstained/stale_versions
+ * themselves now come with GET /api/runs, see runs-list.js's renderRunCard
+ * and issue #22). `includeAll` is for the aftermath of an explicit run
+ * action (pause/resume/stop, runs-list.js's refreshRunsList), where any run's
+ * status may just have changed; the periodic 5s timer (startProgressPolling)
+ * always calls this with no argument, i.e. running runs only — it must never
+ * fan out to the whole run list on its own.
  */
 async function pollRunningProgress(includeAll = false) {
   const targets = includeAll
     ? state.runs
-    : state.runs.filter(r => r.status === 'running' || !state.runProgress[r.id]);
+    : state.runs.filter(r => r.status === 'running');
   if (targets.length === 0) return;
   await Promise.all(targets.map(async r => {
     try {

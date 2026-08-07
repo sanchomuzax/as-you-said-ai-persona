@@ -291,4 +291,34 @@ describe('Modellek tab controller', () => {
     expect(dom.calls.slice(before).map((c) => c.url).join(' ')).not.toContain('/calibrate')
     expect(dom.lastAlert()).toMatch(/próba-kérdőívet/)
   })
+
+  // Issue #24: closeModelDetail hard-codes the hash to 'models' and never
+  // calls setActiveTab — harmless today only because the ONE existing entry
+  // point (#modelsList) is itself reachable only while already on the models
+  // tab. A hash deep link does NOT reproduce the bug: app.js's applyRoute
+  // already sets state.activeTab and calls setActiveTab for its modelId
+  // branch before opening the card. The vulnerable path is a DIRECT call to
+  // openModelDetail from outside the models tab — what a future cross-tab
+  // entry point would do (same shape as issue #23's run cards).
+  describe('cross-tab entry keeps the hash and the visible tab in agreement (issue #24)', () => {
+    it('agree after opening from a different tab and pressing Vissza', async () => {
+      dom = loadAppDom({ routes: modelRoutes() })
+      await dom.boot()
+      dom.document.querySelector('[data-tab="runs"]')!.click()
+      await dom.settle()
+      expect(dom.window.location.hash).toBe('#runs')
+
+      const w = dom.window as unknown as { openModelDetail: (id: string) => Promise<void> }
+      await w.openModelDetail('m1')
+      await dom.settle()
+
+      dom.document.getElementById('modelDetailBackBtn')!.click()
+      await dom.settle()
+
+      const pane = dom.document.querySelector('.tab-pane.active')
+      const activeTabName = (pane?.getAttribute('id') ?? '').replace(/^tab-/, '')
+      expect(dom.window.location.hash).toBe('#' + activeTabName)
+      expect(dom.document.querySelector(`[data-tab="${activeTabName}"]`)!.className).toContain('active')
+    })
+  })
 })

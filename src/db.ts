@@ -44,6 +44,13 @@ function migrate(db: DatabaseSync): void {
   // questionnaire and filters on that questionnaire's project.
   db.exec('CREATE INDEX IF NOT EXISTS idx_runs_questionnaire ON runs(questionnaire_id)')
   db.exec('CREATE INDEX IF NOT EXISTS idx_questionnaires_project ON questionnaires(project_id)')
+  // GET /api/runs's per-row response_count/done_cells/invalid_count/
+  // abstained_count (issue #22) each filter on run_id and aggregate is_valid
+  // and/or abstained — idx_responses_run (run_id only) makes SQLite visit the
+  // table itself for those two columns on every row of a 200-run list.
+  // Covering the actual columns those subqueries touch lets it answer them
+  // from the index alone.
+  db.exec('CREATE INDEX IF NOT EXISTS idx_responses_run_valid_abstained ON responses(run_id, is_valid, abstained)')
   // Left NULL for existing rows on purpose: their elicitation mode is unknown
   // (and wrong for multi-select questions), which the UI has to be able to say.
   const responseCols = db.prepare('PRAGMA table_info(responses)').all() as unknown as { name: string }[]

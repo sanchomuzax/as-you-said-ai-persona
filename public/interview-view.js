@@ -106,7 +106,7 @@ function closeInterviewDetail(updateHash = true) {
   view.style.display = 'none';
   document.querySelector('.tab-content').style.display = 'block';
   state.currentInterviewId = null;
-  if (updateHash) setHash('interviews', null);
+  if (updateHash) setHash(state.activeTab || 'interviews', null);
   // Interviews have neither SSE nor progress polling, so the row's exchange
   // count would keep showing the number it had before the conversation.
   if (wasOpen) void refreshInterviewsList();
@@ -232,6 +232,14 @@ document.addEventListener('DOMContentLoaded', () => {
 
   document.getElementById('interviewDetailBackBtn')?.addEventListener('click', () => {
     closeInterviewDetail();
+    // Same expression closeInterviewDetail() just used to pick the hash (issue
+    // #24, following #23's fix for the run detail): Vissza returns to whichever
+    // tab the researcher actually opened this interview from, not always
+    // Interjúk. A future cross-tab entry point (e.g. a "recent interviews" row
+    // on Áttekintés) would open the detail directly, bypassing applyRoute, so
+    // it never touches state.activeTab — hard-coding 'interviews' here would
+    // leave the address bar and the visible pane disagreeing after Back.
+    setActiveTab(state.activeTab || 'interviews');
     restoreDetailFocus();
   });
 

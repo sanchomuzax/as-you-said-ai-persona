@@ -311,4 +311,39 @@ describe('interview view controller', () => {
     expect(dom.document.getElementById('interviewDetailView')!.style.display).toBe('none')
     expect((dom.document.querySelector('.tab-content')!).style.display).toBe('block')
   })
+
+  // Issue #24: closeInterviewDetail hard-codes the hash to 'interviews' and
+  // never calls setActiveTab — harmless today only because the ONE existing
+  // entry point (#interviewsList) is itself reachable only while already on
+  // the interviews tab, so state.activeTab happens to already agree. A hash
+  // deep link does NOT reproduce the bug: it routes through app.js's
+  // applyRoute, whose own interviewId branch already sets state.activeTab and
+  // calls setActiveTab before opening the detail (verified empirically —
+  // that path is self-consistent). The vulnerable path is a DIRECT call to
+  // openInterviewDetail from outside the interviews tab, which is exactly
+  // what a future cross-tab entry point (e.g. a "recent interviews" row on
+  // Áttekintés, mirroring how issue #23's run cards work) would do.
+  describe('cross-tab entry keeps the hash and the visible tab in agreement (issue #24)', () => {
+    it('agree after opening from a different tab and pressing Vissza', async () => {
+      dom = loadAppDom({ routes: interviewRoutes() })
+      await dom.boot()
+      dom.document.querySelector('[data-tab="runs"]')!.click()
+      await dom.settle()
+      expect(dom.window.location.hash).toBe('#runs')
+
+      // Simulates a future cross-tab entry point: opened directly, not via a
+      // hash change / applyRoute.
+      const w = dom.window as unknown as { openInterviewDetail: (id: string) => Promise<void> }
+      await w.openInterviewDetail('i1')
+      await dom.settle()
+
+      dom.document.getElementById('interviewDetailBackBtn')!.click()
+      await dom.settle()
+
+      const pane = dom.document.querySelector('.tab-pane.active')
+      const activeTabName = (pane?.getAttribute('id') ?? '').replace(/^tab-/, '')
+      expect(dom.window.location.hash).toBe('#' + activeTabName)
+      expect(dom.document.querySelector(`[data-tab="${activeTabName}"]`)!.className).toContain('active')
+    })
+  })
 })

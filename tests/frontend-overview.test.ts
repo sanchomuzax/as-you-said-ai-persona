@@ -198,30 +198,16 @@ describe('warnings', () => {
     expect(warnings).toMatch(/nincs mihez viszonyítani/i)
   })
 
+  // Issue #22: GET /api/runs now carries stale_versions (0/1) directly on
+  // every row (src/server.ts, one SQL statement) — a completed run is never
+  // polled at boot any more (only a currently-running row is, and only by the
+  // 5s timer), so the list row itself is the only source for this. A fixture
+  // that omits the field describes a response the real server no longer
+  // sends, and reads as "unchecked", not "stale" — see overview.js's
+  // overviewRunProgressUnchecked.
   it('flags a run made with a since-superseded persona or questionnaire version', async () => {
-    const completed = runRow('c1', 'Régi verzióval', 'completed')
-    dom = loadAppDom({
-      routes: routes({
-        'GET /api/runs': [completed],
-        [`GET /api/runs/c1/progress`]: {
-          status: 'completed',
-          providers: [],
-          staleVersions: { questionnaire: { used: 1, latest: 2 }, personas: [] },
-          totalCells: 4,
-          done: 4,
-          invalid: 0,
-          abstained: 0,
-          avgLatencyMs: 0,
-          usage: {}
-        },
-        [`GET /api/runs/c1`]: {
-          run: completed,
-          responses: [],
-          usage: {},
-          staleVersions: { questionnaire: { used: 1, latest: 2 }, personas: [] }
-        }
-      })
-    })
+    const completed = runRow('c1', 'Régi verzióval', 'completed', { stale_versions: 1 })
+    dom = loadAppDom({ routes: routes({ 'GET /api/runs': [completed] }) })
     await dom.boot()
     const warnings = dom.document.getElementById('overviewWarnings')!.textContent!
     expect(warnings).toContain('Régi verzióval')
@@ -335,11 +321,20 @@ describe('a failed run must not disappear from the overview (code-review defect 
 })
 
 // Code-review defect #4: renderRunCard (public/runs-list.js) picks the live
-// status (from the progress poll) for its BADGE, but passes the raw run row
-// to runControlButtons, which reads run.status — the stale value from the
+// status (from the progress poll) for its BADGE, but used to pass the raw run
+// row to runControlButtons, which read run.status — the stale value from the
 // /api/runs fetch. The overview reuses this same card.
+//
+// The premise (a row says 'running' while a live poll for the SAME run says
+// 'budget_exhausted') is a real race, not an impossible state: /api/runs and
+// /api/runs/:id/progress both read the same runs.status column, but via
+// SEPARATE requests at different instants — the background runner can flip a
+// run's status in the DB between the list snapshot and the next live-poll
+// tick. Since issue #22 removed the automatic boot-time poll, that tick now
+// only happens on the periodic 5s timer (or after an explicit run action);
+// this simulates exactly that tick rather than relying on it firing at boot.
 describe('run-card controls follow the live status, not the stale row status (code-review defect #4)', () => {
-  it('offers Folytatás, not Szünet, when the live progress says budget_exhausted for a row still marked running', async () => {
+  it('offers Folytatás, not Szünet, once a live poll reports budget_exhausted for a row still marked running', async () => {
     const row = runRow('r1', 'Réginek jelzett', 'running')
     dom = loadAppDom({
       routes: routes({
@@ -358,7 +353,16 @@ describe('run-card controls follow the live status, not the stale row status (co
       })
     })
     await dom.boot()
-    // budget_exhausted is a stalled status, so the live-status card shows up here
+    // Before any live poll tick: the row snapshot alone (status 'running',
+    // itself a stalled status) is what the card is built from — Szünet.
+    expect(dom.document.querySelector('#tab-overview [data-run-card="r1"] [data-action="pause"]')).not.toBeNull()
+
+    // The periodic 5s timer's own call shape (no args: running rows only —
+    // see runs-list.js's pollRunningProgress).
+    const w = dom.window as unknown as { pollRunningProgress: () => Promise<void> }
+    await w.pollRunningProgress()
+    await dom.settle()
+
     const card = dom.document.querySelector('#tab-overview [data-run-card="r1"]')
     expect(card).not.toBeNull()
     expect(dom.document.querySelector('#tab-overview [data-run-card="r1"] [data-action="resume"]')).not.toBeNull()
@@ -462,5 +466,131 @@ describe('no new server endpoint', () => {
       .map((c) => c.url.split('?')[0]!)
       .filter((path) => !KNOWN.some((known) => path === known || path.startsWith(known + '/')))
     expect(unexpected).toEqual([])
+  })
+})
+
+// Issue #22: GET /api/runs now carries the per-run summary fields the
+// overview and the sidebar need (total_cells, done_cells, abstained_count,
+// stale_versions), so boot no longer needs to fan out a GET
+// /api/runs/:id/progress per run just to paint real numbers. The existing
+// "no new endpoint" check above is blind to this regression on purpose-adjacent
+// grounds: it matches by `startsWith(known + '/')`, so
+// /api/runs/r1/progress, /api/runs/r2/progress, … all satisfy "starts with
+// /api/runs/" and never show up as "unexpected" — this test counts the
+// /progress calls explicitly instead.
+describe('boot does not fan out a /progress request per run (issue #22)', () => {
+  it('issues zero /api/runs/:id/progress requests at boot for N runs', async () => {
+    const runs = [
+      runRow('r1', 'Első', 'completed'),
+      runRow('r2', 'Második', 'running'),
+      runRow('r3', 'Harmadik', 'paused')
+    ]
+    dom = loadAppDom({
+      routes: routes({
+        'GET /api/runs': runs,
+        ...detailRoutesFor(runs[0]!),
+        ...detailRoutesFor(runs[1]!),
+        ...detailRoutesFor(runs[2]!)
+      })
+    })
+    await dom.boot()
+    const progressCalls = dom.calls.filter((c) => /^\/api\/runs\/[^/]+\/progress(\?|$)/.test(c.url))
+    expect(progressCalls).toEqual([])
+  })
+})
+
+// Issue #22 follow-up: a non-running run is never polled after boot (only the
+// 5s timer touches 'running' rows) — so its real spend has to come from
+// GET /api/runs itself now (prompt_tokens/completion_tokens/cached_tokens/
+// total_tokens/cost_usd), or the card is not just STALE, it is WRONG: it
+// shows 0 tokens / 0.0000 USD forever, never self-correcting, for a run that
+// really did cost real money.
+describe('a non-running run card shows its real token/cost spend at boot (issue #22 usage follow-up)', () => {
+  it('shows a paused run’s real usage immediately, with no /progress poll', async () => {
+    const paused = runRow('r1', 'Szünetel', 'paused', {
+      total_cells: 10,
+      done_cells: 5,
+      abstained_count: 0,
+      stale_versions: 0,
+      prompt_tokens: 900,
+      completion_tokens: 300,
+      cached_tokens: 50,
+      total_tokens: 1200,
+      cost_usd: 0.05
+    })
+    dom = loadAppDom({ routes: routes({ 'GET /api/runs': [paused] }) })
+    await dom.boot()
+
+    const card = dom.document.querySelector('#runsList [data-run-card="r1"]')
+    expect(card).not.toBeNull()
+    const text = card!.textContent!.replace(/\s/g, '')
+    expect(text).toContain('1200')
+    expect(text).toContain('0.0500')
+
+    const progressCalls = dom.calls.filter((c) => /\/progress(\?|$)/.test(c.url))
+    expect(progressCalls).toEqual([])
+  })
+})
+
+// Issue #22 follow-up: runEvaluation (src/server.ts) books the auto-evaluation's
+// spend and emits an 'evaluation' SSE event, not 'status'. app.js's
+// 'evaluation' listener only reloads the open evaluation sub-tab — it never
+// re-fetches /api/runs or /api/budget. So once an auto-evaluated run
+// finishes, the run's own card AND the header's global budget widget
+// under-report by the evaluation's cost until a full page reload: a wrong
+// number, not a stale one, on a platform whose whole purpose is accounting
+// for spend.
+describe('an evaluation event refreshes the run card and the budget widget (issue #22 auto-evaluation follow-up)', () => {
+  it('shows the evaluation’s added spend on the card and in the budget widget once the event arrives', async () => {
+    let runsCallCount = 0
+    let budgetCallCount = 0
+    const before = runRow('r1', 'Kiértékelt futás', 'completed', {
+      total_cells: 10,
+      done_cells: 10,
+      abstained_count: 0,
+      stale_versions: 0,
+      prompt_tokens: 1000,
+      completion_tokens: 200,
+      cached_tokens: 0,
+      total_tokens: 1200,
+      cost_usd: 0.1
+    })
+    // What the SAME run looks like after the auto-evaluation's own spend was
+    // recorded server-side — the fix must re-fetch, since nothing here
+    // updates the row the client already has.
+    const after = { ...before, prompt_tokens: 1500, completion_tokens: 300, total_tokens: 1800, cost_usd: 0.15 }
+
+    dom = loadAppDom({
+      routes: routes({
+        'GET /api/model-profiles': [],
+        'GET /api/runs': () => {
+          runsCallCount++
+          return runsCallCount === 1 ? [before] : [after]
+        },
+        'GET /api/budget': () => {
+          budgetCallCount++
+          const used = budgetCallCount === 1 ? 1200 : 1800
+          const cost = budgetCallCount === 1 ? 0.1 : 0.15
+          return {
+            global: { totalTokens: used, costUsd: cost },
+            byScope: { run: { totalTokens: used, costUsd: cost }, interview: { totalTokens: 0, costUsd: 0 } },
+            limits: { globalBudget: 100000, perRunBudget: 0 }
+          }
+        }
+      })
+    })
+    await dom.boot()
+
+    // Baseline: the pre-evaluation figures are what boot shows.
+    const cardBefore = dom.document.querySelector('#runsList [data-run-card="r1"]')!.textContent!.replace(/\s/g, '')
+    expect(cardBefore).toContain('1200')
+    expect(dom.document.getElementById('budgetTokens')!.textContent).toBe('1200')
+
+    dom.emitServerEvent('evaluation', { runId: 'r1', evaluationId: 'ev1' })
+    await dom.settle()
+
+    const cardAfter = dom.document.querySelector('#runsList [data-run-card="r1"]')!.textContent!.replace(/\s/g, '')
+    expect(cardAfter).toContain('1800')
+    expect(dom.document.getElementById('budgetTokens')!.textContent).toBe('1800')
   })
 })

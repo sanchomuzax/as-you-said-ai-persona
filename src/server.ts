@@ -147,6 +147,14 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
       cachedTokens: result.cachedTokens ?? 0,
       costUsd: result.costUsd
     })
+    // Blocker #3: an evaluation books real spend (above) that the run's card
+    // (token/cost chips) and the global budget widget must reflect — auto-
+    // evaluation (triggered by 'run_finished', not a button click) has no
+    // client-side await to hang a refresh off, so it depends entirely on this
+    // event. The client's 'evaluation' listener (public/app.js) now refetches
+    // /api/runs (which carries usage totals, see GET /api/runs above) and
+    // /api/budget on every 'evaluation' event, not only when the evaluation
+    // sub-tab happens to be open.
     runEvents.emit('evaluation', { runId, evaluationId: id })
     return { id }
   }
@@ -340,14 +348,94 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
     // quietly implying the project has no runs.
     const scope =
       project === undefined ? '' : 'JOIN questionnaires q ON q.id = r.questionnaire_id AND q.project_id = ?'
+    // Issue #22: the overview and the context sidebar used to get these numbers
+    // by fanning out one GET /api/runs/:id/progress per run at boot — each of
+    // those is itself totalCells() + staleVersionsOf(), i.e. four more SQL
+    // statements per run. Reproduced here as correlated subqueries in the SAME
+    // list query instead, so N runs cost one round trip, not up to 4N+1.
+    //
+    // total_cells mirrors totalCells()'s arithmetic for every run reachable
+    // through the zod-validated API (rotations × arms × seeds). It is NOT a
+    // universal guarantee: json_extract(...'$.baselineArm') reads any JSON
+    // number as itself rather than totalCells()'s strict `=== true` check
+    // (only possible on a config_json no API route can produce), and a
+    // malformed config_json row would abort this whole query instead of just
+    // that one run's field the way totalCells() fails in isolation. Neither
+    // is reachable here; tests/api-runs-summary.test.ts asserts the two never
+    // disagree for every shape the API can actually produce.
+    // stale_versions mirrors staleVersionsOf()'s "used version < latest version
+    // in the same lineage" check, for the questionnaire and every run persona.
+    //
+    // Usage totals (prompt/completion/cached tokens, cost): a non-running run
+    // is never polled again after it stops (no /progress fetch at boot, and
+    // the 5s timer only targets 'running' rows), so without this the card
+    // would show 0 spend forever instead of what it actually cost. Mirrors
+    // BudgetTracker.usage() (src/lib/budget.ts) exactly — SUM(prompt_tokens),
+    // SUM(completion_tokens), SUM(cached_tokens), SUM(cost_usd), scoped to
+    // 'run' the same way (W1: budget.usage() now takes that scope as a
+    // required parameter instead of reading everything under the id, so the
+    // two truly cannot disagree) — and total_tokens = prompt + completion,
+    // cached NOT added again (a cached token is already counted once, inside
+    // prompt_tokens). token_ledger also carries interview spend under
+    // scope = 'interview', keyed by the interview id, not a run id — the
+    // WHERE scope = 'run' below is what keeps that out, not the id space (an
+    // interview id could collide with a run id; the scope column cannot).
+    //
+    // scoped_runs (CTE): the token_ledger aggregate is restricted to run ids
+    // actually in this result set — a project-scoped list of 3 runs used to
+    // still GROUP BY the entire ledger (every run of every project) to find
+    // them. response_count and done_cells are the exact same figure (a
+    // "cell" is one response row); computed once here and mirrored in JS
+    // below instead of running the identical subquery twice.
     const rows = db
       .prepare(
-        `SELECT r.*,
-           (SELECT COUNT(*) FROM responses WHERE run_id = r.id) AS response_count,
-           (SELECT COUNT(*) FROM responses WHERE run_id = r.id AND is_valid = 0) AS invalid_count
-         FROM runs r ${scope} ORDER BY r.created_at DESC`
+        `WITH scoped_runs AS (SELECT r.* FROM runs r ${scope})
+         SELECT sr.*,
+           (SELECT COUNT(*) FROM responses WHERE run_id = sr.id) AS response_count,
+           (SELECT COUNT(*) FROM responses WHERE run_id = sr.id AND is_valid = 0) AS invalid_count,
+           (SELECT COALESCE(SUM(abstained), 0) FROM responses WHERE run_id = sr.id) AS abstained_count,
+           (SELECT COALESCE(SUM(json_array_length(options_json)), 0)
+              FROM questions WHERE questionnaire_id = sr.questionnaire_id)
+           * (
+               (SELECT COUNT(*) FROM run_personas WHERE run_id = sr.id)
+               + COALESCE(json_extract(sr.config_json, '$.baselineArm'), 0)
+             )
+           * COALESCE(json_array_length(sr.config_json, '$.seeds'), 0)
+             AS total_cells,
+           CASE WHEN (
+             (SELECT MAX(q2.version) FROM questionnaires q2
+                WHERE q2.lineage_id = (SELECT lineage_id FROM questionnaires WHERE id = sr.questionnaire_id))
+               > (SELECT version FROM questionnaires WHERE id = sr.questionnaire_id)
+             OR EXISTS (
+               SELECT 1 FROM run_personas rp
+                 JOIN personas used ON used.id = rp.persona_id
+                WHERE rp.run_id = sr.id
+                  AND (SELECT MAX(v.version) FROM personas v WHERE v.lineage_id = used.lineage_id) > used.version
+             )
+           ) THEN 1 ELSE 0 END AS stale_versions,
+           COALESCE(tl.prompt_tokens, 0) AS prompt_tokens,
+           COALESCE(tl.completion_tokens, 0) AS completion_tokens,
+           COALESCE(tl.prompt_tokens, 0) + COALESCE(tl.completion_tokens, 0) AS total_tokens,
+           COALESCE(tl.cached_tokens, 0) AS cached_tokens,
+           COALESCE(tl.cost_usd, 0) AS cost_usd
+         FROM scoped_runs sr
+         LEFT JOIN (
+           SELECT run_id,
+                  SUM(prompt_tokens) AS prompt_tokens,
+                  SUM(completion_tokens) AS completion_tokens,
+                  SUM(cached_tokens) AS cached_tokens,
+                  SUM(cost_usd) AS cost_usd
+             FROM token_ledger
+            WHERE scope = 'run' AND run_id IN (SELECT id FROM scoped_runs)
+            GROUP BY run_id
+         ) tl ON tl.run_id = sr.id
+         ORDER BY sr.created_at DESC`
       )
-    return { success: true, data: project === undefined ? rows.all() : rows.all(project) }
+    const runs = (project === undefined ? rows.all() : rows.all(project)) as Record<string, unknown>[]
+    // done_cells === response_count always (one cell = one response row) — see
+    // the comment above on why this is derived here instead of a second,
+    // identical subquery in the SQL above.
+    return { success: true, data: runs.map((r) => ({ ...r, done_cells: r['response_count'] })) }
   })
 
   app.get('/api/runs/:id', async (req, reply) => {
@@ -367,7 +455,7 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
          WHERE res.run_id = ? ORDER BY res.created_at`
       )
       .all(id)
-    return { success: true, data: { run, responses, usage: budget.usage(id), staleVersions: staleVersionsOf(id) } }
+    return { success: true, data: { run, responses, usage: budget.usage(id, 'run'), staleVersions: staleVersionsOf(id) } }
   })
 
   // --- Run control ---
@@ -448,7 +536,13 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
         invalid: counts.invalid,
         abstained: counts.abstained,
         avgLatencyMs: Math.round(counts.avgLatency),
-        usage: budget.usage(id)
+        // W1: was budget.usage(id) with no scope filter — token_ledger.run_id
+        // is shared key-space with interview ids (told apart only by scope),
+        // so this used to sum an interview's spend into a run's total on any
+        // (currently theoretical) id collision. Same 'run' filter the list
+        // query's token_ledger join already uses, so the two can never
+        // disagree for the same run.
+        usage: budget.usage(id, 'run')
       }
     }
   })

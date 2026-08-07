@@ -256,6 +256,50 @@ describe('run detail view', () => {
     expect(dom.document.getElementById('runDetailStats')!.textContent).toContain('2')
   })
 
+  // public/run-view.js's refreshRunDetailHeader falls back to
+  // `state.runProgress[runId] || {}` when /progress fails — empty for a
+  // non-running run, since boot no longer pre-populates it (issue #22). A run
+  // that really cost 1.9M tokens must not render as "0/0 cella · 0 token ·
+  // 0.0000 USD": that is a wrong number, not a stale one, and its own list
+  // card (issue #22's usage fields) shows the truth one click away. Either
+  // the header shows those same real numbers, or it says the figure is
+  // unknown — either is acceptable, silently fabricating zero is not.
+  it('does not fabricate a zero header when /progress fails for a run with real spend', async () => {
+    const richRun = {
+      ...RUN,
+      total_cells: 50,
+      done_cells: 50,
+      invalid_count: 0,
+      abstained_count: 0,
+      stale_versions: 0,
+      prompt_tokens: 1_500_000,
+      completion_tokens: 400_000,
+      cached_tokens: 0,
+      total_tokens: 1_900_000,
+      cost_usd: 12.34
+    }
+    dom = loadAppDom({
+      routes: runRoutes({
+        'GET /api/runs': [richRun],
+        'GET /api/runs/r1/progress': undefined
+      })
+    })
+    await dom.boot()
+    ;(dom.document.querySelector('[data-run-card="r1"]')!).click()
+    await dom.settle()
+
+    // Compared chip-by-chip, not as one concatenated string: the real total
+    // (1 900 000, grouped by hu-HU's locale formatting) legitimately CONTAINS
+    // the substring "0 token" near its own end, which would make a naive
+    // "not.toContain" pass for the wrong reason.
+    const chipTexts = Array.from(dom.document.querySelectorAll('#runDetailStats .stat-chip')).map((chip) =>
+      chip.textContent!.trim()
+    )
+    expect(chipTexts).not.toContain('0/0 cella')
+    expect(chipTexts).not.toContain('0 token')
+    expect(chipTexts).not.toContain('0.0000 USD')
+  })
+
   it('fills the responses table, marking the abstention as an evidence gap', async () => {
     dom = loadAppDom({ routes: runRoutes() })
     await dom.boot()

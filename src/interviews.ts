@@ -82,7 +82,7 @@ export class InterviewService {
 
     // Checked before the call, like every other model call in the project: the
     // budget is a hard stop, and an interview spends from the same pool.
-    if (!this.budget.canSpend(interview.id)) {
+    if (!this.budget.canSpend(interview.id, 'interview')) {
       throw new BudgetExhaustedError('Token budget exhausted')
     }
 
@@ -265,7 +265,7 @@ export function registerInterviewRoutes(app: FastifyInstance, deps: InterviewDep
     const messages = db
       .prepare(`SELECT ${LIST_COLUMNS.join(', ')} FROM interview_messages WHERE interview_id = ? ORDER BY turn`)
       .all(id)
-    return { success: true, data: { interview: toInterview(row), messages, usage: budget.usage(id) } }
+    return { success: true, data: { interview: toInterview(row), messages, usage: budget.usage(id, 'interview') } }
   })
 
   /** The exact conversation sent for one persona turn — large, so fetched on demand. */
@@ -307,7 +307,7 @@ export function registerInterviewRoutes(app: FastifyInstance, deps: InterviewDep
     const messages = db
       .prepare(`SELECT ${LIST_COLUMNS.join(', ')} FROM interview_messages WHERE interview_id = ? ORDER BY turn`)
       .all(id)
-    return { success: true, data: { messages, usage: budget.usage(id) } }
+    return { success: true, data: { messages, usage: budget.usage(id, 'interview') } }
   })
 
   app.get('/api/interviews/:id/export.csv', async (req, reply) => {

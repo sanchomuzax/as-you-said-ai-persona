@@ -58,9 +58,12 @@ function renderContextSidebarRunning() {
   if (!run) {
     html = '<p class="detail-note">Nincs futó mérés.</p>';
   } else {
+    // Issue #22: total_cells/done_cells arrive with GET /api/runs itself now;
+    // the live progress poll (state.runProgress), when it has ticked for this
+    // run, still wins as the fresher number.
     const progress = state.runProgress[run.id] || {};
-    const total = progress.totalCells ?? 0;
-    const done = progress.done ?? 0;
+    const total = progress.totalCells ?? run.total_cells ?? 0;
+    const done = progress.done ?? run.done_cells ?? 0;
     const pct = total > 0 ? Math.min((done / total) * 100, 100) : 0;
     // The opening tag's attributes are kept on ONE line on purpose: the
     // browser normalizes in-tag whitespace on serialization (a line break

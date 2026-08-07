@@ -381,6 +381,13 @@ function subscribeToEvents() {
   state.eventSource.addEventListener('status', (e) => {
     const evt = JSON.parse(e.data);
     refreshRunsList();
+    // Blocker #3: a 'status' event now also fires when an evaluation
+    // (auto or manual) books spend (src/server.ts's runEvaluation) — without
+    // this, the global budget widget under-reported by that spend until an
+    // unrelated action (new run, page reload) happened to refetch /api/budget.
+    // Every other kind of spend (a run's own responses) already goes through
+    // here too, so this also closes that same gap for the widget in general.
+    updateBudgetBar();
     if (state.currentRunId === evt.runId) {
       refreshRunDetailHeader(evt.runId);
     }
@@ -391,6 +398,16 @@ function subscribeToEvents() {
     if (state.currentRunId === evt.runId && state.currentSubtab === 'evaluation') {
       loadEvaluationTab(evt.runId);
     }
+    // Blocker #3: an evaluation (auto or manual) books real spend
+    // (src/server.ts's runEvaluation) that used to reach neither the run's
+    // card (token/cost chips) nor the global budget widget until an
+    // unrelated action happened to refetch /api/runs or /api/budget — an
+    // under-reported spend is a wrong number on this platform, not a stale
+    // one. Unconditional (not gated on the sub-tab check above): the card
+    // and the widget are visible regardless of which sub-tab, or which run,
+    // is open.
+    refreshRunsList();
+    updateBudgetBar();
   });
 
   state.eventSource.onerror = () => {
@@ -690,24 +707,17 @@ async function loadInitialData() {
     await refreshInterviewsList();
     await refreshModelList();
 
-    // One progress fetch up front so the sidebar's running-measurement section
-    // (issue #19) has real totals as soon as the app appears, instead of
-    // waiting for the first 5s tick of the timer started just below.
-    //
-    // Code-review H5 (Pi performance) flagged this as a fan-out risk on a
-    // large research database (state.runProgress starts empty, so every run
-    // looks "uncached" here). Left un-narrowed on purpose: the overview's
-    // stale-version warning (defect #1) needs staleVersions for COMPLETED
-    // runs too, fetched exactly here — narrowing this call to only
-    // running/stalled rows silently made that warning wrong instead of slow
-    // (verified by tests/frontend-overview.test.ts's "flags a run made with a
-    // since-superseded ... version"). A real fix needs either a batched
-    // /api/runs/progress endpoint or a lower per-run cost server-side; a
-    // client-side scope cut is not safe without one of those.
-    await pollRunningProgress();
-    // Runs, their progress (incl. staleVersions) and the model profiles are
-    // all loaded by this point; renderOverviewTab's own hooks (pollRunningProgress,
-    // refreshModelList, updateBudgetBar) keep it current after this.
+    // Issue #22: no progress fetch here anymore. The sidebar's
+    // running-measurement section and the overview tab used to get their
+    // totals/staleness by fanning out one GET /api/runs/:id/progress per run
+    // right here (Code-review H5 flagged this as a Pi-performance risk on a
+    // large research database — up to 4N+1 SQL statements before the correct
+    // tab even appears). GET /api/runs now carries total_cells, done_cells,
+    // abstained_count and stale_versions for every row in the SAME query
+    // (src/server.ts), so runs-list.js/context-sidebar.js/overview.js read
+    // those fields straight off state.runs; only a genuinely running run gets
+    // polled live, and only by the 5s timer started below.
+    window.renderContextSidebarRunning?.();
     window.renderOverviewTab?.();
     subscribeToEvents();
     startProgressPolling();

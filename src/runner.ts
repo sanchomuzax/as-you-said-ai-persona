@@ -175,7 +175,7 @@ export class SurveyRunner {
                 return
               }
               if (doneCells.has(cellKey(question.id, personaRow.id, JSON.stringify(rotation), seed))) continue
-              if (!this.budget.canSpend(runId)) {
+              if (!this.budget.canSpend(runId, 'run')) {
                 this.setStatus(runId, 'budget_exhausted')
                 return
               }
@@ -198,7 +198,7 @@ export class SurveyRunner {
                 return
               }
               if (doneCells.has(cellKey(question.id, BASELINE_CELL_KEY, JSON.stringify(rotation), seed))) continue
-              if (!this.budget.canSpend(runId)) {
+              if (!this.budget.canSpend(runId, 'run')) {
                 this.setStatus(runId, 'budget_exhausted')
                 return
               }
@@ -300,7 +300,7 @@ export class SurveyRunner {
       isValid: parsed.isValid,
       abstained: parsed.abstained,
       parsedAnswer,
-      usage: this.budget.usage(runId)
+      usage: this.budget.usage(runId, 'run')
     })
   }
 

@@ -71,6 +71,15 @@ export interface AppDom {
   settle(): Promise<void>
   /** Text of the last alert(), or null. */
   lastAlert(): string | null
+  /**
+   * Simulates the server pushing one SSE event (app.js's subscribeToEvents
+   * listens for 'response' | 'status' | 'evaluation') to whichever
+   * EventSource is currently open — the app recreates it on reconnect, so
+   * this always targets the latest one, matching what the browser would
+   * deliver to. `data` is JSON-stringified, matching the real payload shape
+   * (`JSON.parse(e.data)` in every listener).
+   */
+  emitServerEvent(type: string, data: unknown): void
   close(): void
 }
 
@@ -93,10 +102,21 @@ export function loadAppDom(options: ApiStubOptions): AppDom {
     alerts.push(String(message))
   }
   // The app opens an SSE stream at boot; there is no server here, and an
-  // unstubbed constructor would abort the whole boot sequence.
+  // unstubbed constructor would abort the whole boot sequence. Listeners ARE
+  // recorded (not just accepted and discarded) so a test can simulate the
+  // server pushing an event via emitServerEvent below — app.js reacts to
+  // 'response' | 'status' | 'evaluation' server-sent events, and that
+  // reaction is itself part of what some tests need to exercise.
+  const eventSourceInstances: { listeners: Record<string, ((e: { data: string }) => void)[]> }[] = []
   w['EventSource'] = class {
+    listeners: Record<string, ((e: { data: string }) => void)[]> = {}
+    constructor() {
+      eventSourceInstances.push(this)
+    }
     close(): void {}
-    addEventListener(): void {}
+    addEventListener(type: string, cb: (e: { data: string }) => void): void {
+      ;(this.listeners[type] ??= []).push(cb)
+    }
     set onerror(_v: unknown) {}
   }
   w['fetch'] = async (url: string, init?: { method?: string; body?: string }): Promise<unknown> => {
@@ -179,6 +199,12 @@ export function loadAppDom(options: ApiStubOptions): AppDom {
     },
     settle,
     lastAlert: () => alerts.at(-1) ?? null,
+    emitServerEvent(type: string, data: unknown): void {
+      const instance = eventSourceInstances.at(-1)
+      const listeners = instance?.listeners[type] ?? []
+      const event = { data: JSON.stringify(data) }
+      for (const cb of listeners) cb(event)
+    },
     close() {
       // Boot starts a progress-polling interval; leaving it running would keep
       // the test process alive and leak one timer per test.

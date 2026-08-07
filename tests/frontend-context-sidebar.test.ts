@@ -18,6 +18,12 @@ afterEach(() => {
 const PROJECT = { id: 'p1', name: 'Startlap', applicationDomain: 'Hírportál', targetPopulation: '18-65' }
 const OTHER_PROJECT = { id: 'p2', name: 'Másik projekt' }
 const PERSONA = { id: 'per1', projectId: 'p1', name: 'Anna', demographics: { kor: 34 }, version: 1, isLatest: true }
+// Issue #22: GET /api/runs now carries total_cells/done_cells directly on
+// every row (src/server.ts, one SQL statement) — a run's live progress is no
+// longer polled automatically at boot (only the 5s timer does that, and only
+// for a currently-running row), so the row itself is what an initial render
+// must show. Values match RUN_PROGRESS below on purpose: a poll that reports
+// the identical numbers must be a genuine no-op (code-review defect #8).
 const RUNNING_RUN = {
   id: 'r1',
   name: 'Éppen fut',
@@ -26,6 +32,8 @@ const RUNNING_RUN = {
   config_json: JSON.stringify({ model: 'm1', temperature: 1, seeds: [0] }),
   response_count: 3,
   invalid_count: 0,
+  total_cells: 10,
+  done_cells: 3,
   created_at: '2026-08-06 10:00:00'
 }
 const RUN_PROGRESS = {

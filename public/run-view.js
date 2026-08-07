@@ -43,7 +43,10 @@ document.getElementById('runDetailBackBtn')?.addEventListener('click', () => {
 function renderRunDetailHeaderFromCache(runId) {
   const run = findRunById(runId);
   if (!run) return;
-  const progress = state.runProgress[runId] || {};
+  // Blocker #1: `|| {}` used to fabricate a "0 / 0 cella · 0 token" render
+  // for a run with no cached live progress — runProgressFromRow (runs-list.js)
+  // is the row's own real totals instead, the same fallback renderRunCard uses.
+  const progress = state.runProgress[runId] || runProgressFromRow(run);
   renderRunDetailHeader(run, progress);
 }
 
@@ -89,7 +92,16 @@ async function refreshRunDetailHeader(runId) {
       progress = await apiCall('GET', `/api/runs/${runId}/progress`);
       state.runProgress[runId] = progress;
     } catch {
-      progress = state.runProgress[runId] || {};
+      // Blocker #1: this used to fall back to `state.runProgress[runId] || {}`
+      // — empty for any run that was never live-polled, which since issue #22
+      // is every non-running run (boot no longer fans out /progress, and the
+      // 5s timer targets running rows only). That rendered a fabricated
+      // "0 / 0 cella · 0 token · 0.0000 USD" for a run that may have spent
+      // real tokens. Prefer an earlier successful live poll if one is cached
+      // (freshest known-good data); otherwise fall back to the list row's own
+      // totals (runProgressFromRow, runs-list.js) — the same real numbers
+      // renderRunCard already shows for this run, never a fabricated 0.
+      progress = state.runProgress[runId] || runProgressFromRow(run);
     }
     renderRunDetailHeader(run, progress);
     // The notice lives in the header, not in a sub-tab: a reader who only opens the
@@ -453,6 +465,16 @@ document.getElementById('runEvaluateBtn')?.addEventListener('click', async () =>
   try {
     await apiCall('POST', `/api/runs/${state.currentRunId}/evaluate`);
     await loadEvaluationTab(state.currentRunId);
+    // Blocker #3: a manual evaluation books real spend (src/server.ts's
+    // runEvaluation) that the run's card (token/cost chips) and the global
+    // budget widget must reflect right away — not just on the next unrelated
+    // action or an SSE round trip. The server now also emits 'status' for
+    // this (belt-and-suspenders: covers a disconnected/reconnecting SSE
+    // stream too), but this click already knows the evaluation is done the
+    // moment the POST above resolves, so it does not need to wait for that.
+    await refreshRunDetailHeader(state.currentRunId);
+    await refreshRunsList();
+    updateBudgetBar();
   } catch (err) {
     errorEl.textContent = 'Kiértékelés indítása sikertelen: ' + err.message;
   } finally {
