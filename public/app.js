@@ -30,6 +30,10 @@ let state = {
   runProgressErrors: {},
   probeQuestionnaires: [],
   currentModelId: null,
+  // The open model card's fetched profile (null while none exists) — kept so
+  // rerenderModelDetailBody (model-view.js) can repaint the card with live run
+  // statuses without refetching the profile on every runs refresh.
+  currentModelProfile: null,
   // Last /api/budget response (issue #20's overview reads it for the 80%
   // warning); updateBudgetBar below is the only writer.
   budgetData: null,

@@ -81,6 +81,16 @@
         </div>
 
         <div class="context-sidebar-section">
+          <h3>Modell-kalibráció</h3>
+          <!-- The sidebar used to say nothing about the Modellek tab: on that
+               tab every section of it was about something else. One row per
+               configured model, status chip, click opens the model card. -->
+          <div id="contextSidebarCalibration" class="context-sidebar-list">
+            <p class="placeholder">Betöltés...</p>
+          </div>
+        </div>
+
+        <div class="context-sidebar-section">
           <h3>Token-keret</h3>
           <div id="contextSidebarBudget">
             <p class="placeholder">Betöltés...</p>
@@ -384,6 +394,19 @@
             alapértelmezésétől. A profil viszonyítási pont, nem korrekció: a nyers válasznaplóhoz soha nem nyúlunk hozzá.</p>
         </div>
         <div class="tab-section">
+          <h2>A kalibráció menete</h2>
+          <ol class="workflow-guide">
+            <li><strong>Kattints egy modellre a lenti listában.</strong> Minden további lépés a modell saját lapján van —
+              a „Kalibrálás” gomb is oda visz.</li>
+            <li><strong>Indítsd el a kalibrációt</strong> egy próba-kérdőívvel. Bármelyik kérdőív használható próbaként;
+              ha még nincs egy sem, előbb a Kérdőívek fülön hozz létre egyet.</li>
+            <li><strong>Várd meg a futtatást.</strong> A kalibráció közönséges futtatás: a modell lapján és a
+              Futtatások fülön is követhető, szüneteltethető.</li>
+            <li><strong>Rögzítsd a profilt</strong> a befejezett futtatásból egy kattintással — a modell állapota ezután
+              „érvényes” lesz, és a perszóna-eredmények ehhez a mért alaphoz képest olvashatók.</li>
+          </ol>
+        </div>
+        <div class="tab-section">
           <h2>Modellek kalibrációs állapota</h2>
           <div id="modelsList" class="list-container">
             <p class="placeholder">Betöltés...</p>
@@ -423,8 +446,10 @@
               <select id="profileModel" required></select>
             </div>
             <div class="form-group">
-              <label for="profileRunIds" title="A mért összeállítást (modellverzió, szolgáltató, próba-kérdőív) a rendszer a válaszokból olvassa vissza, nem innen veszi.">Kalibrációs futtatás-azonosítók</label>
-              <textarea id="profileRunIds" rows="2" placeholder="egy vagy több futás-azonosító, vesszővel vagy sortöréssel elválasztva"></textarea>
+              <label title="A mért összeállítást (modellverzió, szolgáltató, próba-kérdőív) a rendszer a válaszokból olvassa vissza, nem innen veszi.">Befejezett kalibrációs futtatások</label>
+              <div id="profileRunPicker" class="checkbox-group">
+                <p class="placeholder">Válassz modellt.</p>
+              </div>
             </div>
             <button type="submit" class="btn btn-primary">Profil rögzítése</button>
           </form>

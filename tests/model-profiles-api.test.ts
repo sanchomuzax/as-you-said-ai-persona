@@ -346,6 +346,9 @@ describe('POST /api/models/:model/calibrate', () => {
       (db.prepare('SELECT config_json FROM runs WHERE id = ?').get(runId) as { config_json: string }).config_json
     )
     expect(config.baselineArm).toBe(true)
+    // The marker the UI matches on to list a model's calibration runs on its
+    // card — matching the human-facing run name instead would break on rewording.
+    expect(config.calibration).toBe(true)
     expect(db.prepare('SELECT COUNT(*) c FROM run_personas WHERE run_id = ?').get(runId)).toEqual({ c: 0 })
     const rows = db.prepare('SELECT persona_id, condition FROM responses WHERE run_id = ?').all(runId) as unknown as {
       persona_id: string | null

@@ -162,3 +162,25 @@ Two deliberate departures from §2, both visible in the UI rather than hidden:
 Not in M2 (unchanged): the prior-bias vector is *reported*, never applied as a
 correction (that is M4, and even then only as a clearly labelled re-scoring view);
 the evaluation prompt does not yet cite the profile (M3).
+
+## 8. UI rework: the workflow lives on the model card (post-M2)
+
+The M2 UI put the launch form and a run-id textarea in collapsed sections under
+the model list, and an uncalibrated model's card was a dead end — a warning with
+no action. Reworked so every step sits where the researcher already is:
+
+- The **model card carries the whole workflow** as four numbered steps: pick the
+  probe questionnaire (or jump to Kérdőívek when none exists), launch, follow
+  this model's calibration runs live, and record the profile from finished runs
+  via a checkbox picker — run ids are never typed or copied.
+- Calibration runs carry a `calibration: true` marker in their run config so the
+  UI can attribute them to a model without parsing the human-facing run name.
+- The **Modellek tab opens with the numbered "A kalibráció menete" guide**, and
+  uncalibrated/stale list rows carry a Kalibrálás/Újrakalibrálás button, not
+  just a status chip.
+- The tab-level "Profil rögzítése" form offers the model's completed calibration
+  runs as checkboxes instead of a free-text id field.
+- The **context sidebar shows per-model calibration status** on every tab; a row
+  opens the model card. Launching a calibration lands on the model card, where
+  the new run is visible with live status (it remains an ordinary run in
+  Futtatások too).

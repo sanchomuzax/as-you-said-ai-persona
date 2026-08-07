@@ -6,13 +6,18 @@ import { loadAppDom, defaultRoutes, type AppDom } from './helpers/load-app-dom.j
 
 interface CardApi {
   renderModelList: (entries: Record<string, unknown>[]) => string
-  renderModelCard: (entry: Record<string, unknown>, profile: Record<string, unknown> | null) => string
+  renderModelCard: (
+    entry: Record<string, unknown>,
+    profile: Record<string, unknown> | null,
+    context?: Record<string, unknown>
+  ) => string
   calibrationStatusChip: (status: string) => string
+  renderCalibrationWorkflow: (entry: Record<string, unknown>, context?: Record<string, unknown>) => string
 }
 
 const card = loadPublicScript<CardApi>(
   ['format.js', 'version-diff.js', 'metrics.js', 'detail.js', 'model-card.js'],
-  '({ renderModelList, renderModelCard, calibrationStatusChip })'
+  '({ renderModelList, renderModelCard, calibrationStatusChip, renderCalibrationWorkflow })'
 )
 
 const PROFILE = {
@@ -177,6 +182,106 @@ describe('renderModelCard', () => {
   })
 })
 
+/**
+ * The on-card calibration workflow: an uncalibrated model's card used to be a
+ * dead end (a warning with no action anywhere near it, while the launch form
+ * hid in a collapsed section below the tab's list, and profile recording
+ * demanded hand-copied run ids).
+ */
+describe('renderCalibrationWorkflow', () => {
+  const PROBES = [{ id: 'probe', name: 'Próba-kérdőív' }]
+
+  it('puts a launch form with the probe options on the card', () => {
+    const html = card.renderCalibrationWorkflow({ model: 'm2', label: 'M2', status: 'missing' }, { probes: PROBES })
+    expect(html).toContain('model-card-calibrate-form')
+    expect(html).toContain('data-model="m2"')
+    expect(html).toContain('Próba-kérdőív')
+    expect(html).toContain('Kalibrációs futtatás indítása')
+  })
+
+  it('numbers the steps in order', () => {
+    const html = card.renderCalibrationWorkflow({ model: 'm2', label: 'M2', status: 'missing' }, { probes: PROBES })
+    for (const step of ['1. Próba-kérdőív', '2. Kalibráció indítása', '3. A futtatás követése', '4. Profil rögzítése']) {
+      expect(html).toContain(step)
+    }
+  })
+
+  it('offers a jump to the Kérdőívek tab when no probe questionnaire exists yet', () => {
+    const html = card.renderCalibrationWorkflow({ model: 'm2', label: 'M2', status: 'missing' }, { probes: [] })
+    expect(html).toContain('data-action="goto-questionnaires"')
+    expect(html).not.toContain('model-card-calibrate-form')
+  })
+
+  it("lists this model's calibration runs with their status", () => {
+    const html = card.renderCalibrationWorkflow(
+      { model: 'm2', label: 'M2', status: 'missing' },
+      {
+        probes: PROBES,
+        calibrationRuns: [{ id: 'cal-1', name: 'Kalibráció — m2', status: 'running', created_at: '2026-08-07 10:00:00' }]
+      }
+    )
+    expect(html).toContain('data-cal-run="cal-1"')
+    expect(html).toContain('Kalibráció — m2')
+  })
+
+  it('offers completed runs as a one-click profile picker, no id typing', () => {
+    const html = card.renderCalibrationWorkflow(
+      { model: 'm2', label: 'M2', status: 'missing' },
+      {
+        probes: PROBES,
+        calibrationRuns: [{ id: 'cal-1', name: 'Kalibráció — m2', status: 'completed', created_at: '2026-08-07 10:00:00' }]
+      }
+    )
+    expect(html).toContain('model-card-runpick')
+    expect(html).toContain('value="cal-1"')
+    expect(html).toContain('data-action="record-profile"')
+  })
+
+  it('says the profile step unlocks once a run finishes, while none has', () => {
+    const html = card.renderCalibrationWorkflow(
+      { model: 'm2', label: 'M2', status: 'missing' },
+      {
+        probes: PROBES,
+        calibrationRuns: [{ id: 'cal-1', name: 'Kalibráció — m2', status: 'running', created_at: '2026-08-07 10:00:00' }]
+      }
+    )
+    expect(html).not.toContain('data-action="record-profile"')
+    expect(html).toContain('Amint egy kalibrációs futtatás befejeződik')
+  })
+
+  it('is part of the missing-profile card, so that card is no longer a dead end', () => {
+    const html = card.renderModelCard({ model: 'm2', label: 'M2' }, null, { probes: PROBES })
+    expect(html).toMatch(/nincs mihez viszonyítani/)
+    expect(html).toContain('model-card-calibrate-form')
+  })
+
+  it('appears on a calibrated card too, as recalibration', () => {
+    const html = card.renderModelCard({ model: 'm1', label: 'M' }, PROFILE, { probes: PROBES })
+    expect(html).toContain('Újrakalibrálás lépésről lépésre')
+  })
+})
+
+describe('model list row actions', () => {
+  it('carries a Kalibrálás button on an uncalibrated row', () => {
+    const html = card.renderModelList([{ model: 'm2', label: 'Modell 2', status: 'missing', summary: null }])
+    expect(html).toContain('Kalibrálás')
+  })
+
+  it('carries an Újrakalibrálás button on a stale row', () => {
+    const html = card.renderModelList([
+      { model: 'm1', label: 'M', status: 'stale', summary: { positivityOffset: 0, priorBiasMaxDeviation: 0, invalidRate: 0, cellCount: 1 } }
+    ])
+    expect(html).toContain('Újrakalibrálás')
+  })
+
+  it('shows no action button on a valid row', () => {
+    const html = card.renderModelList([
+      { model: 'm1', label: 'M', status: 'valid', summary: { positivityOffset: 0, priorBiasMaxDeviation: 0, invalidRate: 0, cellCount: 1 } }
+    ])
+    expect(html).not.toContain('Kalibrálás')
+  })
+})
+
 describe('calibrationStatusChip', () => {
   it('uses a distinct class per state', () => {
     expect(card.calibrationStatusChip('valid')).toContain('badge-completed')
@@ -290,6 +395,137 @@ describe('Modellek tab controller', () => {
     await dom.settle()
     expect(dom.calls.slice(before).map((c) => c.url).join(' ')).not.toContain('/calibrate')
     expect(dom.lastAlert()).toMatch(/próba-kérdőívet/)
+  })
+
+  // The run row of a finished calibration launch, as GET /api/runs serves it.
+  const CAL_RUN = {
+    id: 'cal-run-1',
+    name: 'Kalibráció — m2',
+    status: 'completed',
+    created_at: '2026-08-07 10:00:00',
+    questionnaire_id: 'probe',
+    config_json: JSON.stringify({ model: 'm2', temperature: 1, seeds: [0, 1], baselineArm: true, calibration: true }),
+    response_count: 4,
+    invalid_count: 0,
+    abstained_count: 0,
+    total_cells: 4,
+    stale_versions: 0
+  }
+
+  it('launches a calibration straight from the model card', async () => {
+    let posted: unknown = null
+    dom = loadAppDom({
+      routes: modelRoutes({
+        'GET /api/questionnaires': [{ id: 'probe', name: 'Próba-kérdőív', questions: [] }],
+        'POST /api/models/m2/calibrate': (body: unknown) => {
+          posted = body
+          return { runId: 'run-9' }
+        }
+      })
+    })
+    await dom.boot()
+    dom.document.querySelector('[data-model="m2"]')!.click()
+    await dom.settle()
+    dom.document.querySelector('.model-card-probe-select')!.value = 'probe'
+    dom.document
+      .querySelector('.model-card-calibrate-form')!
+      .dispatchEvent(new dom.window.Event('submit', { bubbles: true, cancelable: true }))
+    await dom.settle()
+    expect(posted).toMatchObject({ questionnaireId: 'probe' })
+  })
+
+  it('guards the on-card launch behind a chosen probe, like the tab-level form', async () => {
+    dom = loadAppDom({
+      routes: modelRoutes({
+        'GET /api/questionnaires': [{ id: 'probe', name: 'Próba-kérdőív', questions: [] }]
+      })
+    })
+    await dom.boot()
+    dom.document.querySelector('[data-model="m2"]')!.click()
+    await dom.settle()
+    const before = dom.calls.length
+    dom.document
+      .querySelector('.model-card-calibrate-form')!
+      .dispatchEvent(new dom.window.Event('submit', { bubbles: true, cancelable: true }))
+    await dom.settle()
+    expect(dom.calls.slice(before).map((c) => c.url).join(' ')).not.toContain('/calibrate')
+    expect(dom.lastAlert()).toMatch(/próba-kérdőívet/)
+  })
+
+  it("records a profile from the card's completed-run picker, no id typing", async () => {
+    let posted: unknown = null
+    dom = loadAppDom({
+      routes: modelRoutes({
+        'GET /api/runs': [CAL_RUN],
+        'GET /api/questionnaires': [{ id: 'probe', name: 'Próba-kérdőív', questions: [] }],
+        'POST /api/model-profiles': (body: unknown) => {
+          posted = body
+          return { id: 'prof-new' }
+        }
+      })
+    })
+    await dom.boot()
+    dom.document.querySelector('[data-model="m2"]')!.click()
+    await dom.settle()
+    // The newest completed run is pre-checked; the researcher just confirms.
+    expect(dom.document.querySelector('.model-card-runpick')!.checked).toBe(true)
+    dom.document.querySelector('[data-action="record-profile"]')!.click()
+    await dom.settle()
+    expect(posted).toMatchObject({ model: 'm2', runIds: ['cal-run-1'] })
+  })
+
+  it('fills the tab-level profile form with completed runs instead of an id field', async () => {
+    let posted: unknown = null
+    dom = loadAppDom({
+      routes: modelRoutes({
+        'GET /api/runs': [CAL_RUN],
+        'POST /api/model-profiles': (body: unknown) => {
+          posted = body
+          return { id: 'prof-new' }
+        }
+      })
+    })
+    await dom.boot()
+    const modelSelect = dom.document.getElementById('profileModel')!
+    modelSelect.value = 'm2'
+    modelSelect.dispatchEvent(new dom.window.Event('change', { bubbles: true }))
+    await dom.settle()
+    expect(dom.document.querySelector('#profileRunPicker input[name="profileRuns"]')!.value).toBe('cal-run-1')
+    dom.document
+      .getElementById('profileFromRunsForm')!
+      .dispatchEvent(new dom.window.Event('submit', { bubbles: true, cancelable: true }))
+    await dom.settle()
+    expect(posted).toMatchObject({ model: 'm2', runIds: ['cal-run-1'] })
+  })
+
+  it('says in the tab-level profile form when the model has no completed calibration run', async () => {
+    dom = loadAppDom({ routes: modelRoutes() })
+    await dom.boot()
+    const modelSelect = dom.document.getElementById('profileModel')!
+    modelSelect.value = 'm2'
+    modelSelect.dispatchEvent(new dom.window.Event('change', { bubbles: true }))
+    await dom.settle()
+    expect(dom.document.getElementById('profileRunPicker')!.textContent).toContain(
+      'még nincs befejezett kalibrációs futtatás'
+    )
+  })
+
+  it('shows every model with its calibration status in the context sidebar', async () => {
+    dom = loadAppDom({ routes: modelRoutes() })
+    await dom.boot()
+    const section = dom.document.getElementById('contextSidebarCalibration')!
+    expect(section.textContent).toContain('Modell 1')
+    expect(section.textContent).toContain('Modell 2')
+    expect(section.textContent).toContain('hiányzik')
+  })
+
+  it('opens the model card from the sidebar row', async () => {
+    dom = loadAppDom({ routes: modelRoutes() })
+    await dom.boot()
+    dom.document.querySelector('#contextSidebarCalibration [data-model="m2"]')!.click()
+    await dom.settle()
+    expect(dom.document.getElementById('modelDetailView')!.style.display).toBe('block')
+    expect(dom.document.getElementById('modelDetailTitle')!.textContent).toBe('Modell 2')
   })
 
   // Issue #24: closeModelDetail hard-codes the hash to 'models' and never

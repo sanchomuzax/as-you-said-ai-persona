@@ -1677,3 +1677,42 @@ body {
   color: var(--color-text-secondary);
   font-style: italic;
 }
+
+/* ----- Calibration workflow (model card) and the Modellek tab guide ----- */
+
+/* The numbered guide on the Modellek tab: what the steps are and where they live. */
+.workflow-guide {
+  margin: var(--space-2) 0 0 var(--space-5);
+  display: grid;
+  gap: var(--space-2);
+}
+
+/* On-card workflow: one bordered block per step, so "what do I do next" reads
+   as a sequence instead of a wall of controls. */
+.calibration-workflow {
+  margin-top: var(--space-4);
+}
+
+.calibration-step {
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  padding: var(--space-3);
+  margin-bottom: var(--space-3);
+}
+
+.calibration-step h4 {
+  margin: 0 0 var(--space-2) 0;
+  font-size: 14px;
+}
+
+.calibration-step .form-grid {
+  margin-top: var(--space-2);
+}
+
+/* Status chip + per-row action button on a model list row. */
+.list-item-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-shrink: 0;
+}
