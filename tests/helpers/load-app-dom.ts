@@ -118,6 +118,40 @@ export function loadAppDom(options: ApiStubOptions): AppDom {
     return { status: 200, json: async () => ({ success: true, data }) }
   }
 
+  // The app's setHash() (public/app.js) navigates via history.replaceState,
+  // which real browsers deliberately do NOT turn into a `hashchange` event —
+  // only genuine navigation (assigning location.hash/href, back/forward) does.
+  // happy-dom does not make that distinction: ANY hash change, however it
+  // happened, queues a `hashchange` (see Location's setURL, which every
+  // replaceState/pushState call and every location.hash assignment funnels
+  // through). Left as-is, every setHash() call would spuriously re-run the
+  // app's `hashchange` listener (applyRoute) — a repair the browser never
+  // performs — so the suite would be exercising a different state machine
+  // than production (issue #21). Only calls originating from
+  // history.replaceState are suppressed; a genuine location.hash assignment
+  // does not go through the wrapped replaceState below, so it still queues
+  // and fires normally.
+  let suppressedHashChanges = 0
+  const history = window.history as unknown as { replaceState: (...args: unknown[]) => void }
+  const originalReplaceState = history.replaceState.bind(window.history)
+  history.replaceState = (...args: unknown[]): void => {
+    const before = (window.location as unknown as { hash: string }).hash
+    originalReplaceState(...args)
+    const after = (window.location as unknown as { hash: string }).hash
+    // happy-dom only queues a hashchange when the hash actually changed
+    // (Location#setURL); only those calls have an event to swallow.
+    if (before !== after) suppressedHashChanges++
+  }
+  const originalDispatchEvent = window.dispatchEvent.bind(window)
+  w['dispatchEvent'] = (event: unknown): boolean => {
+    const type = (event as { type?: string } | null)?.type
+    if (type === 'hashchange' && suppressedHashChanges > 0) {
+      suppressedHashChanges--
+      return true
+    }
+    return originalDispatchEvent(event as never)
+  }
+
   ;(window.document as unknown as { write(html: string): void }).write(html)
   // Concatenated, not one eval per file: a classic script's top-level `let`
   // bindings go into the shared global lexical environment, which separate evals
