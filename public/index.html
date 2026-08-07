@@ -57,6 +57,7 @@
       <button class="tab-btn" data-tab="questionnaires">Kérdőívek</button>
       <button class="tab-btn" data-tab="runs">Futtatások</button>
       <button class="tab-btn" data-tab="interviews">Interjúk</button>
+      <button class="tab-btn" data-tab="models">Modellek</button>
     </nav>
 
     <!-- Tab Content -->
@@ -287,7 +288,67 @@
           </div>
         </div>
       </div>
+      <!-- Models / calibration Tab -->
+      <div id="tab-models" class="tab-pane">
+        <div class="tab-section">
+          <p class="methodology-warning">Minden modellnek van egy alapértelmezett „hangja”: az, amit perszóna nélkül válaszol.
+            A perszóna-eredmények csak ehhez képest értelmezhetők — enélkül nem választható el a perszóna hatása a modell
+            alapértelmezésétől. A profil viszonyítási pont, nem korrekció: a nyers válasznaplóhoz soha nem nyúlunk hozzá.</p>
+        </div>
+        <div class="tab-section">
+          <h2>Modellek kalibrációs állapota</h2>
+          <div id="modelsList" class="list-container">
+            <p class="placeholder">Betöltés...</p>
+          </div>
+        </div>
+        <div class="tab-section">
+          <h2>Kalibráció indítása</h2>
+          <form id="calibrationForm" class="form-grid">
+            <div class="form-group">
+              <label for="calibrationModel">Modell</label>
+              <select id="calibrationModel" required></select>
+            </div>
+            <div class="form-group">
+              <label for="calibrationQuestionnaire" title="A próba-kérdőív közönséges kérdőív: te választod meg, melyik mérje a modell alapértelmezett válaszait.">Próba-kérdőív</label>
+              <select id="calibrationQuestionnaire" required>
+                <option value="">-- Válassz próba-kérdőívet --</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label for="calibrationProvider" title="Szolgáltató rögzítése nélkül a profil nem egyetlen kiszolgálót ír le, és a szolgáltató-váltás azonnal elavulttá teszi.">Szolgáltató rögzítése (ajánlott)</label>
+              <input type="text" id="calibrationProvider" placeholder="pl. DeepInfra">
+            </div>
+            <button type="submit" class="btn btn-primary">Kalibrációs futtatás indítása</button>
+          </form>
+        </div>
+        <div class="tab-section">
+          <h2>Profil rögzítése befejezett futtatásokból</h2>
+          <form id="profileFromRunsForm" class="form-grid">
+            <div class="form-group">
+              <label for="profileModel">Modell</label>
+              <select id="profileModel" required></select>
+            </div>
+            <div class="form-group">
+              <label for="profileRunIds" title="A mért összeállítást (modellverzió, szolgáltató, próba-kérdőív) a rendszer a válaszokból olvassa vissza, nem innen veszi.">Kalibrációs futtatás-azonosítók</label>
+              <textarea id="profileRunIds" rows="2" placeholder="egy vagy több futás-azonosító, vesszővel vagy sortöréssel elválasztva"></textarea>
+            </div>
+            <button type="submit" class="btn btn-primary">Profil rögzítése</button>
+          </form>
+        </div>
+      </div>
     </main>
+
+    <!-- Model Detail View (model card) -->
+    <section id="modelDetailView" class="entity-detail-view" style="display: none;">
+      <div class="run-detail-header">
+        <button id="modelDetailBackBtn" class="btn btn-secondary back-btn">&larr; Vissza</button>
+        <div class="run-detail-title-row">
+          <h2 id="modelDetailTitle" tabindex="-1">Modell</h2>
+          <span id="modelDetailStatus"></span>
+        </div>
+      </div>
+      <div id="modelDetailBody"><p class="placeholder">Betöltés...</p></div>
+    </section>
 
     <!-- Interview Detail View -->
     <section id="interviewDetailView" class="interview-detail-view" style="display: none;">
@@ -416,9 +477,12 @@
   <script src="detail.js"></script>
   <script src="provenance.js"></script>
   <script src="interview.js"></script>
+  <script src="model-card.js"></script>
   <script src="app.js"></script>
   <script src="entity-view.js"></script>
+  <script src="runs-list.js"></script>
   <script src="run-view.js"></script>
   <script src="interview-view.js"></script>
+  <script src="model-view.js"></script>
 </body>
 </html>

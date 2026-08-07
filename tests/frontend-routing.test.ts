@@ -6,6 +6,7 @@ interface Route {
   runId: string | null
   entityId: string | null
   interviewId: string | null
+  modelId: string | null
 }
 
 const { parseHash, buildHash } = loadPublicScript<{
@@ -15,8 +16,8 @@ const { parseHash, buildHash } = loadPublicScript<{
 
 describe('parseHash', () => {
   it('defaults to the projects tab', () => {
-    expect(parseHash('')).toEqual({ tab: 'projects', runId: null, entityId: null, interviewId: null })
-    expect(parseHash('#')).toEqual({ tab: 'projects', runId: null, entityId: null, interviewId: null })
+    expect(parseHash('')).toEqual({ tab: 'projects', runId: null, entityId: null, interviewId: null, modelId: null })
+    expect(parseHash('#')).toEqual({ tab: 'projects', runId: null, entityId: null, interviewId: null, modelId: null })
   })
 
   it('parses plain tab routes', () => {
@@ -25,17 +26,17 @@ describe('parseHash', () => {
   })
 
   it('parses entity detail routes', () => {
-    expect(parseHash('#personas/abc-123')).toEqual({ tab: 'personas', runId: null, entityId: 'abc-123', interviewId: null })
-    expect(parseHash('#questionnaires/q1')).toEqual({ tab: 'questionnaires', runId: null, entityId: 'q1', interviewId: null })
+    expect(parseHash('#personas/abc-123')).toEqual({ tab: 'personas', runId: null, entityId: 'abc-123', interviewId: null, modelId: null })
+    expect(parseHash('#questionnaires/q1')).toEqual({ tab: 'questionnaires', runId: null, entityId: 'q1', interviewId: null, modelId: null })
   })
 
   it('keeps run details on the runId field', () => {
-    expect(parseHash('#runs/r1')).toEqual({ tab: 'runs', runId: 'r1', entityId: null, interviewId: null })
+    expect(parseHash('#runs/r1')).toEqual({ tab: 'runs', runId: 'r1', entityId: null, interviewId: null, modelId: null })
   })
 
   it('falls back to projects for an unknown route', () => {
-    expect(parseHash('#nope')).toEqual({ tab: 'projects', runId: null, entityId: null, interviewId: null })
-    expect(parseHash('#nope/123')).toEqual({ tab: 'projects', runId: null, entityId: null, interviewId: null })
+    expect(parseHash('#nope')).toEqual({ tab: 'projects', runId: null, entityId: null, interviewId: null, modelId: null })
+    expect(parseHash('#nope/123')).toEqual({ tab: 'projects', runId: null, entityId: null, interviewId: null, modelId: null })
   })
 
   it('keeps interview details on their own field, not the entity view', () => {
@@ -43,7 +44,18 @@ describe('parseHash', () => {
       tab: 'interviews',
       runId: null,
       entityId: null,
-      interviewId: 'i1'
+      interviewId: 'i1',
+      modelId: null
+    })
+  })
+
+  it('keeps model calibration details on their own field', () => {
+    expect(parseHash('#models/deepseek%2Fv4')).toEqual({
+      tab: 'models',
+      runId: null,
+      entityId: null,
+      interviewId: null,
+      modelId: 'deepseek/v4'
     })
   })
 

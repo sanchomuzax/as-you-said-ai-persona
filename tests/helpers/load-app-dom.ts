@@ -57,7 +57,7 @@ export interface TestDocument {
 
 export interface TestWindow {
   location: { hash: string }
-  Event: new (type: string, init?: { bubbles?: boolean }) => unknown
+  Event: new (type: string, init?: { bubbles?: boolean; cancelable?: boolean }) => unknown
   KeyboardEvent: new (type: string, init?: { key?: string; bubbles?: boolean }) => unknown
 }
 

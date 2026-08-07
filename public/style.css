@@ -1551,3 +1551,46 @@ body {
   white-space: nowrap;
   border: 0;
 }
+
+/* ---------- Model calibration ---------- */
+
+.position-bias {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.position-bias-row {
+  display: grid;
+  grid-template-columns: 70px 1fr 48px;
+  align-items: center;
+  gap: var(--space-3);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.position-bias-label,
+.position-bias-value {
+  color: var(--color-text-secondary);
+}
+
+.position-bias-value {
+  text-align: right;
+}
+
+/* An explained chip is focusable (issue #12); the ring makes that visible. */
+.chip-explained:focus-visible,
+.metric-chip.chip-explained:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+.methodology-warning ul {
+  margin: var(--space-2) 0 var(--space-2) var(--space-5);
+}
+
+/* A calibration run has no personas: "nothing measured" must not look like 0%. */
+.option-bar-pct-unmeasured {
+  color: var(--color-text-secondary);
+  font-style: italic;
+}

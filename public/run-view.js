@@ -146,6 +146,10 @@ function renderOptionBars(question) {
   const aggregated = question.aggregated || [];
   const multi = question.elicitationMode === 'multi_choice';
   const total = aggregated.reduce((a, b) => a + b, 0);
+  // A calibration run has no personas at all, so the persona aggregate is empty.
+  // Drawing it as "0%" for every option would assert a measured result of zero
+  // where nothing was measured; the control arm is shown on its own instead.
+  const personaMeasured = (question.aggregatedResponseCount || 0) > 0;
   const max = Math.max(1, ...aggregated);
   // Multi-select values are independent supports, so they must NOT be shown as
   // a share of a 100% total — that is exactly the reading the fix removes.
@@ -158,17 +162,20 @@ function renderOptionBars(question) {
     const baselinePct = baselineValue === null
       ? null
       : (multi ? Math.round(baselineValue * 100) : (baseline.reduce((a, b) => a + b, 0) > 0 ? Math.round((baselineValue / baseline.reduce((a, b) => a + b, 0)) * 100) : 0));
-    const barPct = (value / max) * 100;
+    const barPct = personaMeasured ? (value / max) * 100 : 0;
     const pct = multi
       ? Math.round(value * 100)
       : (total > 0 ? Math.round((value / total) * 100) : 0);
+    const personaCell = personaMeasured
+      ? `<span class="option-bar-pct">${pct}%${multi ? ' támogatottság' : ''} (${formatMetric(value)})</span>`
+      : '<span class="option-bar-pct option-bar-pct-unmeasured">nincs perszóna-mérés</span>';
     return `
       <div class="option-bar-row" title="${escapeHtml(rowTooltip)}">
         <span class="option-bar-label">${escapeHtml(opt)}</span>
         <div class="option-bar-track">
           <div class="option-bar-fill${multi ? ' option-bar-fill-support' : ''}" style="width: ${barPct}%"></div>
         </div>
-        <span class="option-bar-pct">${pct}%${multi ? ' támogatottság' : ''} (${formatMetric(value)})</span>
+        ${personaCell}
         ${baselinePct === null ? '' : `<span class="option-bar-baseline" title="${escapeHtml(TOOLTIPS.baselineArm)}">kontroll: ${baselinePct}%</span>`}
       </div>
     `;

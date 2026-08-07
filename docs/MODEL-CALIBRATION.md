@@ -121,7 +121,7 @@ evaluation is auditable against the calibration it used.
   (needs #14 null-persona support; supersedes it).
 - **M2**: `model_profiles` registry + "Modellek" tab + one-click calibration +
   staleness triggers (provider drift detection already possible via
-  `responses.provider`).
+  `responses.provider`). ✅ v0.15.0 — with two documented gaps, see §7.
 - **M3**: evaluation integration (judge prompt section + profile reference on
   the evaluation record).
 - **M4**: repeat-for-distribution + bootstrap CIs; PriDe-style prior correction
@@ -134,3 +134,31 @@ Every model profile renders as a model card; every evaluation cites its profile;
 the probe questionnaire and this design are public. The six-pillar transparency
 checklist applies to calibration runs too (population = "the model itself",
 which the project card must state explicitly).
+
+## 7. What M2 actually shipped (and what it did not)
+
+Shipped: the `model_profiles` table, metrics computed in code from the
+persona-free cells of calibration runs, the five-part profile key with staleness
+detection and stated reasons, the "Modellek" tab with a status chip per
+configured model, the model card, and a one-click calibration launch (an ordinary
+run: probe questionnaire, no personas, control arm on).
+
+Two deliberate departures from §2, both visible in the UI rather than hidden:
+
+- **Positivity offset instead of the Pollyanna offset.** The design names the
+  *product-evaluation trap items*. The probe questionnaire has no way to mark an
+  item as a trap — questions carry no role field — so the shipped metric is the
+  mean position of the default answer on every *directed* scale
+  (ordinal/frequency), centred on the scale midpoint. It is the same shape of
+  claim, measured over a wider and less specific set of items, and the model card
+  says so. Marking trap items needs a question-level role field and belongs with
+  the probe redesign.
+- **The probe is data, not code.** §2 assumes a single canonical probe
+  questionnaire. The platform is public and generic, so the calibration launch
+  takes *any* questionnaire as the probe and the profile records which one
+  (id + version) it used. A profile measured on one probe is stale against
+  another, which is what the key already enforces.
+
+Not in M2 (unchanged): the prior-bias vector is *reported*, never applied as a
+correction (that is M4, and even then only as a clearly labelled re-scoring view);
+the evaluation prompt does not yet cite the profile (M3).

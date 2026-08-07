@@ -57,6 +57,16 @@ recorded with full experimental metadata so runs are reproducible and auditable.
   provider, temperature, seed, tokens, cost, latency); abstention is marked as an
   evidence gap; the token budget hard stop applies. The UI states in both the list and
   the transcript that the output is a hypothesis, not evidence.
+- **Model calibration registry**: every configured model gets a measured profile of
+  what it answers with **no persona at all** — per-question default distribution,
+  position-bias vector (from the balanced permutations), scale-positivity offset,
+  invalid/abstain rates — computed in code from the response log, never by a model.
+  A profile is keyed by model version + provider + prompt-template fingerprint +
+  probe questionnaire version + language, and goes stale (with the reason stated) as
+  soon as any of those changes or after 90 days. The "Modellek" tab shows the status
+  per model, a model card per profile, and launches a calibration run in one click.
+  The profile is a reference point for reading persona results, never a correction:
+  the append-only response log is not touched.
 - **Token budget tracking** per run / per persona / global, with hard stops. Interviews
   draw on the same budget but are booked under their own ledger scope, so the cost of
   the measurement stays separable from the cost of exploration.
@@ -78,7 +88,7 @@ npm run dev            # http://localhost:3555
 
 Requires Node.js 24+ (uses the built-in `node:sqlite` — no native modules).
 
-Run tests with `npm test` (97 tests) or `npm run test:coverage`.
+Run tests with `npm test` (506 tests) or `npm run test:coverage`.
 
 For production, a systemd user service works well:
 

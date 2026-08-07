@@ -325,6 +325,28 @@ CREATE TABLE IF NOT EXISTS interview_messages (
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_interview_turn ON interview_messages(interview_id, turn);
 
+-- Measured default behaviour of ONE exact stack (docs/MODEL-CALIBRATION.md M2).
+-- Append-only like every other record here: a profile is never edited in place,
+-- because it is a measurement of a configuration at a moment in time.
+CREATE TABLE IF NOT EXISTS model_profiles (
+  id TEXT PRIMARY KEY,
+  -- the five key components; any change makes the profile stale
+  model_requested TEXT NOT NULL,
+  model_version TEXT NOT NULL,
+  provider TEXT,
+  prompt_template_hash TEXT NOT NULL,
+  probe_questionnaire_id TEXT NOT NULL REFERENCES questionnaires(id),
+  language TEXT NOT NULL DEFAULT 'hu',
+  -- the calibration runs the numbers were computed from
+  run_ids_json TEXT NOT NULL,
+  -- every metric computed in code from the response log, never by a model
+  metrics_json TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  valid_until TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_model_profiles_model ON model_profiles(model_requested);
+
 CREATE TABLE IF NOT EXISTS run_evaluations (
   id TEXT PRIMARY KEY,
   run_id TEXT NOT NULL REFERENCES runs(id),

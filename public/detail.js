@@ -25,11 +25,20 @@ function statusBadge(status) {
   return `<span class="badge badge-${escapeHtml(status || 'pending')}"${title}>${escapeHtml(statusLabel(status))}</span>`;
 }
 
+/**
+ * An explained label is focusable and carries the explanation as its accessible
+ * name (issue #12): the explanations are the substance of this UI, and a
+ * hover-only `title` reaches neither a keyboard user nor a touch screen. A label
+ * with nothing to explain stays out of the tab order.
+ */
 function detailField(label, value, tooltip) {
-  const title = tooltip ? ` title="${escapeHtml(tooltip)}"` : '';
+  const labelAttrs = tooltip
+    ? ` class="detail-label chip-explained" title="${escapeHtml(tooltip)}" tabindex="0" role="note"` +
+      ` aria-label="${escapeHtml(label)} — ${escapeHtml(tooltip)}"`
+    : ' class="detail-label"';
   return `
     <div class="detail-field">
-      <span class="detail-label"${title}>${escapeHtml(label)}</span>
+      <span${labelAttrs}>${escapeHtml(label)}</span>
       <span class="detail-value">${escapeHtml(value === null || value === undefined || value === '' ? '—' : value)}</span>
     </div>
   `;
