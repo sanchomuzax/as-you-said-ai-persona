@@ -63,8 +63,11 @@ recorded with full experimental metadata so runs are reproducible and auditable.
   invalid/abstain rates — computed in code from the response log, never by a model.
   A profile is keyed by model version + provider + prompt-template fingerprint +
   probe questionnaire version + language, and goes stale (with the reason stated) as
-  soon as any of those changes or after 90 days. The "Modellek" tab shows the status
-  per model, a model card per profile, and launches a calibration run in one click.
+  soon as any of those changes or after 90 days. The "Modellek" tab opens with a
+  numbered guide, and each model's card carries the whole workflow in place:
+  launch the calibration, follow its runs live, and record the profile from a
+  finished run with one click (no run ids to copy). The context sidebar shows
+  per-model calibration status on every tab.
   The profile is a reference point for reading persona results, never a correction:
   the append-only response log is not touched.
 - **Token budget tracking** per run / per persona / global, with hard stops. Interviews

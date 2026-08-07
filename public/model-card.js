@@ -52,6 +52,17 @@ function modelListItem(entry) {
         `${calibrationValue(summary.cellCount)} cella`
       ].join(' · ')
     : 'Nincs mérés ehhez a modellhez.';
+  // Missing/stale rows carry the action by name, not only a status chip: a chip
+  // says what is wrong, a button says what to do about it. Clicking it opens the
+  // same model card the row itself opens (the workflow lives there) — it exists
+  // so the next step is visible from the list, not discovered by accident.
+  const action =
+    entry.status === 'valid'
+      ? ''
+      : `<button type="button" class="btn btn-primary btn-sm"
+           aria-label="${entry.status === 'stale' ? 'Újrakalibrálás' : 'Kalibrálás'}: ${escapeHtml(entry.label)}">${
+           entry.status === 'stale' ? 'Újrakalibrálás' : 'Kalibrálás'
+         }</button>`;
   return `
     <div class="list-item list-item-clickable" data-model="${escapeHtml(entry.model)}"
          role="button" tabindex="0" aria-label="Modell kalibrációjának megnyitása: ${escapeHtml(entry.label)}">
@@ -59,7 +70,7 @@ function modelListItem(entry) {
         <div class="list-item-title">${escapeHtml(entry.label)}</div>
         <div class="list-item-meta">${escapeHtml(meta)}</div>
       </div>
-      ${calibrationStatusChip(entry.status)}
+      <div class="list-item-actions">${action}${calibrationStatusChip(entry.status)}</div>
     </div>
   `;
 }
@@ -79,17 +90,128 @@ function renderStalenessReasons(reasons) {
     .join('')}</ul>A számok azt írják le, ami a mérés idején igaz volt; a mostani beállításra nem érvényesek.</div>`;
 }
 
+/** One calibration run of this model, as a clickable row with its live status. */
+function calibrationRunRow(run) {
+  return `
+    <div class="list-item list-item-clickable" data-cal-run="${escapeHtml(run.id)}"
+         role="button" tabindex="0" aria-label="${openLabel('runs', run.name)}">
+      <div>
+        <div class="list-item-title">${escapeHtml(run.name)}</div>
+        <div class="list-item-meta">${escapeHtml(formatDateTime(run.created_at))}</div>
+      </div>
+      ${statusBadge(run.status)}
+    </div>
+  `;
+}
+
+/**
+ * The calibration workflow, rendered ON the model card. The card used to be a
+ * dead end for an uncalibrated model — a warning with nothing to act on, while
+ * the launch form lived in a collapsed section of the tab below the list, and
+ * recording the profile required copy-pasting run ids. Every step now sits
+ * where the researcher already is, showing THIS model's actual state:
+ *   1. pick the probe questionnaire (or jump to Kérdőívek when none exists),
+ *   2. launch the calibration (a form posting /api/models/:model/calibrate),
+ *   3. follow this model's calibration runs (live status, click to open),
+ *   4. record the profile from finished runs — a checkbox picker, no id typing.
+ * Controls use classes, not ids: the card re-renders and can exist alongside
+ * the tab-level form.
+ */
+function renderCalibrationWorkflow(entry, context) {
+  const probes = (context && context.probes) || [];
+  const calRuns = (context && context.calibrationRuns) || [];
+  const completed = calRuns.filter((r) => r.status === 'completed');
+  const heading = entry.status === 'missing' ? 'Kalibráció lépésről lépésre' : 'Újrakalibrálás lépésről lépésre';
+
+  const step1 =
+    probes.length === 0
+      ? `<p class="detail-note">Még nincs kérdőív, amit próbaként használhatnál. Előbb hozz létre egyet a
+           Kérdőívek fülön (a demó-seed is tartalmaz egyet), aztán gyere vissza ide.</p>
+         <button type="button" class="btn btn-secondary" data-action="goto-questionnaires">Ugrás a Kérdőívek fülre</button>`
+      : `<p class="detail-note">A próba-kérdőív közönséges kérdőív: te választod meg, melyik mérje a modell
+           perszóna nélküli válaszait.</p>`;
+
+  const launchForm =
+    probes.length === 0
+      ? ''
+      : `<form class="model-card-calibrate-form form-grid" data-model="${escapeHtml(entry.model)}">
+          <div class="form-group">
+            <label>Próba-kérdőív
+              <select class="model-card-probe-select" required>
+                <option value="">-- Válassz próba-kérdőívet --</option>
+                ${probes.map((q) => `<option value="${escapeHtml(q.id)}">${escapeHtml(q.name)}</option>`).join('')}
+              </select>
+            </label>
+          </div>
+          <div class="form-group">
+            <label title="Szolgáltató rögzítése nélkül a profil nem egyetlen kiszolgálót ír le, és a szolgáltató-váltás azonnal elavulttá teszi.">Szolgáltató rögzítése (ajánlott)
+              <input type="text" class="model-card-provider-input" placeholder="pl. DeepInfra">
+            </label>
+          </div>
+          <button type="submit" class="btn btn-primary">Kalibrációs futtatás indítása</button>
+        </form>`;
+
+  const runsList =
+    calRuns.length === 0
+      ? '<p class="detail-note">Ehhez a modellhez még nem indult kalibrációs futtatás.</p>'
+      : calRuns.map(calibrationRunRow).join('');
+
+  const recorder =
+    completed.length === 0
+      ? '<p class="detail-note">Amint egy kalibrációs futtatás befejeződik, itt egy kattintással profillá rögzítheted.</p>'
+      : `<div class="checkbox-group">
+           ${completed
+             .map(
+               (r, i) => `
+             <div class="checkbox-item">
+               <input type="checkbox" class="model-card-runpick" id="calRunPick_${i}" value="${escapeHtml(r.id)}" ${i === 0 ? 'checked' : ''}>
+               <label for="calRunPick_${i}">${escapeHtml(r.name)} — ${escapeHtml(formatDateTime(r.created_at))}</label>
+             </div>`
+             )
+             .join('')}
+         </div>
+         <button type="button" class="btn btn-primary" data-action="record-profile">Profil rögzítése a kijelölt futtatás(ok)ból</button>
+         <p class="detail-note">A mért összeállítást (modellverzió, szolgáltató, próba-kérdőív) a rendszer a
+           válaszokból olvassa vissza, nem kézzel megadott adatból.</p>`;
+
+  return `
+    <div class="detail-section calibration-workflow">
+      <h3>${escapeHtml(heading)}</h3>
+      <div class="calibration-step">
+        <h4>1. Próba-kérdőív</h4>
+        ${step1}
+      </div>
+      <div class="calibration-step">
+        <h4>2. Kalibráció indítása</h4>
+        ${launchForm}
+      </div>
+      <div class="calibration-step">
+        <h4>3. A futtatás követése</h4>
+        <p class="detail-note">A kalibráció közönséges futtatás: itt és a Futtatások fülön is követhető, szüneteltethető.</p>
+        ${runsList}
+      </div>
+      <div class="calibration-step">
+        <h4>4. Profil rögzítése</h4>
+        ${recorder}
+      </div>
+    </div>
+  `;
+}
+
 /**
  * The model card. Deliberately states what the profile is NOT: a measured
  * default is a reference point for reading persona results, not a correction
- * applied to them — the raw log is never touched.
+ * applied to them — the raw log is never touched. `context` (probes +
+ * calibration runs) feeds the on-card workflow; without it the workflow still
+ * renders, in its "no probe questionnaire yet" state.
  */
-function renderModelCard(entry, profile) {
+function renderModelCard(entry, profile, context) {
   if (!profile) {
     return `
       <div class="detail-section">
         <p class="methodology-warning">${escapeHtml(CALIBRATION_TOOLTIPS.missing)}</p>
       </div>
+      ${renderCalibrationWorkflow({ ...entry, status: 'missing' }, context)}
     `;
   }
   const metrics = profile.metrics || {};
@@ -166,5 +288,6 @@ function renderModelCard(entry, profile) {
     )}
     ${detailSection('Pozíció-preferencia', positionBars, CALIBRATION_TOOLTIPS.priorBias)}
     ${detailSection('Alapértelmezett válaszok kérdésenként', `<div class="detail-grid">${questions}</div>`)}
+    ${renderCalibrationWorkflow({ ...entry, status: profile.status || entry.status }, context)}
   `;
 }

@@ -113,6 +113,36 @@ function renderContextSidebarBudget(data, failed) {
   `;
 }
 
+/**
+ * One row per configured model with its calibration status, so the sidebar has
+ * something to say on (and about) the Modellek tab too — it used to be all
+ * project/persona/run context there. Repainted by model-view.js's
+ * refreshModelList off the same /api/model-profiles fetch, no fetch of its own.
+ */
+function renderContextSidebarCalibration() {
+  const container = document.getElementById('contextSidebarCalibration');
+  if (!container) return;
+  if (state.modelProfilesError) {
+    container.innerHTML = '<p class="placeholder">A kalibrációs állapot nem ellenőrizhető: a lekérdezés sikertelen volt.</p>';
+    return;
+  }
+  const models = state.modelProfiles || [];
+  if (models.length === 0) {
+    container.innerHTML = '<p class="placeholder">Nincs beállított modell.</p>';
+    return;
+  }
+  container.innerHTML = models
+    .map(
+      (m) => `
+    <div class="list-item list-item-clickable" data-model="${escapeHtml(m.model)}" role="button" tabindex="0"
+         aria-label="Modell kalibrációjának megnyitása: ${escapeHtml(m.label)}">
+      <div class="list-item-title">${escapeHtml(m.label)}</div>
+      ${calibrationStatusChip(m.status)}
+    </div>`
+    )
+    .join('');
+}
+
 /** Repaints the parts of the sidebar driven by state (project/personas/running run). */
 function renderContextSidebar() {
   renderContextSidebarPersonas();
@@ -150,11 +180,25 @@ document.getElementById('contextSidebarProjectSelect')?.addEventListener('change
 // run), same pattern as the lists in entity-view.js — reusing its handler
 // rather than duplicating the open logic.
 document.getElementById('contextSidebar')?.addEventListener('click', (e) => {
+  // Model rows open the model card, not an entity detail — checked first, since
+  // handleEntityClick knows nothing about them.
+  const modelRow = e.target.closest('[data-model]');
+  if (modelRow) {
+    rememberDetailTrigger('data-model', modelRow.dataset.model, e.currentTarget);
+    void openModelDetail(modelRow.dataset.model);
+    return;
+  }
   void handleEntityClick(e.target, e.currentTarget);
 });
 document.getElementById('contextSidebar')?.addEventListener('keydown', (e) => {
   if (e.key !== 'Enter' && e.key !== ' ') return;
-  if (!e.target.closest('[data-entity-id], [data-run]')) return;
+  if (!e.target.closest('[data-entity-id], [data-run], [data-model]')) return;
   e.preventDefault();
+  const modelRow = e.target.closest('[data-model]');
+  if (modelRow) {
+    rememberDetailTrigger('data-model', modelRow.dataset.model, e.currentTarget);
+    void openModelDetail(modelRow.dataset.model);
+    return;
+  }
   void handleEntityClick(e.target, e.currentTarget);
 });

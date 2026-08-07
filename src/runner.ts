@@ -21,6 +21,14 @@ export interface RunConfig {
    * questionnaire, which a separately measured profile cannot.
    */
   baselineArm?: boolean
+  /**
+   * True on runs launched by /api/models/:model/calibrate. Purely a marker: the
+   * runner treats a calibration run exactly like any other, but the UI needs to
+   * list a model's calibration runs on its card, and matching on the run NAME
+   * (which the researcher can be expected to read, not parse) would break the
+   * moment the label wording changes.
+   */
+  calibration?: boolean
 }
 
 /** In-memory control signals; checked between cells. */

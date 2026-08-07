@@ -175,6 +175,11 @@ async function refreshRunsList() {
     // duplicate that.
     window.renderContextSidebarRunning?.();
     window.renderOverviewTab?.();
+    // A status change (SSE) can be a calibration run finishing — the open
+    // model card's workflow (step 4 unlocks) and the tab-level run picker
+    // both read state.runs.
+    window.rerenderModelDetailBody?.();
+    window.renderProfileRunPicker?.();
   } catch (err) {
     // silent - keep last known state
   }
@@ -225,6 +230,10 @@ async function pollRunningProgress(includeAll = false) {
   // itself instead of masquerading as a progress-poll error.
   window.renderContextSidebarRunning?.();
   window.renderOverviewTab?.();
+  // An open model card lists that model's calibration runs (step 3/4 of the
+  // on-card workflow) with these same live statuses; it repaints itself only
+  // when something actually changed and never while focus is inside it.
+  window.rerenderModelDetailBody?.();
   if (state.currentRunId && targets.some(r => r.id === state.currentRunId)) {
     renderRunDetailHeaderFromCache(state.currentRunId);
   }

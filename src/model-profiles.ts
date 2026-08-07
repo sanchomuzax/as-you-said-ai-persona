@@ -366,6 +366,9 @@ export function registerModelProfileRoutes(app: FastifyInstance, deps: ProfileDe
       seeds: body.data.seeds,
       // The whole point: persona-free cells only.
       baselineArm: true,
+      // Marks the run as a calibration launch so the model card can list this
+      // model's calibration runs without parsing the human-facing run name.
+      calibration: true,
       ...(body.data.provider ? { provider: body.data.provider } : {})
     }
     const id = randomUUID()
