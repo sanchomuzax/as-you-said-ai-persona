@@ -10,6 +10,7 @@ import {
   promptTemplateHash,
   sqliteToIso,
   PROFILE_VALIDITY_DAYS,
+  LEGACY_TEMPLATE_LANGUAGE,
   type ProfileKey,
   type ProfileMetrics,
   type ProfileStatus,
@@ -33,6 +34,7 @@ interface ProfileRow {
   prompt_template_hash: string
   probe_questionnaire_id: string
   language: string
+  template_language: string
   run_ids_json: string
   metrics_json: string
   created_at: string
@@ -62,6 +64,7 @@ function toStoredProfile(row: ProfileRow): StoredProfile {
     promptTemplateHash: row.prompt_template_hash,
     probeQuestionnaireId: row.probe_questionnaire_id,
     language: row.language,
+    templateLanguage: row.template_language,
     runIds: JSON.parse(row.run_ids_json) as string[],
     metrics: JSON.parse(row.metrics_json) as ProfileMetrics,
     createdAt: row.created_at,
@@ -147,7 +150,13 @@ function keyFromStack(db: Db, profile: StoredProfile, observed: ObservedStack): 
     // The probe itself is versioned: a newer version of the same lineage means
     // the profile describes questions that have since been reworded.
     probeQuestionnaireId: latestProbeVersionOf(db, profile.probeQuestionnaireId),
-    language: profile.language
+    language: profile.language,
+    // Not something that can "drift" the way model version/provider do — it is
+    // an axis of the profile's own identity, so "current" trivially copies it,
+    // exactly like `language` above. Staleness from a template edit is carried
+    // entirely by promptTemplateHash (see profile.ts), which fingerprints
+    // every language at once.
+    templateLanguage: profile.templateLanguage
   }
 }
 
@@ -207,7 +216,21 @@ export function stalenessReasons(profile: StoredProfile, current: ProfileKey, no
     )
   }
   if (profile.promptTemplateHash !== current.promptTemplateHash) {
-    reasons.push('Az elicitációs sablon azóta módosult, így a profil egy már nem létező promptot ír le.')
+    // A profile built before issue #33 (the elicitation template becoming
+    // language-dependent) will ALWAYS go stale here — every one of them was
+    // measured with the old, always-English framing. That is a one-time,
+    // deliberate methodological change, not a defect, so it gets its own
+    // wording naming the actual cause instead of the generic "the template
+    // changed" message, which would read as something having broken.
+    if (profile.templateLanguage === undefined || profile.templateLanguage === LEGACY_TEMPLATE_LANGUAGE) {
+      reasons.push(
+        'Az elicitációs sablon nyelvfüggővé vált: a kérdés/kérdőív nyelvéhez igazodó sablon váltotta fel az ' +
+          'eddigi, mindig angol keretezést (lásd #33) — ez szándékos módszertani változás, nem hiba. A profil ' +
+          'a régi, kevert nyelvű sablonnal mért adatot írja le, ezért újramérendő.'
+      )
+    } else {
+      reasons.push('Az elicitációs sablon azóta módosult, így a profil egy már nem létező promptot ír le.')
+    }
   }
   if (profile.probeQuestionnaireId !== current.probeQuestionnaireId) {
     reasons.push('A próba-kérdőívnek azóta új verziója készült, tehát a profil más kérdéseket ír le.')
@@ -301,6 +324,7 @@ export function registerModelProfileRoutes(app: FastifyInstance, deps: ProfileDe
           provider: profile.provider,
           probeQuestionnaireId: profile.probeQuestionnaireId,
           language: profile.language,
+          templateLanguage: profile.templateLanguage,
           createdAt: profile.createdAt,
           validUntil: profile.validUntil,
           runIds: profile.runIds
@@ -410,6 +434,25 @@ export function registerModelProfileRoutes(app: FastifyInstance, deps: ProfileDe
         .send({ success: false, error: 'A kalibrációs futtatásoknak ugyanazt a próba-kérdőívet kell használniuk.' })
     }
 
+    // The elicitation TEMPLATE's language (issue #33) — read out of each run's
+    // OWN config, exactly like model_version/provider above are read out of
+    // the responses rather than trusted from the request. A run written before
+    // this field existed reads as the legacy sentinel, never as a guess.
+    const runConfigs = db
+      .prepare(`SELECT config_json FROM runs WHERE id IN (${placeholders})`)
+      .all(...body.data.runIds) as unknown as { config_json: string }[]
+    const templateLanguages = new Set(
+      runConfigs.map((r) => (JSON.parse(r.config_json) as RunConfig).templateLanguage ?? LEGACY_TEMPLATE_LANGUAGE)
+    )
+    if (templateLanguages.size > 1) {
+      return reply.code(400).send({
+        success: false,
+        error:
+          'A megadott futtatások különböző elicitációs sablon-nyelvet használtak, ezért nem írhatók le egyetlen profillal.'
+      })
+    }
+    const templateLanguage = [...templateLanguages][0] ?? LEGACY_TEMPLATE_LANGUAGE
+
     const metrics = computeProfileMetrics(db, body.data.runIds)
     // A profile with nothing usable behind it would still be dated, stored and
     // shown as "érvényes" — a measurement-shaped record of a failed measurement.
@@ -426,11 +469,11 @@ export function registerModelProfileRoutes(app: FastifyInstance, deps: ProfileDe
     db.prepare(
       `INSERT INTO model_profiles
          (id, model_requested, model_version, provider, prompt_template_hash,
-          probe_questionnaire_id, language, run_ids_json, metrics_json, created_at, valid_until)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?)`
+          probe_questionnaire_id, language, template_language, run_ids_json, metrics_json, created_at, valid_until)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`
     ).run(
       id, stack.model_requested, stack.model_version, stack.provider, promptTemplateHash(),
-      questionnaires[0]!.questionnaire_id, body.data.language,
+      questionnaires[0]!.questionnaire_id, body.data.language, templateLanguage,
       JSON.stringify(body.data.runIds), JSON.stringify(metrics),
       toSqliteUtc(createdAt), toSqliteUtc(validUntil)
     )
@@ -441,7 +484,10 @@ export function registerModelProfileRoutes(app: FastifyInstance, deps: ProfileDe
     questionnaireId: z.string().min(1),
     provider: z.string().min(1).optional(),
     temperature: z.number().min(0).max(2).default(1),
-    seeds: z.array(z.number().int()).min(1).default([0, 1])
+    seeds: z.array(z.number().int()).min(1).default([0, 1]),
+    // Optional override; the default is the probe questionnaire's own
+    // language, looked up below — see POST /api/runs for the same rule.
+    templateLanguage: z.enum(['hu', 'en']).optional()
   })
 
   /**
@@ -458,8 +504,8 @@ export function registerModelProfileRoutes(app: FastifyInstance, deps: ProfileDe
     const body = calibrateSchema.safeParse(req.body)
     if (!body.success) return reply.code(400).send({ success: false, error: body.error.issues[0]?.message })
     const questionnaire = db
-      .prepare('SELECT id, name FROM questionnaires WHERE id = ?')
-      .get(body.data.questionnaireId) as { id: string; name: string } | undefined
+      .prepare('SELECT id, name, language FROM questionnaires WHERE id = ?')
+      .get(body.data.questionnaireId) as { id: string; name: string; language: string } | undefined
     if (!questionnaire) return reply.code(400).send({ success: false, error: 'A kérdőív nem található' })
 
     const config: RunConfig = {
@@ -471,6 +517,7 @@ export function registerModelProfileRoutes(app: FastifyInstance, deps: ProfileDe
       // Marks the run as a calibration launch so the model card can list this
       // model's calibration runs without parsing the human-facing run name.
       calibration: true,
+      templateLanguage: body.data.templateLanguage ?? (questionnaire.language === 'en' ? 'en' : 'hu'),
       ...(body.data.provider ? { provider: body.data.provider } : {})
     }
     const id = randomUUID()

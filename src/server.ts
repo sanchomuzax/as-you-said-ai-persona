@@ -9,6 +9,7 @@ import type { AppConfig, ModelsConfig } from './config.js'
 import type { ChatClient } from './openrouter.js'
 import { BudgetTracker } from './lib/budget.js'
 import { SurveyRunner, runEvents, requestPause, requestStop, isResumable, type RunConfig } from './runner.js'
+import type { TemplateLanguage } from './lib/prompt.js'
 import { computeRunResults } from './lib/results.js'
 import { buildEvaluationPrompt } from './lib/evaluate.js'
 import { toCsv } from './lib/csv.js'
@@ -369,7 +370,12 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
     provider: z.string().min(1).optional(),
     // On by default: without an in-run control there is no way to separate a
     // persona effect from the model's default answer.
-    baselineArm: z.boolean().default(true)
+    baselineArm: z.boolean().default(true),
+    // The elicitation TEMPLATE's own language (issue #33). Optional and NOT
+    // defaulted here on purpose: the default is the QUESTIONNAIRE's language,
+    // looked up below — a researcher never has to pick it in a form, but an
+    // explicit value stays available for a deliberate HU-vs-EN comparison run.
+    templateLanguage: z.enum(['hu', 'en']).optional()
   })
 
   app.post('/api/runs', async (req, reply) => {
@@ -378,12 +384,21 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
     if (!models.models.some((m) => m.id === body.data.model)) {
       return reply.code(400).send({ success: false, error: `Ismeretlen modell: ${body.data.model}` })
     }
+    // Never a per-question guess: the template language comes from the
+    // questionnaire's own declared (content) language, or from an explicit
+    // override — nothing here inspects question text.
+    const questionnaire = db
+      .prepare('SELECT language FROM questionnaires WHERE id = ?')
+      .get(body.data.questionnaireId) as { language: string } | undefined
+    const questionnaireLanguage: TemplateLanguage = questionnaire?.language === 'en' ? 'en' : 'hu'
+    const templateLanguage: TemplateLanguage = body.data.templateLanguage ?? questionnaireLanguage
     const runConfig: RunConfig = {
       model: body.data.model,
       temperature: body.data.temperature,
       seeds: body.data.seeds,
       autoEvaluate: body.data.autoEvaluate,
       baselineArm: body.data.baselineArm,
+      templateLanguage,
       ...(body.data.provider ? { provider: body.data.provider } : {})
     }
     const id = randomUUID()

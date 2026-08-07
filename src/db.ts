@@ -24,6 +24,11 @@ function migrate(db: DatabaseSync): void {
   if (!questionnaireCols.some((c) => c.name === 'project_id')) {
     db.exec('ALTER TABLE questionnaires ADD COLUMN project_id TEXT REFERENCES projects(id)')
   }
+  // Issue #33: content language, defaulting to 'hu' for the same reason the
+  // column's own default does — this project's existing corpus is Hungarian.
+  if (!questionnaireCols.some((c) => c.name === 'language')) {
+    db.exec("ALTER TABLE questionnaires ADD COLUMN language TEXT NOT NULL DEFAULT 'hu'")
+  }
   // Existing rows are each their own lineage root: they were the only version.
   if (!personaCols.some((c) => c.name === 'lineage_id')) {
     db.exec('ALTER TABLE personas ADD COLUMN lineage_id TEXT')
@@ -104,11 +109,52 @@ function migrate(db: DatabaseSync): void {
       db.exec(`ALTER TABLE run_evaluations ADD COLUMN ${column}`)
     }
   }
+  // Issue #33: the elicitation TEMPLATE's own language, a new axis on the
+  // model-profile key. Pre-existing profiles get the legacy sentinel, not a
+  // guess at 'hu' or 'en' — they were all measured with the old, always-
+  // English template regardless of what the (content) `language` column says.
+  const profileCols = db.prepare('PRAGMA table_info(model_profiles)').all() as unknown as { name: string }[]
+  if (!profileCols.some((c) => c.name === 'template_language')) {
+    db.exec("ALTER TABLE model_profiles ADD COLUMN template_language TEXT NOT NULL DEFAULT 'mixed_legacy'")
+  }
+  backfillRunTemplateLanguage(db)
   addBaselineArmSupport(db)
   // Last: the index keys on elicitation_mode, so it can only be created once every
   // column exists. Created earlier, the first boot after an upgrade would silently
   // run with no database-level protection at all.
   createCellUniqueIndex(db)
+}
+
+/**
+ * Issue #33 requirement 4: a run made before the elicitation template became
+ * language-dependent must not be silently reinterpreted as having used
+ * whatever the code defaults to today. Its `config_json` gets an explicit
+ * `templateLanguage: "mixed_legacy"` stamp instead — a permanent, readable
+ * record that this run's prompts mixed a Hungarian questionnaire with the old
+ * English framing, so its numbers stay interpretable next to later,
+ * single-language runs instead of quietly looking like one of them.
+ *
+ * The LIKE filter is only a cheap pre-check: it makes every boot after the
+ * first one a near-no-op (real runs, going forward, always set the field
+ * explicitly) without having to JSON.parse every row on every startup.
+ */
+function backfillRunTemplateLanguage(db: DatabaseSync): void {
+  const candidates = db
+    .prepare("SELECT id, config_json FROM runs WHERE config_json NOT LIKE '%\"templateLanguage\"%'")
+    .all() as unknown as { id: string; config_json: string }[]
+  for (const row of candidates) {
+    let config: Record<string, unknown>
+    try {
+      config = JSON.parse(row.config_json) as Record<string, unknown>
+    } catch {
+      // A malformed config_json predates and is unrelated to this migration;
+      // skipping it is correct — there is nothing safe to stamp onto invalid JSON.
+      continue
+    }
+    if (config['templateLanguage'] !== undefined) continue
+    config['templateLanguage'] = 'mixed_legacy'
+    db.prepare('UPDATE runs SET config_json = ? WHERE id = ?').run(JSON.stringify(config), row.id)
+  }
 }
 
 /**
@@ -261,6 +307,12 @@ CREATE TABLE IF NOT EXISTS questionnaires (
   lineage_id TEXT,
   name TEXT NOT NULL,
   version INTEGER NOT NULL DEFAULT 1,
+  -- CONTENT language of the questions/options (issue #33). Defaults to 'hu':
+  -- this project's whole corpus is Hungarian-market research, so that is the
+  -- accurate default for every questionnaire written before this column
+  -- existed, not a guess. Drives the elicitation TEMPLATE's default language
+  -- for runs against this questionnaire (src/server.ts, POST /api/runs).
+  language TEXT NOT NULL DEFAULT 'hu',
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -362,7 +414,17 @@ CREATE TABLE IF NOT EXISTS model_profiles (
   provider TEXT,
   prompt_template_hash TEXT NOT NULL,
   probe_questionnaire_id TEXT NOT NULL REFERENCES questionnaires(id),
+  -- CONTENT language of the probe questionnaire — see the identical column on
+  -- questionnaires above. NOT the elicitation template's own language; that is
+  -- template_language below (issue #33), a separate axis on purpose (a future
+  -- HU-content/EN-template comparison run would record them differently).
   language TEXT NOT NULL DEFAULT 'hu',
+  -- The elicitation TEMPLATE's own language: 'hu' | 'en' for a profile built
+  -- after issue #33, or the literal 'mixed_legacy' for one built from runs
+  -- that predate the language split -- those runs used the old, always-English
+  -- framing regardless of what the content "language" column above says, and
+  -- this sentinel records that fact instead of leaving it to an unwritten convention.
+  template_language TEXT NOT NULL DEFAULT 'mixed_legacy',
   -- the calibration runs the numbers were computed from
   run_ids_json TEXT NOT NULL,
   -- every metric computed in code from the response log, never by a model

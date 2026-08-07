@@ -4,7 +4,7 @@ import type { Db } from './db.js'
 import type { ChatClient } from './openrouter.js'
 import { BudgetTracker } from './lib/budget.js'
 import { balancedRotations } from './lib/permutation.js'
-import { buildStyleCPrompt, type PersonaInput } from './lib/prompt.js'
+import { buildStyleCPrompt, type PersonaInput, type TemplateLanguage } from './lib/prompt.js'
 import { parseDistribution, elicitationModeFor } from './lib/parse.js'
 
 export interface RunConfig {
@@ -29,6 +29,26 @@ export interface RunConfig {
    * moment the label wording changes.
    */
   calibration?: boolean
+  /**
+   * The elicitation TEMPLATE's own language (issue #33) — distinct from the
+   * questionnaire's content language. Absent on every run created before this
+   * field existed; `resolveTemplateLanguage` below treats anything other than
+   * the literal 'hu' (including the historical 'mixed_legacy' stamp a
+   * migration writes onto those old runs, and plain absence) as 'en', which
+   * keeps a resumed pre-existing run rendering the SAME template it started
+   * with instead of switching languages mid-run.
+   */
+  templateLanguage?: TemplateLanguage
+}
+
+/**
+ * What `buildStyleCPrompt` should actually render for this run. Only 'hu' is
+ * ever pulled out explicitly; every other value collapses to 'en' — the
+ * function's own default — which is exactly what an unset or 'mixed_legacy'
+ * run used before this feature existed.
+ */
+function resolveTemplateLanguage(config: RunConfig): TemplateLanguage {
+  return config.templateLanguage === 'hu' ? 'hu' : 'en'
 }
 
 /** In-memory control signals; checked between cells. */
@@ -234,7 +254,13 @@ export class SurveyRunner {
     seed: number
   ): Promise<void> {
     const mode = elicitationModeFor(question.scale_type)
-    const { prompt, keyMap, keys } = buildStyleCPrompt(persona, { text: question.text, options }, rotation, mode)
+    const { prompt, keyMap, keys } = buildStyleCPrompt(
+      persona,
+      { text: question.text, options },
+      rotation,
+      mode,
+      resolveTemplateLanguage(config)
+    )
     const result = await this.client.complete(config.model, prompt, {
       temperature: config.temperature,
       seed,

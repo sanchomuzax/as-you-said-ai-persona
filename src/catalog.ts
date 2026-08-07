@@ -135,6 +135,11 @@ export function registerCatalogRoutes(app: FastifyInstance, deps: CatalogDeps): 
   const questionnaireSchema = z.object({
     projectId: z.string().min(1).optional(),
     name: z.string().min(1),
+    // CONTENT language of the questions/options (issue #33) — drives the
+    // elicitation TEMPLATE's default language for runs against this
+    // questionnaire. Defaults to 'hu': this project's whole corpus is
+    // Hungarian-market research.
+    language: z.enum(['hu', 'en']).default('hu'),
     questions: z
       .array(
         z.object({
@@ -160,6 +165,7 @@ export function registerCatalogRoutes(app: FastifyInstance, deps: CatalogDeps): 
       id: string
       name: string
       project_id: string | null
+      language: string
     }[]
     // Scoped to the questionnaires actually being returned: this used to scan
     // the whole questions table on every call and filter in memory.
@@ -182,6 +188,7 @@ export function registerCatalogRoutes(app: FastifyInstance, deps: CatalogDeps): 
         id: q.id,
         projectId: q.project_id,
         name: q.name,
+        language: q.language,
         questions: questions
           .filter((x) => x.questionnaire_id === q.id)
           .map((x) => ({
@@ -222,6 +229,7 @@ export function registerCatalogRoutes(app: FastifyInstance, deps: CatalogDeps): 
         id: row['id'],
         name: row['name'],
         projectId: row['project_id'],
+        language: row['language'],
         version: row['version'],
         createdAt: row['created_at'],
         isLatest: isLatestVersion('questionnaires', row),
@@ -236,7 +244,14 @@ export function registerCatalogRoutes(app: FastifyInstance, deps: CatalogDeps): 
     if (!row) return reply.code(404).send({ success: false, error: 'A kérdőív nem található' })
     const versions = db
       .prepare('SELECT * FROM questionnaires WHERE lineage_id = ? ORDER BY version')
-      .all(row.lineage_id) as unknown as { id: string; name: string; version: number; project_id: string | null; created_at: string }[]
+      .all(row.lineage_id) as unknown as {
+      id: string
+      name: string
+      version: number
+      project_id: string | null
+      language: string
+      created_at: string
+    }[]
     const latest = Math.max(...versions.map((v) => v.version))
     return {
       success: true,
@@ -245,6 +260,7 @@ export function registerCatalogRoutes(app: FastifyInstance, deps: CatalogDeps): 
         name: v.name,
         version: v.version,
         projectId: v.project_id,
+        language: v.language,
         createdAt: v.created_at,
         isLatest: v.version === latest,
         questions: questionsOf(v.id)
@@ -257,7 +273,11 @@ export function registerCatalogRoutes(app: FastifyInstance, deps: CatalogDeps): 
   // A new version must carry every question setting explicitly. Defaulting here
   // would let a form that simply does not know about scale types rewrite a
   // multi-select question into a sum-to-1 one without anybody noticing.
-  const questionnaireVersionSchema = questionnaireSchema.omit({ projectId: true }).extend({
+  // `language` is the one exception: left OPTIONAL (no default) so a caller that
+  // omits it inherits the SOURCE questionnaire's own language below, instead of
+  // an English questionnaire silently reverting to 'hu' on its next edit.
+  const questionnaireVersionSchema = questionnaireSchema.omit({ projectId: true, language: true }).extend({
+    language: z.enum(['hu', 'en']).optional(),
     questions: z
       .array(
         z.object({
@@ -280,10 +300,11 @@ export function registerCatalogRoutes(app: FastifyInstance, deps: CatalogDeps): 
     const lineageId = String(source['lineage_id'] ?? source['id'])
     const nextVersion = nextVersionFor('questionnaires', lineageId)
     const newId = randomUUID()
+    const language = body.data.language ?? (source['language'] as string | undefined) ?? 'hu'
     db.exec('BEGIN')
     try {
-      db.prepare('INSERT INTO questionnaires (id, project_id, lineage_id, name, version) VALUES (?,?,?,?,?)').run(
-        newId, (source['project_id'] as string | null) ?? null, lineageId, body.data.name, nextVersion
+      db.prepare('INSERT INTO questionnaires (id, project_id, lineage_id, name, version, language) VALUES (?,?,?,?,?,?)').run(
+        newId, (source['project_id'] as string | null) ?? null, lineageId, body.data.name, nextVersion, language
       )
       body.data.questions.forEach((q, ord) => {
         db.prepare(
@@ -308,8 +329,8 @@ export function registerCatalogRoutes(app: FastifyInstance, deps: CatalogDeps): 
     }
     db.exec('BEGIN')
     try {
-      db.prepare('INSERT INTO questionnaires (id, project_id, lineage_id, name) VALUES (?,?,?,?)').run(
-        id, body.data.projectId ?? null, id, body.data.name
+      db.prepare('INSERT INTO questionnaires (id, project_id, lineage_id, name, language) VALUES (?,?,?,?,?)').run(
+        id, body.data.projectId ?? null, id, body.data.name, body.data.language
       )
       body.data.questions.forEach((q, ord) => {
         db.prepare(
