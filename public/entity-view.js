@@ -10,14 +10,19 @@ const ENTITY_KIND_LABELS = {
 
 /** Loads the entity fresh from the API: a detail view may be opened straight from a URL. */
 async function fetchEntity(kind, id) {
-  // Personas and questionnaires have a by-id endpoint that also serves superseded
-  // versions; the list endpoint returns latest-only, so a link to an older version
-  // would otherwise report that an existing row does not exist.
-  if (kind === 'personas' || kind === 'questionnaires') {
+  // Every kind has a by-id endpoint. For personas and questionnaires it also
+  // serves superseded versions — the list endpoint returns latest-only, so a
+  // link to an older version would otherwise report that an existing row does
+  // not exist. For projects it replaces downloading the whole list to show one.
+  try {
     return await apiCall('GET', `/api/${kind}/${encodeURIComponent(id)}`);
+  } catch (err) {
+    // A bookmarked link to something that no longer exists is not an error to
+    // report as a failure: `null` renders the calm "ez az elem már nem létezik"
+    // wording. Anything else is a real fault and must stay loud.
+    if (err.status === 404) return null;
+    throw err;
   }
-  const items = await apiCall('GET', '/api/projects');
-  return (items || []).find(item => item.id === id) || null;
 }
 
 async function openEntityDetail(kind, id, updateHash) {
@@ -66,17 +71,17 @@ async function buildEntityDetailBody(kind, entity) {
     const [personas, questionnaires, runs] = await Promise.all([
       apiCall('GET', `/api/personas?project=${encodeURIComponent(entity.id)}`),
       apiCall('GET', `/api/questionnaires?project=${encodeURIComponent(entity.id)}`),
-      apiCall('GET', '/api/runs')
+      // Filtered server-side through the questionnaire, instead of downloading
+      // every run in the database and filtering here.
+      apiCall('GET', `/api/runs?project=${encodeURIComponent(entity.id)}`)
     ]);
-    // Runs have no project column; they belong to a project through their
-    // questionnaire. `?project=` also returns global questionnaires, which belong
-    // to no project — those are excluded here, and the section says so.
+    // `?project=` also returns global questionnaires, which belong to no project
+    // — those are excluded here, and the section says so.
     const ownQuestionnaires = (questionnaires || []).filter(q => q.projectId === entity.id);
-    const ownIds = new Set(ownQuestionnaires.map(q => q.id));
     return renderProjectDetail(entity, {
       personas: personas || [],
       questionnaires: ownQuestionnaires,
-      runs: (runs || []).filter(r => ownIds.has(r.questionnaire_id))
+      runs: runs || []
     });
   }
   const [project, versions] = await Promise.all([
@@ -158,15 +163,21 @@ async function refreshListsFor(kind) {
   else await reloadQuestionnairesList(state.selectedProjectId);
 }
 
-/** Returns the project, refreshing the cached project list if it is not there yet. */
+/**
+ * Returns the project a persona or questionnaire belongs to. On a cache miss it
+ * fetches that one project rather than the whole list — the name is all the
+ * detail view needs, and a missing project must not blank the page.
+ */
 async function loadProject(projectId) {
   const cached = state.projects.find(p => p.id === projectId);
   if (cached) return cached;
   try {
-    state.projects = await apiCall('GET', '/api/projects');
-    renderProjectsList();
-    updateProjectDropdowns();
-    return state.projects.find(p => p.id === projectId) || null;
+    const project = await apiCall('GET', `/api/projects/${encodeURIComponent(projectId)}`);
+    // Written back so the questionnaire list stops rendering "(ismeretlen
+    // projekt)" for it; the lists are not re-rendered from here, since a getter
+    // that repaints the page is a surprise its callers cannot see.
+    if (project) state.projects = [...state.projects, project];
+    return project;
   } catch {
     return null;
   }

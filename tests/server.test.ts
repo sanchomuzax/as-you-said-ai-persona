@@ -152,7 +152,7 @@ describe('projects', () => {
       payload: { projectId: 'nope', name: 'P', demographics: {} }
     })
     expect(res.statusCode).toBe(400)
-    expect(res.json().error).toContain('Unknown project')
+    expect(res.json().error).toContain('Ismeretlen projekt')
   })
 
   it('filters questionnaires by project, including unscoped ones', async () => {
@@ -304,7 +304,7 @@ describe('personas, questionnaires, runs end-to-end', () => {
       }
     })
     expect(res.statusCode).toBe(400)
-    expect(res.json().error).toContain('Unknown model')
+    expect(res.json().error).toContain('Ismeretlen modell')
   })
 })
 

@@ -38,7 +38,14 @@ async function apiCall(method, path, body = null) {
     throw new Error('Unauthorized');
   }
 
-  if (!data.success && data.error) throw new Error(data.error);
+  if (!data.success && data.error) {
+    // The status rides along on the error: a caller that needs to tell "this no
+    // longer exists" from "the request failed" must not have to match on the
+    // message text, which is user-facing prose and changes.
+    const error = new Error(data.error);
+    error.status = response.status;
+    throw error;
+  }
   return data.data;
 }
 

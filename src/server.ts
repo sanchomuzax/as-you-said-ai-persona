@@ -229,13 +229,9 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
 
   app.get('/api/projects', async () => ({
     success: true,
-    data: (db.prepare('SELECT * FROM projects ORDER BY created_at DESC').all() as Record<string, unknown>[]).map((r) => ({
-      id: r['id'],
-      name: r['name'],
-      applicationDomain: r['application_domain'],
-      targetPopulation: r['target_population'],
-      createdAt: r['created_at']
-    }))
+    data: (db.prepare('SELECT * FROM projects ORDER BY created_at DESC').all() as Record<string, unknown>[]).map(
+      rowToProject
+    )
   }))
 
   app.post('/api/projects', async (req, reply) => {
@@ -248,6 +244,17 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
     return { success: true, data: { id } }
   })
 
+  // A detail view needs one project, not every project with every field: the
+  // list grows with the research corpus and the client used to filter it itself.
+  app.get('/api/projects/:id', async (req, reply) => {
+    const { id } = req.params as { id: string }
+    const row = db.prepare('SELECT * FROM projects WHERE id = ?').get(id) as Record<string, unknown> | undefined
+    if (!row) return reply.code(404).send({ success: false, error: 'A projekt nem található' })
+    // Same mapper as the list endpoint: the detail view and the list must not be
+    // able to drift into returning different shapes for the same row.
+    return { success: true, data: rowToProject(row) }
+  })
+
   // Projects carry no experimental record, so editing them in place is safe —
   // unlike personas/responses, which are immutable snapshots by design.
   app.put('/api/projects/:id', async (req, reply) => {
@@ -255,7 +262,7 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
     const body = projectSchema.safeParse(req.body)
     if (!body.success) return reply.code(400).send({ success: false, error: body.error.issues[0]?.message })
     const existing = db.prepare('SELECT id FROM projects WHERE id = ?').get(id)
-    if (!existing) return reply.code(404).send({ success: false, error: 'Project not found' })
+    if (!existing) return reply.code(404).send({ success: false, error: 'A projekt nem található' })
     db.prepare('UPDATE projects SET name = ?, application_domain = ?, target_population = ? WHERE id = ?').run(
       body.data.name, body.data.applicationDomain ?? null, body.data.targetPopulation ?? null, id
     )
@@ -309,14 +316,14 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
   app.get('/api/personas/:id', async (req, reply) => {
     const { id } = req.params as { id: string }
     const row = db.prepare('SELECT * FROM personas WHERE id = ?').get(id) as Record<string, unknown> | undefined
-    if (!row) return reply.code(404).send({ success: false, error: 'Persona not found' })
+    if (!row) return reply.code(404).send({ success: false, error: 'A perszóna nem található' })
     return { success: true, data: { ...rowToPersona(row), isLatest: isLatestVersion('personas', row) } }
   })
 
   app.get('/api/personas/:id/versions', async (req, reply) => {
     const { id } = req.params as { id: string }
     const persona = db.prepare('SELECT lineage_id FROM personas WHERE id = ?').get(id) as { lineage_id: string } | undefined
-    if (!persona) return reply.code(404).send({ success: false, error: 'Persona not found' })
+    if (!persona) return reply.code(404).send({ success: false, error: 'A perszóna nem található' })
     const rows = db
       .prepare('SELECT * FROM personas WHERE lineage_id = ? ORDER BY version')
       .all(persona.lineage_id) as unknown as Record<string, unknown>[]
@@ -332,7 +339,7 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
   app.post('/api/personas/:id/versions', async (req, reply) => {
     const { id } = req.params as { id: string }
     const source = db.prepare('SELECT * FROM personas WHERE id = ?').get(id) as Record<string, unknown> | undefined
-    if (!source) return reply.code(404).send({ success: false, error: 'Persona not found' })
+    if (!source) return reply.code(404).send({ success: false, error: 'A perszóna nem található' })
     const body = personaSchema.omit({ projectId: true, renderingStyle: true })
       .extend({ renderingStyle: personaSchema.shape.renderingStyle.optional() })
       .safeParse(req.body)
@@ -359,7 +366,7 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
     const body = personaSchema.safeParse(req.body)
     if (!body.success) return reply.code(400).send({ success: false, error: body.error.issues[0]?.message })
     const project = db.prepare('SELECT id FROM projects WHERE id = ?').get(body.data.projectId)
-    if (!project) return reply.code(400).send({ success: false, error: 'Unknown project' })
+    if (!project) return reply.code(400).send({ success: false, error: 'Ismeretlen projekt' })
     const id = randomUUID()
     db.prepare(
       'INSERT INTO personas (id, project_id, lineage_id, name, demographics_json, biography, rendering_style, provenance_json) VALUES (?,?,?,?,?,?,?,?)'
@@ -406,7 +413,14 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
       name: string
       project_id: string | null
     }[]
-    const questions = db.prepare('SELECT * FROM questions ORDER BY ord').all() as {
+    // Scoped to the questionnaires actually being returned: this used to scan
+    // the whole questions table on every call and filter in memory.
+    const placeholders = qs.map(() => '?').join(',')
+    const questions = (qs.length === 0
+      ? []
+      : db
+          .prepare(`SELECT * FROM questions WHERE questionnaire_id IN (${placeholders}) ORDER BY ord`)
+          .all(...qs.map((q) => q.id))) as unknown as {
       questionnaire_id: string
       id: string
       text: string
@@ -453,7 +467,7 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
   app.get('/api/questionnaires/:id', async (req, reply) => {
     const { id } = req.params as { id: string }
     const row = db.prepare('SELECT * FROM questionnaires WHERE id = ?').get(id) as Record<string, unknown> | undefined
-    if (!row) return reply.code(404).send({ success: false, error: 'Questionnaire not found' })
+    if (!row) return reply.code(404).send({ success: false, error: 'A kérdőív nem található' })
     return {
       success: true,
       data: {
@@ -471,7 +485,7 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
   app.get('/api/questionnaires/:id/versions', async (req, reply) => {
     const { id } = req.params as { id: string }
     const row = db.prepare('SELECT lineage_id FROM questionnaires WHERE id = ?').get(id) as { lineage_id: string } | undefined
-    if (!row) return reply.code(404).send({ success: false, error: 'Questionnaire not found' })
+    if (!row) return reply.code(404).send({ success: false, error: 'A kérdőív nem található' })
     const versions = db
       .prepare('SELECT * FROM questionnaires WHERE lineage_id = ? ORDER BY version')
       .all(row.lineage_id) as unknown as { id: string; name: string; version: number; project_id: string | null; created_at: string }[]
@@ -511,7 +525,7 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
   app.post('/api/questionnaires/:id/versions', async (req, reply) => {
     const { id } = req.params as { id: string }
     const source = db.prepare('SELECT * FROM questionnaires WHERE id = ?').get(id) as Record<string, unknown> | undefined
-    if (!source) return reply.code(404).send({ success: false, error: 'Questionnaire not found' })
+    if (!source) return reply.code(404).send({ success: false, error: 'A kérdőív nem található' })
     const body = questionnaireVersionSchema.safeParse(req.body)
     if (!body.success) return reply.code(400).send({ success: false, error: body.error.issues[0]?.message })
 
@@ -542,7 +556,7 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
     const id = randomUUID()
     if (body.data.projectId) {
       const project = db.prepare('SELECT id FROM projects WHERE id = ?').get(body.data.projectId)
-      if (!project) return reply.code(400).send({ success: false, error: 'Unknown project' })
+      if (!project) return reply.code(400).send({ success: false, error: 'Ismeretlen projekt' })
     }
     db.exec('BEGIN')
     try {
@@ -583,7 +597,7 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
     const body = runSchema.safeParse(req.body)
     if (!body.success) return reply.code(400).send({ success: false, error: body.error.issues[0]?.message })
     if (!models.models.some((m) => m.id === body.data.model)) {
-      return reply.code(400).send({ success: false, error: `Unknown model: ${body.data.model}` })
+      return reply.code(400).send({ success: false, error: `Ismeretlen modell: ${body.data.model}` })
     }
     const runConfig: RunConfig = {
       model: body.data.model,
@@ -614,22 +628,37 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
     return { success: true, data: { id } }
   })
 
-  app.get('/api/runs', async () => ({
-    success: true,
-    data: db
+  // Parsed rather than truthy-checked: `?project=` (empty) used to fall through
+  // to the unfiltered branch and answer a request for ONE project's runs with
+  // every run in the corpus, and a repeated `?project=a&project=b` arrives as an
+  // array that the SQLite bind rejects with a 500.
+  const runQuerySchema = z.object({ project: z.string().min(1).optional() })
+
+  app.get('/api/runs', async (req, reply) => {
+    const query = runQuerySchema.safeParse(req.query)
+    if (!query.success) return reply.code(400).send({ success: false, error: 'Érvénytelen projekt-szűrő' })
+    const project = query.data.project
+    // A run belongs to a project through the questionnaire version it used, so
+    // a run started on a SUPERSEDED version still belongs to that project. A run
+    // started on a global (project-less) questionnaire belongs to no project and
+    // appears only in the unfiltered list — the project view says so rather than
+    // quietly implying the project has no runs.
+    const scope =
+      project === undefined ? '' : 'JOIN questionnaires q ON q.id = r.questionnaire_id AND q.project_id = ?'
+    const rows = db
       .prepare(
         `SELECT r.*,
            (SELECT COUNT(*) FROM responses WHERE run_id = r.id) AS response_count,
            (SELECT COUNT(*) FROM responses WHERE run_id = r.id AND is_valid = 0) AS invalid_count
-         FROM runs r ORDER BY r.created_at DESC`
+         FROM runs r ${scope} ORDER BY r.created_at DESC`
       )
-      .all()
-  }))
+    return { success: true, data: project === undefined ? rows.all() : rows.all(project) }
+  })
 
   app.get('/api/runs/:id', async (req, reply) => {
     const { id } = req.params as { id: string }
     const run = db.prepare('SELECT * FROM runs WHERE id = ?').get(id)
-    if (!run) return reply.code(404).send({ success: false, error: 'Run not found' })
+    if (!run) return reply.code(404).send({ success: false, error: 'A futtatás nem található' })
     const responses = db
       .prepare(
         `SELECT res.id, res.persona_id, p.name AS persona_name, res.question_id, q.text AS question_text,
@@ -650,7 +679,7 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
   app.post('/api/runs/:id/pause', async (req, reply) => {
     const { id } = req.params as { id: string }
     const run = db.prepare('SELECT status FROM runs WHERE id = ?').get(id) as { status: string } | undefined
-    if (!run) return reply.code(404).send({ success: false, error: 'Run not found' })
+    if (!run) return reply.code(404).send({ success: false, error: 'A futtatás nem található' })
     if (run.status !== 'running') return reply.code(400).send({ success: false, error: `Cannot pause a ${run.status} run` })
     requestPause(id)
     return { success: true }
@@ -659,7 +688,7 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
   app.post('/api/runs/:id/resume', async (req, reply) => {
     const { id } = req.params as { id: string }
     const run = db.prepare('SELECT status FROM runs WHERE id = ?').get(id) as { status: string } | undefined
-    if (!run) return reply.code(404).send({ success: false, error: 'Run not found' })
+    if (!run) return reply.code(404).send({ success: false, error: 'A futtatás nem található' })
     if (!isResumable(run.status)) return reply.code(400).send({ success: false, error: `Cannot resume a ${run.status} run` })
     void runner.execute(id).catch(() => undefined)
     return { success: true }
@@ -668,7 +697,7 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
   app.post('/api/runs/:id/stop', async (req, reply) => {
     const { id } = req.params as { id: string }
     const run = db.prepare('SELECT status FROM runs WHERE id = ?').get(id) as { status: string } | undefined
-    if (!run) return reply.code(404).send({ success: false, error: 'Run not found' })
+    if (!run) return reply.code(404).send({ success: false, error: 'A futtatás nem található' })
     if (run.status === 'running') requestStop(id)
     else db.prepare("UPDATE runs SET status = 'stopped' WHERE id = ?").run(id)
     return { success: true }
@@ -692,14 +721,14 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
           WHERE res.id = ? AND res.run_id = ?`
       )
       .get(id, runId)
-    if (!row) return reply.code(404).send({ success: false, error: 'Response not found' })
+    if (!row) return reply.code(404).send({ success: false, error: 'A válasz nem található' })
     return { success: true, data: row }
   })
 
   app.get('/api/runs/:id/progress', async (req, reply) => {
     const { id } = req.params as { id: string }
     const run = db.prepare('SELECT status FROM runs WHERE id = ?').get(id) as { status: string } | undefined
-    if (!run) return reply.code(404).send({ success: false, error: 'Run not found' })
+    if (!run) return reply.code(404).send({ success: false, error: 'A futtatás nem található' })
     const counts = db
       .prepare('SELECT COUNT(*) done, COALESCE(SUM(is_valid=0),0) invalid, COALESCE(SUM(abstained),0) abstained, COALESCE(AVG(latency_ms),0) avgLatency FROM responses WHERE run_id = ?')
       .get(id) as { done: number; invalid: number; abstained: number; avgLatency: number }
@@ -732,7 +761,7 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
   app.get('/api/runs/:id/results', async (req, reply) => {
     const { id } = req.params as { id: string }
     const run = db.prepare('SELECT id FROM runs WHERE id = ?').get(id)
-    if (!run) return reply.code(404).send({ success: false, error: 'Run not found' })
+    if (!run) return reply.code(404).send({ success: false, error: 'A futtatás nem található' })
     return {
       success: true,
       // Whether the database can still enforce one-row-per-cell: on a database
@@ -811,6 +840,16 @@ const CSV_COLUMNS = [
   'cache_discount_usd', 'latency_ms',
   'openrouter_request_id', 'created_at'
 ]
+
+function rowToProject(r: Record<string, unknown>): Record<string, unknown> {
+  return {
+    id: r['id'],
+    name: r['name'],
+    applicationDomain: r['application_domain'],
+    targetPopulation: r['target_population'],
+    createdAt: r['created_at']
+  }
+}
 
 function rowToPersona(r: Record<string, unknown>): Record<string, unknown> {
   return {

@@ -102,7 +102,7 @@ describe('entity detail view', () => {
     expect(body).toContain('Újság')
   })
 
-  it('opens a project and shows its personas and questionnaires', async () => {
+  it('opens a project and shows its personas, questionnaires and runs', async () => {
     dom = loadAppDom({ routes: entityRoutes() })
     await dom.boot()
     ;(dom.document.querySelector('[data-entity="projects"]')!).click()
@@ -110,6 +110,34 @@ describe('entity detail view', () => {
     const body = dom.document.getElementById('entityDetailBody')!.textContent!
     expect(body).toContain('Anna')
     expect(body).toContain('Akciós tájékozódás')
+    // The run list is now filtered server-side; nothing else in the suite would
+    // notice if the section stopped rendering what the server returned.
+    expect(body).toContain('Első futás')
+    expect(dom.document.querySelector('[data-run="r1"]')).not.toBeNull()
+  })
+
+  it('says an entity is gone rather than reporting a load failure', async () => {
+    dom = loadAppDom({ routes: entityRoutes() })
+    dom.window.location.hash = '#personas/deleted'
+    await dom.boot()
+    const body = dom.document.getElementById('entityDetailBody')!.textContent!
+    expect(body).toMatch(/már nem létezik|nem található/i)
+    expect(body).not.toMatch(/sikertelen/i)
+  })
+
+  // Issue #11: the detail views used to download whole collections to show one
+  // item. What is observable from the outside is which URLs they request.
+  it('fetches one project and only that project runs, not every run', async () => {
+    dom = loadAppDom({ routes: entityRoutes() })
+    await dom.boot()
+    const before = dom.calls.length
+    dom.document.querySelector('[data-entity="projects"]')!.click()
+    await dom.settle()
+    const urls = dom.calls.slice(before).map((c) => c.url)
+    expect(urls).toContain('/api/projects/p1')
+    expect(urls).toContain('/api/runs?project=p1')
+    expect(urls).not.toContain('/api/runs')
+    expect(urls).not.toContain('/api/projects')
   })
 
   it('restores an entity detail from the URL hash', async () => {

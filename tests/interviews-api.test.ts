@@ -26,11 +26,14 @@ const testModels = {
 class InterviewClient implements ChatClient {
   lastMessages: readonly ChatMessage[] | string = ''
   reply = 'Hetente nézem az akciós újságokat.'
+  /** Held open by a test that needs two turns to overlap. */
+  gate: Promise<void> | null = null
 
   async complete(
     model: string,
     prompt: string | readonly ChatMessage[]
   ): Promise<ChatResult> {
+    if (this.gate) await this.gate
     this.lastMessages = prompt
     return {
       content: this.reply,
@@ -200,6 +203,40 @@ describe('interview turns', () => {
     expect(message.abstained).toBe(1)
     // the raw marker is kept in raw_response; the displayed content is the answer itself
     expect(message.content).toBe('Ehhez a profilom nem ad alapot.')
+  })
+
+  it('serves the full provenance of one turn on demand', async () => {
+    const id = await createInterview()
+    await ask(id, 'Kérdés?')
+    const messageId = (db.prepare("SELECT id FROM interview_messages WHERE role = 'persona'").get() as {
+      id: string
+    }).id
+    const res = await app.inject({
+      method: 'GET', url: `/api/interviews/${id}/messages/${messageId}`, cookies: cookie
+    })
+    expect(res.statusCode).toBe(200)
+    const data = res.json().data
+    expect(JSON.parse(data.prompt_rendered)[0].role).toBe('system')
+    expect(data.raw_response).toBe('Hetente nézem az akciós újságokat.')
+    expect(
+      (await app.inject({ method: 'GET', url: `/api/interviews/${id}/messages/nope`, cookies: cookie })).statusCode
+    ).toBe(404)
+  })
+
+  // Two questions at once would read the same history, compute the same turn
+  // numbers and race the unique index — with the loser's tokens already spent.
+  it('refuses a second question while the first is still unanswered', async () => {
+    const id = await createInterview()
+    let release: (() => void) | null = null
+    client.gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const first = ask(id, 'Első')
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    const second = await ask(id, 'Második')
+    expect(second.statusCode).toBe(409)
+    release!()
+    expect((await first).statusCode).toBe(200)
   })
 
   it('rejects an empty question', async () => {

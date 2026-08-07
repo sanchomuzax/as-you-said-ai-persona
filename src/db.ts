@@ -40,6 +40,10 @@ function migrate(db: DatabaseSync): void {
   db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_personas_lineage_version ON personas(lineage_id, version)')
   db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_questionnaires_lineage_version ON questionnaires(lineage_id, version)')
   db.exec('CREATE INDEX IF NOT EXISTS idx_questions_questionnaire ON questions(questionnaire_id)')
+  // Support the project-scoped run listing (issue #11), which joins a run to its
+  // questionnaire and filters on that questionnaire's project.
+  db.exec('CREATE INDEX IF NOT EXISTS idx_runs_questionnaire ON runs(questionnaire_id)')
+  db.exec('CREATE INDEX IF NOT EXISTS idx_questionnaires_project ON questionnaires(project_id)')
   // Left NULL for existing rows on purpose: their elicitation mode is unknown
   // (and wrong for multi-select questions), which the UI has to be able to say.
   const responseCols = db.prepare('PRAGMA table_info(responses)').all() as unknown as { name: string }[]
