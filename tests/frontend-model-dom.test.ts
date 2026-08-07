@@ -259,6 +259,21 @@ describe('renderCalibrationWorkflow', () => {
     const html = card.renderModelCard({ model: 'm1', label: 'M' }, PROFILE, { probes: PROBES })
     expect(html).toContain('Újrakalibrálás lépésről lépésre')
   })
+
+  // Issue #29 review MED #6: the "already running" notice is computed
+  // unconditionally but only ever INTERPOLATED inside launchForm, which is ''
+  // whenever probes.length === 0 — so with zero probe questionnaires, a
+  // running calibration for this model produces no warning at all.
+  it('shows the "already running" notice even with zero probe questionnaires', () => {
+    const html = card.renderCalibrationWorkflow(
+      { model: 'm2', label: 'M2', status: 'missing' },
+      {
+        probes: [],
+        calibrationRuns: [{ id: 'cal-1', name: 'Kalibráció — m2', status: 'running', created_at: '2026-08-07 10:00:00' }]
+      }
+    )
+    expect(html).toMatch(/már fut kalibráció|előbb fejeződjön be|állítsd le/i)
+  })
 })
 
 describe('model list row actions', () => {

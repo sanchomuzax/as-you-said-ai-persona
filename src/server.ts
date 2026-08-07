@@ -14,7 +14,13 @@ import { buildEvaluationPrompt } from './lib/evaluate.js'
 import { toCsv } from './lib/csv.js'
 import { registerInterviewRoutes } from './interviews.js'
 import { registerCatalogRoutes } from './catalog.js'
-import { registerModelProfileRoutes, findProfileForRun } from './model-profiles.js'
+import {
+  registerModelProfileRoutes,
+  findProfileForRun,
+  findActiveCalibration,
+  calibrationBlockedResponse,
+  calibrationModelOf
+} from './model-profiles.js'
 import {
   checkCredentials,
   createSessionToken,
@@ -45,8 +51,8 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
   // not a research decision. Already-recorded cells are skipped and the token
   // budget hard stop still applies, so a resume cannot run away.
   const interrupted = db
-    .prepare("SELECT id FROM runs WHERE status = 'running'")
-    .all() as unknown as { id: string }[]
+    .prepare("SELECT id, config_json FROM runs WHERE status = 'running'")
+    .all() as unknown as { id: string; config_json: string }[]
   if (interrupted.length > 0) {
     db.prepare("UPDATE runs SET status = 'paused' WHERE status = 'running'").run()
   }
@@ -189,7 +195,31 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
     void runEvaluation(runId).catch(() => undefined)
   })
 
-  for (const { id } of interrupted) {
+  // Issue #29 review round 3, CRITICAL 2: boot recovery is a THIRD entry
+  // point into a live calibration loop, alongside calibrate (above) and
+  // resume (below) — and unlike those two, it had no calibration awareness
+  // at all, unconditionally resuming every interrupted run. Two 'running'
+  // calibration rows for the SAME model is a reachable database state: any
+  // service restart that lands mid-flight after rounds 1-2 (which shipped
+  // the underlying double-launch bug this reopened issue exists to close)
+  // can leave one behind, and a crash during THIS boot's own resume loop can
+  // do it again next time. Group by the model each interrupted run's
+  // CONFIG_JSON marks itself as a calibration for (calibrationModelOf,
+  // src/model-profiles.ts); resume at most the first one encountered per
+  // model, and leave every other one exactly where the UPDATE above already
+  // put it — 'paused', a status the researcher can see (Futtatások list, the
+  // model card) and act on (Folytatás/Leállítás, both now offered for every
+  // active calibration status), never silently dropped. Non-calibration runs
+  // carry no such per-model exclusivity rule anywhere else in the app
+  // (runner.ts's activeRuns only dedupes the SAME run id, issue #16), so
+  // every one of them still resumes unchanged.
+  const resumedCalibrationModels = new Set<string>()
+  for (const { id, config_json } of interrupted) {
+    const model = calibrationModelOf(config_json)
+    if (model) {
+      if (resumedCalibrationModels.has(model)) continue
+      resumedCalibrationModels.add(model)
+    }
     void runner.execute(id).catch(() => undefined)
   }
 
@@ -496,9 +526,30 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
 
   app.post('/api/runs/:id/resume', async (req, reply) => {
     const { id } = req.params as { id: string }
-    const run = db.prepare('SELECT status FROM runs WHERE id = ?').get(id) as { status: string } | undefined
+    const run = db.prepare('SELECT status, config_json FROM runs WHERE id = ?').get(id) as
+      | { status: string; config_json: string }
+      | undefined
     if (!run) return reply.code(404).send({ success: false, error: 'A futtatás nem található' })
     if (!isResumable(run.status)) return reply.code(400).send({ success: false, error: `Cannot resume a ${run.status} run` })
+
+    // Issue #29 review round 2, HIGH 1: resume is a second entry point into a
+    // live calibration loop, otherwise unguarded — a calibration hitting the
+    // budget hard stop ('budget_exhausted') is resumable, and if another
+    // calibration run for the SAME model has gone live meanwhile, resuming
+    // this one would start a second loop for that model. `excludeRunId: id`
+    // means a model's own ONLY calibration can always still be resumed — the
+    // check only fires when a DIFFERENT run is the one actually blocking.
+    let config: { model?: unknown; calibration?: unknown } | null = null
+    try {
+      config = JSON.parse(run.config_json) as { model?: unknown; calibration?: unknown }
+    } catch {
+      config = null
+    }
+    if (config !== null && typeof config === 'object' && config.calibration === true && typeof config.model === 'string') {
+      const blocking = findActiveCalibration(db, config.model, id)
+      if (blocking) return reply.code(409).send(calibrationBlockedResponse(config.model, blocking))
+    }
+
     void runner.execute(id).catch(() => undefined)
     return { success: true }
   })

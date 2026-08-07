@@ -3,7 +3,7 @@ import type { FastifyInstance } from 'fastify'
 import { z } from 'zod'
 import type { Db } from './db.js'
 import type { ModelsConfig } from './config.js'
-import type { SurveyRunner, RunConfig } from './runner.js'
+import { RESUMABLE, type SurveyRunner, type RunConfig } from './runner.js'
 import {
   computeProfileMetrics,
   profileStatus,
@@ -233,6 +233,123 @@ export function findProfileForRun(
   return { profile, status, reasons, runStack }
 }
 
+/**
+ * Every status from which a calibration loop is live or can become live
+ * again — the ONE status set the calibrate guard, the resume guard and the
+ * client (public/model-card.js, public/model-view.js) all agree defines
+ * "active" (issue #29 review round 2, HIGH 1 and MED). Derived from
+ * runner.ts's own RESUMABLE rather than re-listing it: RESUMABLE already
+ * names every status a run can be launched into a live loop FROM (including
+ * `budget_exhausted`, which the budget hard stop sets, and `pending`, which a
+ * run never past its first setStatus('running') is left at) — re-listing a
+ * narrower copy here is exactly how the original guard went stale. 'running'
+ * itself is added because RESUMABLE only lists states a loop can be
+ * (re)started FROM, not the currently-executing state itself.
+ *
+ * The client cannot literally import this — it runs in the browser, this
+ * module runs in Node — so public/model-card.js mirrors the same five
+ * literal values. That copy drifted narrower once before (round 2's bug,
+ * caught only by hand); since round 3 (HIGH 3) a frontend test reads the
+ * client's own copy out of the real file and compares it against this
+ * export, value for value (tests/frontend-model-calibration-progress.test.ts)
+ * — the one assertion that would actually catch the two drifting apart
+ * again, which nothing did before that round.
+ */
+export const ACTIVE_CALIBRATION_STATUSES: ReadonlySet<string> = new Set(['running', ...RESUMABLE])
+
+/**
+ * The model a run's CONFIG_JSON marks itself as an active calibration launch
+ * for, or null if it carries no `calibration: true` marker at all (see
+ * RunConfig, src/runner.ts). Factored out of isCalibrationConfigFor below
+ * (issue #29 review round 3, CRITICAL 2) so boot recovery (src/server.ts) can
+ * group interrupted runs by model without a third copy of the same
+ * malformed-JSON handling.
+ *
+ * Total over malformed input (issue #29 review round 2, MED): a config_json
+ * of the literal text "null" makes `JSON.parse` return `null` rather than
+ * throw, so the parse succeeding is not enough — `typeof` after the parse is
+ * checked explicitly, otherwise reading `.calibration` off a null config
+ * would throw and take the whole caller down with it.
+ */
+export function calibrationModelOf(configJson: string): string | null {
+  let config: unknown
+  try {
+    config = JSON.parse(configJson)
+  } catch {
+    return null
+  }
+  if (config === null || typeof config !== 'object') return null
+  const c = config as { model?: unknown; calibration?: unknown }
+  return c.calibration === true && typeof c.model === 'string' ? c.model : null
+}
+
+/**
+ * Whether CONFIG_JSON marks its run as an active calibration launch FOR
+ * MODEL. Identity is the `calibration: true` marker plus config.model, never
+ * the human-facing run name: a rewording of "Kalibráció — X" must not
+ * silently disarm this (issue #29 review CRITICAL #1 / round 2 MED).
+ */
+function isCalibrationConfigFor(configJson: string, model: string): boolean {
+  return calibrationModelOf(configJson) === model
+}
+
+export interface ActiveCalibration {
+  id: string
+  status: string
+}
+
+/**
+ * The run currently blocking a new or resumed calibration loop for MODEL, if
+ * any — the single lookup both entry points share (issue #29 review round 2,
+ * HIGH 1): POST /api/models/:model/calibrate (below) and POST
+ * /api/runs/:id/resume (src/server.ts). `excludeRunId` lets a resume ignore
+ * the very run being resumed, so a model's ONLY calibration can always be
+ * resumed even while its own status is one of ACTIVE_CALIBRATION_STATUSES.
+ */
+export function findActiveCalibration(db: Db, model: string, excludeRunId?: string): ActiveCalibration | null {
+  const statuses = [...ACTIVE_CALIBRATION_STATUSES]
+  const placeholders = statuses.map(() => '?').join(',')
+  const rows = db
+    .prepare(`SELECT id, status, config_json FROM runs WHERE status IN (${placeholders})`)
+    .all(...statuses) as unknown as { id: string; status: string; config_json: string }[]
+  for (const row of rows) {
+    if (excludeRunId && row.id === excludeRunId) continue
+    if (isCalibrationConfigFor(row.config_json, model)) return { id: row.id, status: row.status }
+  }
+  return null
+}
+
+/**
+ * What to call each blocking status in the 409 body (issue #29 review round
+ * 2, MED): the old message always said "Már fut", which is simply false for
+ * `pending`/`paused`/`budget_exhausted`/`failed` — a researcher reading
+ * "already running" about a paused or failed run is being told the wrong
+ * story about their own experiment.
+ */
+const CALIBRATION_STATUS_TEXT: Record<string, string> = {
+  running: 'már fut',
+  paused: 'szüneteltetve van',
+  pending: 'függőben van, még nem indult el',
+  budget_exhausted: 'elfogyott a kerete, ezért megállt',
+  failed: 'hibára futott'
+}
+
+/** The 409 body's message: the actual status, and which run to act on. */
+function calibrationBlockedMessage(model: string, blocking: ActiveCalibration): string {
+  const statusText = CALIBRATION_STATUS_TEXT[blocking.status] ?? blocking.status
+  return `Kalibráció ${statusText} ehhez a modellhez: ${model} (futtatás: ${blocking.id}).`
+}
+
+/** The full 409 payload for a blocked calibrate/resume — status and run id as their own fields, not just prose, so the client can act on it without parsing the message. */
+export function calibrationBlockedResponse(model: string, blocking: ActiveCalibration): {
+  success: false
+  error: string
+  status: string
+  runId: string
+} {
+  return { success: false, error: calibrationBlockedMessage(model, blocking), status: blocking.status, runId: blocking.id }
+}
+
 export interface ProfileDeps {
   db: Db
   models: ModelsConfig
@@ -448,6 +565,19 @@ export function registerModelProfileRoutes(app: FastifyInstance, deps: ProfileDe
       .get(body.data.questionnaireId) as { id: string; name: string } | undefined
     if (!questionnaire) return reply.code(400).send({ success: false, error: 'A kérdőív nem található' })
 
+    // CRITICAL (issue #29 review): the only protection used to be the
+    // client's `disabled` attribute, computed at render time — a second
+    // browser tab, a stale page, a double-click or a plain curl all bypass
+    // that. A budget-spending, concurrency-sensitive mutation (issue #16)
+    // must be refused server-side, not merely discouraged client-side.
+    // Widened to ACTIVE_CALIBRATION_STATUSES (review round 2, HIGH 1): the
+    // budget hard stop leaves a run 'budget_exhausted', never 'paused', and a
+    // 'failed' run is resumable too — both used to slip through this check.
+    const blocking = findActiveCalibration(db, model)
+    if (blocking) {
+      return reply.code(409).send(calibrationBlockedResponse(model, blocking))
+    }
+
     const config: RunConfig = {
       model,
       temperature: body.data.temperature,
@@ -460,6 +590,13 @@ export function registerModelProfileRoutes(app: FastifyInstance, deps: ProfileDe
       ...(body.data.provider ? { provider: body.data.provider } : {})
     }
     const id = randomUUID()
+    // The check above and this insert are one atomic step ONLY because
+    // node:sqlite's DatabaseSync is synchronous and nothing here `await`s
+    // between them — Node cannot interleave another request's handler in
+    // between two synchronous statements on the same turn of the event loop.
+    // If an `await` is ever introduced here, this comment stops being true
+    // and the check must be re-run (or wrapped in `BEGIN IMMEDIATE` …
+    // `COMMIT`) right before the insert (issue #29 review round 2, note).
     db.prepare('INSERT INTO runs (id, questionnaire_id, name, config_json) VALUES (?,?,?,?)').run(
       id, questionnaire.id, `Kalibráció — ${model}`, JSON.stringify(config)
     )

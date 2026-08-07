@@ -3,6 +3,7 @@ import type { FastifyInstance } from 'fastify'
 import { createDb, type Db } from '../src/db.js'
 import { buildServer } from '../src/server.js'
 import { promptTemplateHash } from '../src/lib/profile.js'
+import { isRunning } from '../src/runner.js'
 import type { ChatClient, ChatResult } from '../src/openrouter.js'
 import type { AppConfig } from '../src/config.js'
 
@@ -370,5 +371,302 @@ describe('POST /api/models/:model/calibrate', () => {
       method: 'POST', url: '/api/models/m1/calibrate', cookies: cookie, payload: { questionnaireId: 'nope' }
     })
     expect(res.statusCode).toBe(400)
+  })
+})
+
+/**
+ * Issue #29 reopened, review CRITICAL #1: POST /api/models/:model/calibrate
+ * has NO concurrency guard at all — it validates the model, the body and the
+ * questionnaire, then unconditionally creates and launches a run. The
+ * client-side `disabled` attribute (model-card.js) is not a guard: a second
+ * browser tab, a stale page, a form resubmit, or a plain curl all bypass it.
+ * A budget-spending, concurrency-sensitive mutation (issue #16) must be
+ * refused server-side.
+ */
+describe('POST /api/models/:model/calibrate refuses a second launch while one is active (issue #29 review CRITICAL #1)', () => {
+  // Never resolves: keeps the run's status at whatever the runner set it to
+  // right before the (hung) first model call, so the test does not race the
+  // runner's own completion speed against an instantly-resolving stub.
+  class HangingStubClient implements ChatClient {
+    async complete(): Promise<ChatResult> {
+      return new Promise<ChatResult>(() => {})
+    }
+  }
+
+  beforeEach(async () => {
+    db = createDb(':memory:')
+    app = buildServer({ db, config: testConfig, models: testModels, client: new HangingStubClient() })
+    await app.ready()
+    cookie = await login()
+    seedCalibrationRun('seedrun') // only for its probe questionnaire + question
+  })
+
+  async function launch(model: string) {
+    return app.inject({
+      method: 'POST', url: `/api/models/${model}/calibrate`, cookies: cookie, payload: { questionnaireId: 'probe' }
+    })
+  }
+
+  it('refuses a second calibration for a model whose calibration is still running', async () => {
+    const first = await launch('m1')
+    expect(first.statusCode).toBe(200)
+    const firstRunId = first.json().data.runId as string
+    // Lets the runner's own setStatus('running') tick happen before the
+    // (permanently hung) first model call — no real I/O delay involved.
+    await new Promise((resolve) => setTimeout(resolve, 20))
+
+    const second = await launch('m1')
+    expect(second.statusCode).toBe(409)
+
+    const rows = db.prepare("SELECT id, status FROM runs WHERE id != 'seedrun'").all() as unknown as {
+      id: string
+      status: string
+    }[]
+    // Only the first run exists — the refused request created nothing.
+    expect(rows).toHaveLength(1)
+    expect(rows[0]!.id).toBe(firstRunId)
+    expect(rows[0]!.status).toBe('running')
+  })
+
+  it('still allows launching a DIFFERENT model while one calibration is running', async () => {
+    const first = await launch('m1')
+    expect(first.statusCode).toBe(200)
+    await new Promise((resolve) => setTimeout(resolve, 20))
+
+    const second = await launch('m2')
+    expect(second.statusCode).toBe(200)
+  })
+
+  it('refuses a second launch while the first is only "pending" — not yet picked up by the runner', async () => {
+    db.prepare('INSERT INTO runs (id, questionnaire_id, name, config_json, status) VALUES (?,?,?,?,?)').run(
+      'pending-cal', 'probe', 'Kalibráció — m1',
+      JSON.stringify({ model: 'm1', temperature: 1, seeds: [0], baselineArm: true, calibration: true }), 'pending'
+    )
+    const res = await launch('m1')
+    expect(res.statusCode).toBe(409)
+  })
+
+  // The server flips every 'running' run to 'paused' at boot (src/server.ts) —
+  // a service restart must not silently disarm the guard.
+  it('refuses a second launch while the first is "paused" (e.g. after a service restart)', async () => {
+    db.prepare('INSERT INTO runs (id, questionnaire_id, name, config_json, status) VALUES (?,?,?,?,?)').run(
+      'paused-cal', 'probe', 'Kalibráció — m1',
+      JSON.stringify({ model: 'm1', temperature: 1, seeds: [0], baselineArm: true, calibration: true }), 'paused'
+    )
+    const res = await launch('m1')
+    expect(res.statusCode).toBe(409)
+  })
+
+  it('does not block a model whose only calibration run already completed', async () => {
+    db.prepare('INSERT INTO runs (id, questionnaire_id, name, config_json, status) VALUES (?,?,?,?,?)').run(
+      'done-cal', 'probe', 'Kalibráció — m1',
+      JSON.stringify({ model: 'm1', temperature: 1, seeds: [0], baselineArm: true, calibration: true }), 'completed'
+    )
+    const res = await launch('m1')
+    expect(res.statusCode).toBe(200)
+  })
+})
+
+/**
+ * Issue #29, second review round, HIGH 1: the guard's status set
+ * ('pending','running','paused') is narrower than "can be resumed into a live
+ * loop again" — src/runner.ts's own RESUMABLE set is
+ * {paused, budget_exhausted, failed, pending}, and the budget hard stop sets
+ * 'budget_exhausted', never 'paused'. Worse, POST /api/runs/:id/resume has NO
+ * calibration awareness at all. Reproduced end to end: calibration hits the
+ * budget stop (status 'budget_exhausted') → a new calibrate POST used to
+ * return 200 → resuming the original also returns 200 → two live loops for
+ * the same model. The invariant: at most one live calibration loop per
+ * model, whichever entry point (calibrate OR resume) is used.
+ */
+describe('at most one live calibration loop per model, through either entry point (issue #29 review round 2, HIGH 1)', () => {
+  beforeEach(async () => {
+    db = createDb(':memory:')
+    app = buildServer({ db, config: testConfig, models: testModels, client: new StubClient() })
+    await app.ready()
+    cookie = await login()
+    seedCalibrationRun('seedrun')
+  })
+
+  function seedCalibration(id: string, model: string, status: string): void {
+    db.prepare('INSERT INTO runs (id, questionnaire_id, name, config_json, status) VALUES (?,?,?,?,?)').run(
+      id, 'probe', `Kalibráció — ${model}`,
+      JSON.stringify({ model, temperature: 1, seeds: [0], baselineArm: true, calibration: true }), status
+    )
+  }
+
+  async function launch(model: string) {
+    return app.inject({
+      method: 'POST', url: `/api/models/${model}/calibrate`, cookies: cookie, payload: { questionnaireId: 'probe' }
+    })
+  }
+
+  async function resume(runId: string) {
+    return app.inject({ method: 'POST', url: `/api/runs/${runId}/resume`, cookies: cookie })
+  }
+
+  it('refuses a new calibrate launch when the model’s calibration hit the budget hard stop', async () => {
+    seedCalibration('exhausted-cal', 'm1', 'budget_exhausted')
+    const res = await launch('m1')
+    expect(res.statusCode).toBe(409)
+  })
+
+  it('refuses a new calibrate launch when the model’s calibration failed', async () => {
+    seedCalibration('failed-cal', 'm1', 'failed')
+    const res = await launch('m1')
+    expect(res.statusCode).toBe(409)
+  })
+
+  it('refuses to resume a calibration for a model that already has a DIFFERENT one active', async () => {
+    // The model's current, active calibration.
+    seedCalibration('active-cal', 'm1', 'running')
+    // A second calibration row for the SAME model — e.g. left over from
+    // before this guard existed, or a race — resuming it would start a
+    // second live loop for m1 alongside the still-running one.
+    seedCalibration('second-cal', 'm1', 'paused')
+
+    const res = await resume('second-cal')
+    expect(res.statusCode).toBe(409)
+
+    const row = db.prepare('SELECT status FROM runs WHERE id = ?').get('second-cal') as { status: string }
+    expect(row.status, 'resume must not have touched it').toBe('paused')
+  })
+
+  // The exact sequence from the review: budget stop, then a blocked
+  // calibrate (asserted above) — resuming the ORIGINAL run, which is the
+  // model's only calibration, does not start a SECOND loop and must still work.
+  it('still allows resuming a model’s ONLY calibration after it hit the budget stop', async () => {
+    seedCalibration('exhausted-cal', 'm1', 'budget_exhausted')
+    const res = await resume('exhausted-cal')
+    expect(res.statusCode).toBe(200)
+  })
+
+  it('does not block resuming an ordinary (non-calibration) paused run', async () => {
+    db.prepare('INSERT INTO runs (id, questionnaire_id, name, config_json, status) VALUES (?,?,?,?,?)').run(
+      'ordinary', 'probe', 'Sima futás',
+      JSON.stringify({ model: 'm1', temperature: 1, seeds: [0] }), 'paused'
+    )
+    const res = await resume('ordinary')
+    expect(res.statusCode).toBe(200)
+  })
+})
+
+/**
+ * Issue #29 review round 2, MED: a run row whose config_json is the literal
+ * JSON text "null" makes JSON.parse succeed (returning null) instead of
+ * throwing — hasActiveCalibration's try/catch only guards the parse itself,
+ * so the following `config.calibration` read throws on a null config and
+ * takes the whole endpoint down with an uncaught exception (500).
+ */
+describe('a malformed config_json row does not take the calibrate endpoint down (issue #29 review round 2, MED)', () => {
+  beforeEach(async () => {
+    db = createDb(':memory:')
+    app = buildServer({ db, config: testConfig, models: testModels, client: new StubClient() })
+    await app.ready()
+    cookie = await login()
+    seedCalibrationRun('seedrun')
+  })
+
+  it('does not 500 when another run row has config_json = "null"', async () => {
+    db.prepare('INSERT INTO runs (id, questionnaire_id, name, config_json, status) VALUES (?,?,?,?,?)').run(
+      'malformed', 'probe', 'Furcsa futás', 'null', 'running'
+    )
+    const res = await app.inject({
+      method: 'POST', url: '/api/models/m2/calibrate', cookies: cookie, payload: { questionnaireId: 'probe' }
+    })
+    expect(res.statusCode).not.toBe(500)
+  })
+})
+
+/**
+ * Issue #29 review round 2, MED: the 409 always says "Már fut" even when the
+ * blocker is 'pending' or 'paused' (misleading), and never says which run is
+ * blocking or what to do about it.
+ */
+describe('the 409 names the actual blocking status and run (issue #29 review round 2, MED)', () => {
+  beforeEach(async () => {
+    db = createDb(':memory:')
+    app = buildServer({ db, config: testConfig, models: testModels, client: new StubClient() })
+    await app.ready()
+    cookie = await login()
+    seedCalibrationRun('seedrun')
+  })
+
+  it('states the actual status ("szüneteltetve"), not always "Már fut", when the blocker is paused', async () => {
+    db.prepare('INSERT INTO runs (id, questionnaire_id, name, config_json, status) VALUES (?,?,?,?,?)').run(
+      'paused-blocker', 'probe', 'Kalibráció — m1',
+      JSON.stringify({ model: 'm1', temperature: 1, seeds: [0], baselineArm: true, calibration: true }), 'paused'
+    )
+    const res = await app.inject({
+      method: 'POST', url: '/api/models/m1/calibrate', cookies: cookie, payload: { questionnaireId: 'probe' }
+    })
+    expect(res.statusCode).toBe(409)
+    const body = res.json() as { error?: string }
+    expect(body.error, 'must not claim it is running when it is only paused').not.toMatch(/már fut/i)
+    expect(body.error).toMatch(/szünetel/i)
+  })
+
+  it('the 409 body names the blocking run, so the client can act on it', async () => {
+    db.prepare('INSERT INTO runs (id, questionnaire_id, name, config_json, status) VALUES (?,?,?,?,?)').run(
+      'the-blocker', 'probe', 'Kalibráció — m1',
+      JSON.stringify({ model: 'm1', temperature: 1, seeds: [0], baselineArm: true, calibration: true }), 'running'
+    )
+    const res = await app.inject({
+      method: 'POST', url: '/api/models/m1/calibrate', cookies: cookie, payload: { questionnaireId: 'probe' }
+    })
+    expect(res.statusCode).toBe(409)
+    expect(JSON.stringify(res.json())).toContain('the-blocker')
+  })
+})
+
+/**
+ * Issue #29 review round 3, CRITICAL 2: buildServer's boot recovery
+ * (src/server.ts) is a THIRD entry point into a live calibration loop,
+ * alongside calibrate and resume — and unlike those two, it has NO
+ * calibration awareness at all. It marks every 'running' row 'paused', then
+ * unconditionally calls runner.execute() for every one of them. Two 'running'
+ * calibration rows for the SAME model — plausible after any crash that hits
+ * mid-flight, since rounds 1-2 shipped the underlying bug this reopened issue
+ * exists to close — both get resumed into their own live loop, with nothing
+ * in that path ever calling findActiveCalibration.
+ *
+ * runner.ts's own activeRuns Set (isRunning, exported for exactly this) only
+ * dedupes the SAME run id being executed twice concurrently (issue #16) — it
+ * says nothing about two DIFFERENT run ids for the same model, which is
+ * exactly this defect. A HangingStubClient never resolves its first model
+ * call, so both loops — if boot really does start two — stay observably
+ * "live" (isRunning() true) indefinitely, long enough to assert on.
+ */
+describe('boot auto-resume respects at most one live calibration loop per model (issue #29 review round 3, CRITICAL 2)', () => {
+  class HangingStubClient implements ChatClient {
+    async complete(): Promise<ChatResult> {
+      return new Promise<ChatResult>(() => {})
+    }
+  }
+
+  it('does not resume two "running" calibration rows for the SAME model into two simultaneously live loops', async () => {
+    db = createDb(':memory:')
+    // Only for the 'probe' questionnaire + question row; this seeds its OWN
+    // run as 'completed', so it stays out of boot's interrupted/'running' set.
+    seedCalibrationRun('seedrun')
+    for (const id of ['run-a', 'run-b']) {
+      db.prepare('INSERT INTO runs (id, questionnaire_id, name, config_json, status) VALUES (?,?,?,?,?)').run(
+        id, 'probe', 'Kalibráció — m1',
+        JSON.stringify({ model: 'm1', temperature: 1, seeds: [0], baselineArm: true, calibration: true }), 'running'
+      )
+    }
+
+    app = buildServer({ db, config: testConfig, models: testModels, client: new HangingStubClient() })
+    await app.ready()
+    // Lets the fire-and-forget boot-resume loops (src/server.ts) reach their
+    // first, permanently hung model call — no real I/O delay involved, same
+    // reasoning as the CRITICAL #1 tests above.
+    await new Promise((resolve) => setTimeout(resolve, 20))
+
+    const bothLive = isRunning('run-a') && isRunning('run-b')
+    expect(
+      bothLive,
+      'boot must not resume two calibration runs of the SAME model into two simultaneously live loops'
+    ).toBe(false)
   })
 })

@@ -202,7 +202,12 @@ async function handleRunAction(action, runId) {
       if (!confirm('Biztosan leállítod a futtatást? Ez a művelet nem visszavonható.')) return;
       await apiCall('POST', `/api/runs/${runId}/stop`);
     }
-    await refreshRunsList();
+    // force: true (issue #29 review HIGH #3) — this refresh follows an
+    // explicit user action (pause/resume/stop) that just took place on a
+    // button, so an open model card must repaint even though a real click
+    // leaves focus inside it; see rerenderModelDetailBody's own comment
+    // (model-view.js) for why that is safe here specifically.
+    await refreshRunsList(true);
     if (state.currentRunId === runId) {
       await refreshRunDetailHeader(runId);
     }
@@ -219,7 +224,7 @@ async function handleRunAction(action, runId) {
   }
 }
 
-async function refreshRunsList() {
+async function refreshRunsList(forceModelDetailRepaint = false) {
   try {
     const runs = await apiCall('GET', '/api/runs');
     state.runs = runs;
@@ -242,7 +247,7 @@ async function refreshRunsList() {
     // A status change (SSE) can be a calibration run finishing — the open
     // model card's workflow (step 4 unlocks) and the tab-level run picker
     // both read state.runs.
-    window.rerenderModelDetailBody?.();
+    window.rerenderModelDetailBody?.(forceModelDetailRepaint);
     window.renderProfileRunPicker?.();
   } catch (err) {
     // silent - keep last known state

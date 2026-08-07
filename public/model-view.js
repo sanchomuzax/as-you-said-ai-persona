@@ -53,16 +53,19 @@ function parsedRunConfig(run) {
  * poll (runs-list.js's pollRunningProgress), everything else uses the
  * already-fetched GET /api/runs row (issue #22's enriched fields), so this
  * never fetches anything of its own (issue #29: no new endpoint, no second
- * timer). Recognized by the config marker the calibrate endpoint writes; runs
- * launched before the marker existed are caught by the launcher's own naming
- * as a fallback.
+ * timer). Recognized by the config marker the calibrate endpoint writes —
+ * ONLY that (issue #29 review round 2, MED): a name-matching fallback used
+ * to also count a run merely titled "Kalibráció — X" as active, which the
+ * server's own guard (src/model-profiles.ts) never does, so a flagless
+ * legacy run made the browser block a launch the server would actually
+ * allow. Identity is the flag; a run without it is not this model's
+ * calibration run as far as either side is concerned.
  */
 function calibrationRunsFor(modelId) {
   return (state.runs || [])
     .filter((run) => {
       const config = parsedRunConfig(run);
-      if (config.model !== modelId) return false;
-      return config.calibration === true || run.name === `Kalibráció — ${modelId}`;
+      return config.model === modelId && config.calibration === true;
     })
     .map((run) => {
       const fallback = runProgressFromRow(run);
@@ -80,11 +83,16 @@ function calibrationRunsFor(modelId) {
     .sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)));
 }
 
-/** Everything the on-card workflow needs, computed from already-fetched state. */
-function modelCardContext(modelId) {
+/**
+ * Everything the on-card workflow needs, computed from already-fetched
+ * state. `checkedRunIds` (Set|null) carries the step-4 checkbox selection a
+ * forced repaint must not silently reset — see rerenderModelDetailBody.
+ */
+function modelCardContext(modelId, checkedRunIds) {
   return {
     probes: state.probeQuestionnaires || [],
-    calibrationRuns: calibrationRunsFor(modelId)
+    calibrationRuns: calibrationRunsFor(modelId),
+    checkedRunIds: checkedRunIds || null
   };
 }
 
@@ -189,19 +197,49 @@ async function openModelDetail(modelId, updateHash = true) {
  * runs refresh so the workflow's run statuses (step 3/4) stay live while a
  * calibration executes. Skipped while focus is inside the card (a repaint would
  * pull the keyboard out of the probe select or the provider field mid-typing)
- * and when nothing changed (same diff-guard as the sidebar's running section).
+ * and when nothing changed (same diff-guard as the sidebar's running section) —
+ * UNLESS `force` is set (issue #29 review HIGH #3). The guard exists to
+ * protect typing in a text field during a background tick (the periodic 5s
+ * poll, or an unrelated SSE 'status' event); it was never meant to survive an
+ * explicit action taken ON this card, like clicking its own Stop button.
+ *
+ * The reasoning for why `force` is safe here is NOT "a click moves focus onto
+ * a button, not a text field, so there is nothing left to protect" — a
+ * repaint replaces `body.innerHTML` outright, which destroys a half-typed
+ * text field's VALUE regardless of where focus is; that would be real data
+ * loss if it could happen. It cannot: the probe select and the provider
+ * input are both rendered `disabled` for the whole time a calibration is
+ * active (renderCalibrationWorkflow), which is the only time this module
+ * calls with `force: true`. Skipping the repaint here would just freeze the
+ * card on "Fut" forever instead — the poll only retries while something is
+ * still 'running', which is no longer true right after Stop. runs-list.js
+ * passes `force: true` only from the explicit-action path (handleRunAction).
+ *
+ * A forced repaint still replaces the whole card, which would otherwise drop
+ * both the step-4 checkbox selection and keyboard focus (to <body>, with no
+ * way back in) even though nothing needed protecting from it. Both are
+ * restored explicitly below instead.
  */
-function rerenderModelDetailBody() {
+function rerenderModelDetailBody(force = false) {
   const view = document.getElementById('modelDetailView');
   const body = document.getElementById('modelDetailBody');
   if (!view || !body || view.style.display === 'none' || !state.currentModelId) return;
-  if (body.contains(document.activeElement) && document.activeElement !== body) return;
+  if (!force && body.contains(document.activeElement) && document.activeElement !== body) return;
   const entry =
     (state.modelProfiles || []).find((m) => m.model === state.currentModelId) ||
     { model: state.currentModelId, label: state.currentModelId };
-  const html = renderModelCard(entry, state.currentModelProfile, modelCardContext(state.currentModelId));
+  const checkedRunIds = force
+    ? new Set(Array.from(body.querySelectorAll('.model-card-runpick:checked')).map((cb) => cb.value))
+    : null;
+  const html = renderModelCard(entry, state.currentModelProfile, modelCardContext(state.currentModelId, checkedRunIds));
   if (body.innerHTML === html) return;
   body.innerHTML = html;
+  // restoreDetailFocus is a one-shot meant for CLOSING the view (it consumes
+  // its remembered trigger); staying inside the still-open card after an
+  // in-place repaint is a different situation, so focus goes to the card's
+  // own heading instead — the same element openModelDetail focuses on first
+  // paint — rather than being left on <body>.
+  if (force) document.getElementById('modelDetailTitle')?.focus();
 }
 
 function closeModelDetail(updateHash = true) {
@@ -229,6 +267,25 @@ async function launchCalibration(model, questionnaireId, provider) {
   await refreshRunsList();
   await openModelDetail(model);
   return created;
+}
+
+/**
+ * Issue #29 review round 2, HIGH 3: a failed launch used to just alert() —
+ * for a 409 (the server's concurrency guard, src/model-profiles.ts) that
+ * left the SECOND tab, the exact scenario the guard exists for, stale: an
+ * enabled form with no sign that another run is already blocking it.
+ * `apiCall` (app.js) already attaches `error.status`, so this refreshes the
+ * runs list — and, if a model card happens to be open, repaints it — BEFORE
+ * alerting, so the blocking run is visible the moment the dialog closes.
+ * A non-409 failure (validation, network) has nothing new to show and just
+ * alerts, unchanged from before.
+ */
+async function handleCalibrationLaunchError(err) {
+  if (err.status === 409) {
+    await refreshRunsList();
+    if (state.currentModelId) await openModelDetail(state.currentModelId, false);
+  }
+  alert('A kalibráció indítása nem sikerült: ' + err.message);
 }
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -262,20 +319,37 @@ document.addEventListener('DOMContentLoaded', () => {
     restoreDetailFocus();
   });
 
+  // In-flight guards (issue #29 review CRITICAL #2): the server-side 409 guard
+  // (src/model-profiles.ts) is the correctness boundary, but two rapid submits
+  // still fire two POSTs before either resolves — a double-click, or a
+  // resubmit, sends the second request while the first is still in the air,
+  // client-side "disabled" from a stale render notwithstanding. Set
+  // SYNCHRONOUSLY, before any `await`, so the second submit (dispatched back
+  // to back with the first, no tick in between) always sees it already true.
+  let calibrationLaunchInFlight = false;
+  let cardCalibrationLaunchInFlight = false;
+
   document.getElementById('calibrationForm')?.addEventListener('submit', async (e) => {
     e.preventDefault();
+    if (calibrationLaunchInFlight) return;
     const questionnaireId = document.getElementById('calibrationQuestionnaire').value;
     if (!questionnaireId) {
       alert('Válassz próba-kérdőívet a kalibrációhoz.');
       return;
     }
     const model = document.getElementById('calibrationModel').value;
+    calibrationLaunchInFlight = true;
+    const submitBtn = document.querySelector('#calibrationForm button[type="submit"]');
+    if (submitBtn) submitBtn.disabled = true;
     try {
       // Lands on the model card, whose workflow shows the new run's live status
       // — the old alert() named a run id and left the researcher to go find it.
       await launchCalibration(model, questionnaireId, document.getElementById('calibrationProvider').value.trim());
     } catch (err) {
-      alert('A kalibráció indítása nem sikerült: ' + err.message);
+      await handleCalibrationLaunchError(err);
+    } finally {
+      calibrationLaunchInFlight = false;
+      if (submitBtn) submitBtn.disabled = false;
     }
   });
 
@@ -309,15 +383,22 @@ document.addEventListener('DOMContentLoaded', () => {
     const form = e.target.closest('.model-card-calibrate-form');
     if (!form) return;
     e.preventDefault();
+    if (cardCalibrationLaunchInFlight) return;
     const questionnaireId = form.querySelector('.model-card-probe-select')?.value || '';
     if (!questionnaireId) {
       alert('Válassz próba-kérdőívet a kalibrációhoz.');
       return;
     }
+    cardCalibrationLaunchInFlight = true;
+    const submitBtn = form.querySelector('button[type="submit"]');
+    if (submitBtn) submitBtn.disabled = true;
     try {
       await launchCalibration(form.dataset.model, questionnaireId, form.querySelector('.model-card-provider-input')?.value.trim());
     } catch (err) {
-      alert('A kalibráció indítása nem sikerült: ' + err.message);
+      await handleCalibrationLaunchError(err);
+    } finally {
+      cardCalibrationLaunchInFlight = false;
+      if (submitBtn) submitBtn.disabled = false;
     }
   });
 
@@ -350,16 +431,6 @@ document.addEventListener('DOMContentLoaded', () => {
     const stopBtn = e.target.closest('[data-action="stop"]');
     if (stopBtn) {
       await handleRunAction('stop', stopBtn.dataset.run);
-      return;
-    }
-    // Issue #29 review round 3, HIGH 4: calibrationRunRow (model-card.js) now
-    // renders a Folytatás control alongside Leállítás for every resumable
-    // status — same handleRunAction (runs-list.js) the Futtatások list and
-    // run detail view already use, so a 409 here gets the same stale-page
-    // refresh as those (its own MED fix).
-    const resumeBtn = e.target.closest('[data-action="resume"]');
-    if (resumeBtn) {
-      await handleRunAction('resume', resumeBtn.dataset.run);
       return;
     }
     const runRow = e.target.closest('[data-cal-run]');

@@ -20,6 +20,53 @@ const CALIBRATION_TOOLTIPS = {
     'Ehhez a modellhez még nincs mérés. Amíg nincs, a vele készült perszóna-eredményekhez nincs mihez viszonyítani: nem tudjuk elkülöníteni a perszóna hatását a modell alapértelmezett válaszától.'
 };
 
+/**
+ * Every status from which a calibration loop is live or can become live
+ * again — mirrors src/model-profiles.ts's ACTIVE_CALIBRATION_STATUSES there
+ * (itself derived from src/runner.ts's RESUMABLE plus 'running'). The client
+ * and the server cannot literally share one module across the Node/browser
+ * boundary, so this is the client's one copy of the same five literal
+ * values — used everywhere on this side that needs to know whether a
+ * calibration is "active" (blocks launching, on the model card AND the tab
+ * form): calibrationRunRow's progress/stop/resume rendering and
+ * renderCalibrationWorkflow's launch guard below. Round 2 (HIGH 1 / MED)
+ * widened this set to match the server's, but nothing then actually checked
+ * the two literal sets against each other — that pin did not exist until
+ * round 3 (HIGH 3), whose test reads this exact copy out of the real file
+ * and compares it, value for value, against src/model-profiles.ts's export
+ * (tests/frontend-model-calibration-progress.test.ts). Before that test
+ * existed, "the frontend tests pin this list against the server's" was
+ * aspirational, not true.
+ */
+const ACTIVE_CALIBRATION_STATUSES = new Set(['running', 'paused', 'pending', 'budget_exhausted', 'failed']);
+
+/** Mirrors src/model-profiles.ts's CALIBRATION_STATUS_TEXT — see its own comment for why "már fut" cannot stand in for every blocking status. */
+const CALIBRATION_BLOCK_STATUS_TEXT = {
+  running: 'már fut',
+  paused: 'szüneteltetve van',
+  pending: 'függőben van, még nem indult el',
+  budget_exhausted: 'elfogyott a kerete, ezért megállt',
+  failed: 'hibára futott'
+};
+
+/**
+ * The ADVICE half of the block notice (issue #29 review round 3, MED 2nd) —
+ * separate from CALIBRATION_BLOCK_STATUS_TEXT above, which only names the
+ * blocker's status (the VERB). Only a 'running' calibration is actually
+ * progressing toward completion on its own; telling the researcher to wait
+ * for a FAILED or budget-exhausted run "to finish" is simply false, and a
+ * paused/pending one is just as stuck without an explicit Folytatás. The
+ * previous fixed tail ("előbb fejeződjön be, vagy állítsd le lent…") used to
+ * apply unconditionally regardless of which status actually triggered it.
+ */
+const CALIBRATION_BLOCK_ADVICE = {
+  running: 'előbb fejeződjön be, vagy állítsd le lent, mielőtt újat indítanál.',
+  paused: 'folytasd (Folytatás) vagy állítsd le lent, mielőtt újat indítanál.',
+  pending: 'indítsd el (Folytatás) vagy állítsd le lent, mielőtt újat indítanál.',
+  budget_exhausted: 'folytasd (Folytatás) vagy állítsd le lent, mielőtt újat indítanál.',
+  failed: 'folytasd (Folytatás) vagy állítsd le lent, mielőtt újat indítanál.'
+};
+
 function calibrationStatusChip(status) {
   const label = CALIBRATION_STATUS_LABELS[status] || status;
   const className =
@@ -90,39 +137,78 @@ function renderStalenessReasons(reasons) {
     .join('')}</ul>A számok azt írják le, ami a mérés idején igaz volt; a mostani beállításra nem érvényesek.</div>`;
 }
 
+/** "X másodperce/perce/órája/napja" with no verb — formatElapsed below appends the status-appropriate one. */
+function elapsedDurationText(seconds) {
+  if (seconds < 60) return `${seconds} másodperce`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes} perce`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours} órája`;
+  const days = Math.floor(hours / 24);
+  return `${days} napja`;
+}
+
 /**
- * "X másodperce/perce/órája fut" for a running calibration row (issue #29) —
- * there was no elapsed-time concept anywhere in the app before this; derived
- * from the run's created_at, reusing format.js's parseUtcTimestamp so the same
+ * "X ideje fut/szüneteltetve/…" for a calibration row (issue #29) — there was
+ * no elapsed-time concept anywhere in the app before this; derived from the
+ * run's created_at, reusing format.js's parseUtcTimestamp so the same
  * "SQLite writes UTC without a zone marker" trap formatDateTime already
  * handles is not solved a second, slightly-different way here.
+ *
+ * `status` picks the verb (issue #29 review, "also worth doing"): the number
+ * is wall-clock time since `created_at`, which is NOT time spent running for
+ * anything other than `running` itself — a paused/pending/stopped run showing
+ * a growing "X perce fut" next to a badge that says otherwise claims work
+ * that is not happening. Omitting `status` (the unit-tested call shape below)
+ * keeps the original "fut" wording, since that caller only exists to pin the
+ * flooring/day-unit arithmetic, not the status wording.
  */
-function formatElapsed(createdAt) {
+function formatElapsed(createdAt, status) {
   const started = parseUtcTimestamp(createdAt);
   if (!started) return null;
-  const seconds = Math.max(0, Math.round((Date.now() - started.getTime()) / 1000));
-  if (seconds < 60) return `${seconds} másodperce fut`;
-  const minutes = Math.round(seconds / 60);
-  if (minutes < 60) return `${minutes} perce fut`;
-  const hours = Math.round(minutes / 60);
-  return `${hours} óra óta fut`;
+  // Floored, not rounded (issue #29 review MED #5): elapsed time is a floor
+  // quantity — 90s of a calibration running is "1 perce fut", not "2 perce"
+  // (that would claim 30s that have not happened yet). Same reasoning adds a
+  // day unit: without it a 10-day-old run reads as "240 óra", which is
+  // technically true but not how anyone reads elapsed time past a day.
+  const seconds = Math.max(0, Math.floor((Date.now() - started.getTime()) / 1000));
+  const duration = elapsedDurationText(seconds);
+  switch (status) {
+    case 'paused':
+      return `${duration} létrehozva, jelenleg szüneteltetve`;
+    case 'pending':
+      return `${duration} létrehozva, még nem indult el`;
+    case 'budget_exhausted':
+      return `${duration} létrehozva, a keret elfogyása miatt megállt`;
+    case 'failed':
+      return `${duration} létrehozva, hibával leállt`;
+    default:
+      return `${duration} fut`;
+  }
 }
 
 /**
  * One calibration run of this model, as a clickable row with its live status.
- * A running/paused row also shows real progress (issue #29's second defect):
- * done/total cells with a percentage, tokens/cost spent so far, and elapsed
- * time — all already available on `run` (calibrationRunsFor in model-view.js
- * merges the live progress poll over the enriched GET /api/runs row, exactly
- * like every other run view), so nothing new is fetched to render this.
+ * An active row (any status in ACTIVE_CALIBRATION_STATUSES — issue #29
+ * review round 2, HIGH 2: `pending` included, since a run stuck there is
+ * otherwise a dead end) also shows real progress (issue #29's second
+ * defect): done/total cells with a percentage, tokens/cost spent so far, and
+ * elapsed time — all already available on `run` (calibrationRunsFor in
+ * model-view.js merges the live progress poll over the enriched GET
+ * /api/runs row, exactly like every other run view), so nothing new is
+ * fetched to render this. Every active row also gets a stop control: since
+ * ANY of these statuses now blocks launching a new calibration for this
+ * model (renderCalibrationWorkflow below), each one needs a visible way out,
+ * and the server already accepts stop for all of them (src/server.ts —
+ * anything other than 'running' is marked 'stopped' directly).
  */
 function calibrationRunRow(run) {
-  const isActive = run.status === 'running' || run.status === 'paused';
+  const isActive = ACTIVE_CALIBRATION_STATUSES.has(run.status);
   const totalCells = run.totalCells ?? 0;
   const done = run.done ?? 0;
   const usage = run.usage || {};
   const pct = totalCells > 0 ? Math.min(Math.round((done / totalCells) * 100), 100) : 0;
-  const elapsed = isActive ? formatElapsed(run.created_at) : null;
+  const elapsed = isActive ? formatElapsed(run.created_at, run.status) : null;
 
   const progress = isActive
     ? `
@@ -132,6 +218,18 @@ function calibrationRunRow(run) {
       <div class="list-item-meta">${escapeHtml(
         `${formatNumber(done)} / ${formatNumber(totalCells)} cella (${pct}%) · ${formatNumber(usage.totalTokens || 0)} token · ${formatCost(usage.costUsd || 0)} USD${elapsed ? ' · ' + elapsed : ''}`
       )}</div>`
+    : '';
+
+  // Mirrors runs-list.js's runControlButtons resume set (RESUMABLE,
+  // src/runner.ts): issue #29 review round 3, HIGH 4 (second half) — this
+  // row used to offer Stop only, never Folytatás, unlike the Futtatások
+  // list's equivalent row. For a calibration 90% through that hit the
+  // budget hard stop, Stop-only means the only card-visible escape is
+  // throwing the whole spend away; resuming was reachable only by leaving
+  // the card for the Futtatások list.
+  const resumeButton = ['paused', 'budget_exhausted', 'failed', 'pending'].includes(run.status)
+    ? `<button type="button" class="btn btn-secondary btn-sm" data-action="resume" data-run="${escapeHtml(run.id)}"
+         aria-label="Kalibráció folytatása: ${escapeHtml(run.name)}">Folytatás</button>`
     : '';
 
   const stopButton = isActive
@@ -147,7 +245,7 @@ function calibrationRunRow(run) {
         <div class="list-item-meta">${escapeHtml(formatDateTime(run.created_at))}</div>
         ${progress}
       </div>
-      <div class="list-item-actions">${stopButton}${statusBadge(run.status)}</div>
+      <div class="list-item-actions">${resumeButton}${stopButton}${statusBadge(run.status)}</div>
     </div>
   `;
 }
@@ -170,11 +268,18 @@ function renderCalibrationWorkflow(entry, context) {
   const calRuns = (context && context.calibrationRuns) || [];
   const completed = calRuns.filter((r) => r.status === 'completed');
   // Issue #29: launching a SECOND calibration for the same model while one is
-  // already running double-spends the budget and hits the #16 concurrency
-  // risk. Scoped to THIS model's own runs only — a different model's launch
+  // already live double-spends the budget and hits the #16 concurrency risk.
+  // ACTIVE_CALIBRATION_STATUSES (review round 2, HIGH 1 / MED) is the SAME
+  // status set the server's guard uses (src/model-profiles.ts's
+  // ACTIVE_CALIBRATION_STATUSES, derived from runner.ts's RESUMABLE): a
+  // narrower client-side copy would show an enabled form the server then
+  // 409s, and a wider one would block launches the server would allow.
+  // Scoped to THIS model's own runs only — a different model's launch
   // control must stay enabled, since calibrationRunsFor (model-view.js)
-  // already filters calRuns down to one model before this ever sees them.
-  const runningCalibration = calRuns.find((r) => r.status === 'running');
+  // already filters calRuns down to one model, by the `calibration` config
+  // flag alone (never the run name — see that function's own comment),
+  // before this ever sees them.
+  const runningCalibration = calRuns.find((r) => ACTIVE_CALIBRATION_STATUSES.has(r.status));
   const heading = entry.status === 'missing' ? 'Kalibráció lépésről lépésre' : 'Újrakalibrálás lépésről lépésre';
 
   const step1 =
@@ -185,14 +290,26 @@ function renderCalibrationWorkflow(entry, context) {
       : `<p class="detail-note">A próba-kérdőív közönséges kérdőív: te választod meg, melyik mérje a modell
            perszóna nélküli válaszait.</p>`;
 
+  // Computed unconditionally and rendered outside launchForm (review MED #6):
+  // launchForm itself is '' whenever there is no probe questionnaire yet, and
+  // interpolating the notice INSIDE it meant a model with an active
+  // calibration but zero probe questionnaires showed no warning at all.
+  // Worded by the blocker's ACTUAL status (mirrors src/model-profiles.ts's
+  // CALIBRATION_STATUS_TEXT for the same reason: "már fut" is simply false
+  // for a paused/pending/budget_exhausted/failed blocker).
   const runningNotice = runningCalibration
-    ? `<p class="detail-note detail-note-warning">Már fut kalibráció ehhez a modellhez — előbb fejeződjön be, vagy állítsd le lent, mielőtt újat indítanál.</p>`
+    ? `<p class="detail-note detail-note-warning">Kalibráció ${escapeHtml(
+        CALIBRATION_BLOCK_STATUS_TEXT[runningCalibration.status] || runningCalibration.status
+      )} ehhez a modellhez — ${escapeHtml(
+        CALIBRATION_BLOCK_ADVICE[runningCalibration.status] ||
+          'előbb fejeződjön be, vagy állítsd le lent, mielőtt újat indítanál.'
+      )}</p>`
     : '';
 
   const launchForm =
     probes.length === 0
       ? ''
-      : `${runningNotice}<form class="model-card-calibrate-form form-grid" data-model="${escapeHtml(entry.model)}">
+      : `<form class="model-card-calibrate-form form-grid" data-model="${escapeHtml(entry.model)}">
           <div class="form-group">
             <label>Próba-kérdőív
               <select class="model-card-probe-select" required ${runningCalibration ? 'disabled' : ''}>
@@ -214,6 +331,15 @@ function renderCalibrationWorkflow(entry, context) {
       ? '<p class="detail-note">Ehhez a modellhez még nem indult kalibrációs futtatás.</p>'
       : calRuns.map(calibrationRunRow).join('');
 
+  // Preserves the researcher's own checkbox picks across a forced repaint
+  // (issue #29 review, "also worth doing") — without it, every explicit
+  // action elsewhere on the card (e.g. clicking Stop on a different run row)
+  // silently reset step 4 back to "just the newest completed run".
+  // `context.checkedRunIds`, when present, is the actual DOM selection
+  // rerenderModelDetailBody captured right before replacing the markup; its
+  // absence (a first paint, or a non-forced repaint that never touches the
+  // DOM) falls back to the original "default to the newest" behaviour.
+  const checkedRunIds = context && context.checkedRunIds;
   const recorder =
     completed.length === 0
       ? '<p class="detail-note">Amint egy kalibrációs futtatás befejeződik, itt egy kattintással profillá rögzítheted.</p>'
@@ -222,7 +348,9 @@ function renderCalibrationWorkflow(entry, context) {
              .map(
                (r, i) => `
              <div class="checkbox-item">
-               <input type="checkbox" class="model-card-runpick" id="calRunPick_${i}" value="${escapeHtml(r.id)}" ${i === 0 ? 'checked' : ''}>
+               <input type="checkbox" class="model-card-runpick" id="calRunPick_${i}" value="${escapeHtml(r.id)}" ${
+                 checkedRunIds ? (checkedRunIds.has(r.id) ? 'checked' : '') : i === 0 ? 'checked' : ''
+               }>
                <label for="calRunPick_${i}">${escapeHtml(r.name)} — ${escapeHtml(formatDateTime(r.created_at))}</label>
              </div>`
              )
@@ -241,7 +369,7 @@ function renderCalibrationWorkflow(entry, context) {
       </div>
       <div class="calibration-step">
         <h4>2. Kalibráció indítása</h4>
-        ${launchForm}
+        ${runningNotice}${launchForm}
       </div>
       <div class="calibration-step">
         <h4>3. A futtatás követése</h4>

@@ -58,7 +58,13 @@ export function requestStop(runId: string): void {
 /** Stands in for the missing persona id when keying a control cell. */
 const BASELINE_CELL_KEY = '__baseline__'
 
-const RESUMABLE = new Set(['paused', 'budget_exhausted', 'failed', 'pending'])
+/**
+ * Exported (issue #29 review round 2, HIGH 1) so the calibration concurrency
+ * guard (src/model-profiles.ts) can derive its "can a live loop still start
+ * from here" status set from this ONE list instead of re-listing it — a
+ * second hand-maintained copy is exactly how that guard went stale before.
+ */
+export const RESUMABLE = new Set(['paused', 'budget_exhausted', 'failed', 'pending'])
 
 export function isResumable(status: string): boolean {
   return RESUMABLE.has(status)
