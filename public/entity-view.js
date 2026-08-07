@@ -183,6 +183,7 @@ function closeEntityDetail(updateHash) {
 document.getElementById('entityDetailBackBtn')?.addEventListener('click', () => {
   closeEntityDetail(true);
   setActiveTab(state.activeTab || 'projects');
+  restoreDetailFocus();
 });
 
 function toggleProjectEditForm(show) {
@@ -228,6 +229,7 @@ async function handleEntityClick(target) {
   }
   const runRow = target.closest('[data-run]:not(button)');
   if (runRow) {
+    rememberDetailTrigger('data-run', runRow.dataset.run);
     setHash('runs', runRow.dataset.run);
     state.activeTab = 'runs';
     setActiveTab('runs');
@@ -236,6 +238,7 @@ async function handleEntityClick(target) {
   }
   const row = target.closest('[data-entity][data-entity-id]');
   if (!row) return;
+  rememberDetailTrigger('data-entity-id', row.dataset.entityId);
   await openEntityDetail(row.dataset.entity, row.dataset.entityId, true);
 }
 

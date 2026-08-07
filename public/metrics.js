@@ -88,10 +88,21 @@ function statusTooltip(status) {
   return STATUS_TOOLTIPS[status] || '';
 }
 
-/** Chip helper: `title` is always escaped, since tooltips end up in an attribute. */
+/**
+ * Chip helper: `title` is always escaped, since tooltips end up in an attribute.
+ *
+ * A chip that carries an explanation also becomes focusable and gets the
+ * explanation as its accessible name. The metric explanations are the substance
+ * of this UI, and a hover-only `title` reaches neither a keyboard user nor a
+ * touch screen. A chip WITHOUT an explanation stays out of the tab order — a
+ * focus stop that reveals nothing is noise.
+ */
 function chip(className, label, tooltip) {
-  const title = tooltip ? ` title="${escapeHtml(tooltip)}"` : '';
-  return `<span class="${className}"${title}>${escapeHtml(label)}</span>`;
+  if (!tooltip) return `<span class="${className}">${escapeHtml(label)}</span>`;
+  return (
+    `<span class="${className} chip-explained" title="${escapeHtml(tooltip)}" tabindex="0" role="note"` +
+    ` aria-label="${escapeHtml(label)} — ${escapeHtml(tooltip)}">${escapeHtml(label)}</span>`
+  );
 }
 
 /**

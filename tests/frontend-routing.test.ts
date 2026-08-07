@@ -5,6 +5,7 @@ interface Route {
   tab: string
   runId: string | null
   entityId: string | null
+  interviewId: string | null
 }
 
 const { parseHash, buildHash } = loadPublicScript<{
@@ -14,8 +15,8 @@ const { parseHash, buildHash } = loadPublicScript<{
 
 describe('parseHash', () => {
   it('defaults to the projects tab', () => {
-    expect(parseHash('')).toEqual({ tab: 'projects', runId: null, entityId: null })
-    expect(parseHash('#')).toEqual({ tab: 'projects', runId: null, entityId: null })
+    expect(parseHash('')).toEqual({ tab: 'projects', runId: null, entityId: null, interviewId: null })
+    expect(parseHash('#')).toEqual({ tab: 'projects', runId: null, entityId: null, interviewId: null })
   })
 
   it('parses plain tab routes', () => {
@@ -24,17 +25,26 @@ describe('parseHash', () => {
   })
 
   it('parses entity detail routes', () => {
-    expect(parseHash('#personas/abc-123')).toEqual({ tab: 'personas', runId: null, entityId: 'abc-123' })
-    expect(parseHash('#questionnaires/q1')).toEqual({ tab: 'questionnaires', runId: null, entityId: 'q1' })
+    expect(parseHash('#personas/abc-123')).toEqual({ tab: 'personas', runId: null, entityId: 'abc-123', interviewId: null })
+    expect(parseHash('#questionnaires/q1')).toEqual({ tab: 'questionnaires', runId: null, entityId: 'q1', interviewId: null })
   })
 
   it('keeps run details on the runId field', () => {
-    expect(parseHash('#runs/r1')).toEqual({ tab: 'runs', runId: 'r1', entityId: null })
+    expect(parseHash('#runs/r1')).toEqual({ tab: 'runs', runId: 'r1', entityId: null, interviewId: null })
   })
 
   it('falls back to projects for an unknown route', () => {
-    expect(parseHash('#nope')).toEqual({ tab: 'projects', runId: null, entityId: null })
-    expect(parseHash('#nope/123')).toEqual({ tab: 'projects', runId: null, entityId: null })
+    expect(parseHash('#nope')).toEqual({ tab: 'projects', runId: null, entityId: null, interviewId: null })
+    expect(parseHash('#nope/123')).toEqual({ tab: 'projects', runId: null, entityId: null, interviewId: null })
+  })
+
+  it('keeps interview details on their own field, not the entity view', () => {
+    expect(parseHash('#interviews/i1')).toEqual({
+      tab: 'interviews',
+      runId: null,
+      entityId: null,
+      interviewId: 'i1'
+    })
   })
 
   it('round-trips ids that need escaping', () => {

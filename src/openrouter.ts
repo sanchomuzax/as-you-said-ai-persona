@@ -24,8 +24,19 @@ export interface ChatOptions {
   provider?: string | undefined
 }
 
+/** One turn of a conversation, in the provider's wire format. */
+export interface ChatMessage {
+  role: 'system' | 'user' | 'assistant'
+  content: string
+}
+
 export interface ChatClient {
-  complete(model: string, prompt: string, opts: ChatOptions): Promise<ChatResult>
+  /**
+   * A bare string is the single-question case (a questionnaire cell, sent in a
+   * fresh context). A message list is a conversation with memory — only the
+   * interview mode uses it, and its results live in their own tables.
+   */
+  complete(model: string, prompt: string | readonly ChatMessage[], opts: ChatOptions): Promise<ChatResult>
 }
 
 /** Thin OpenRouter chat-completions client with retry/backoff. */
@@ -36,7 +47,11 @@ export class OpenRouterClient implements ChatClient {
     private readonly fetchFn: typeof fetch = fetch
   ) {}
 
-  async complete(model: string, prompt: string, opts: ChatOptions): Promise<ChatResult> {
+  async complete(
+    model: string,
+    prompt: string | readonly ChatMessage[],
+    opts: ChatOptions
+  ): Promise<ChatResult> {
     const maxAttempts = 3
     let lastError: unknown
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
@@ -52,8 +67,14 @@ export class OpenRouterClient implements ChatClient {
     throw new Error(`OpenRouter call failed after ${maxAttempts} attempts: ${String(lastError)}`)
   }
 
-  private async callOnce(model: string, prompt: string, opts: ChatOptions): Promise<ChatResult> {
+  private async callOnce(
+    model: string,
+    prompt: string | readonly ChatMessage[],
+    opts: ChatOptions
+  ): Promise<ChatResult> {
     const started = Date.now()
+    const messages: readonly ChatMessage[] =
+      typeof prompt === 'string' ? [{ role: 'user', content: prompt }] : prompt
     const res = await this.fetchFn(`${this.baseUrl}/chat/completions`, {
       method: 'POST',
       headers: {
@@ -62,7 +83,7 @@ export class OpenRouterClient implements ChatClient {
       },
       body: JSON.stringify({
         model,
-        messages: [{ role: 'user', content: prompt }],
+        messages,
         temperature: opts.temperature,
         seed: opts.seed,
         usage: { include: true },

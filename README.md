@@ -48,7 +48,18 @@ recorded with full experimental metadata so runs are reproducible and auditable.
   OpenRouter spreads one model id across several providers with different quantization —
   measured: 7 providers in a 12-cell run, and a 2.5% prompt-cache hit rate. With pinning:
   one provider and 43%.
-- **Token budget tracking** per run / per persona / global, with hard stops.
+- **Interview mode** (exploratory, explicitly *not* measurement): a free-form,
+  multi-turn conversation with one persona, for hypothesis generation before a
+  questionnaire is designed. It carries memory across turns — which is precisely why it
+  can never be measurement — so it lives in its own tables (`interviews`,
+  `interview_messages`), never touches `responses`, and is never aggregated into a run.
+  Every turn records full provenance (exact message list sent, raw output, model version,
+  provider, temperature, seed, tokens, cost, latency); abstention is marked as an
+  evidence gap; the token budget hard stop applies. The UI states in both the list and
+  the transcript that the output is a hypothesis, not evidence.
+- **Token budget tracking** per run / per persona / global, with hard stops. Interviews
+  draw on the same budget but are booked under their own ledger scope, so the cost of
+  the measurement stays separable from the cost of exploration.
 - **Simple auth** (env-based credentials for the single-researcher phase).
 
 ## Stack

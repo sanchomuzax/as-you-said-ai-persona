@@ -11,6 +11,8 @@ import { BudgetTracker } from './lib/budget.js'
 import { SurveyRunner, runEvents, requestPause, requestStop, isResumable, type RunConfig } from './runner.js'
 import { computeRunResults } from './lib/results.js'
 import { buildEvaluationPrompt } from './lib/evaluate.js'
+import { toCsv } from './lib/csv.js'
+import { registerInterviewRoutes } from './interviews.js'
 import {
   checkCredentials,
   createSessionToken,
@@ -212,7 +214,10 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
 
   app.get('/api/budget', async () => ({
     success: true,
-    data: { global: budget.globalUsage(), limits: budget.limits() }
+    // byScope separates measurement spend from exploratory interview spend: the
+    // budget is shared, so the single global number alone would hide which of
+    // the two consumed it.
+    data: { global: budget.globalUsage(), byScope: budget.usageByScope(), limits: budget.limits() }
   }))
 
   // --- Projects ---
@@ -762,15 +767,14 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
     const rows = db
       .prepare(`SELECT ${CSV_COLUMNS.join(', ')} FROM responses WHERE run_id = ? ORDER BY created_at`)
       .all(id) as Record<string, unknown>[]
-    const header = CSV_COLUMNS
-    const csv = [
-      header.join(','),
-      ...rows.map((r) => header.map((h) => csvEscape(r[h])).join(','))
-    ].join('\n')
     reply.header('Content-Type', 'text/csv; charset=utf-8')
     reply.header('Content-Disposition', `attachment; filename="run-${id}.csv"`)
-    return csv
+    return toCsv(CSV_COLUMNS, rows)
   })
+
+  // Exploratory interviews: separate tables, separate routes, never aggregated
+  // into a run. Registered here so they share the session hook and the budget.
+  registerInterviewRoutes(app, { db, models, client, budget })
 
   // --- SSE live updates ---
   app.get('/api/events', async (req, reply) => {
@@ -798,11 +802,7 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
   return app
 }
 
-/**
- * Explicit column list: `SELECT *` returns migrated columns in a different order
- * than a freshly created database, which would make exports from two machines
- * impossible to diff.
- */
+/** Explicit column list — see the note on `toCsv`. */
 const CSV_COLUMNS = [
   'id', 'run_id', 'persona_id', 'question_id', 'model_requested', 'model_version', 'provider',
   'temperature', 'seed', 'prompt_style', 'elicitation_mode', 'permutation_json', 'label_style',
@@ -835,9 +835,4 @@ function parseJsonOrNull(value: unknown): unknown {
   } catch {
     return null
   }
-}
-
-function csvEscape(value: unknown): string {
-  const s = value === null || value === undefined ? '' : String(value)
-  return /[",\n]/.test(s) ? `"${s.replaceAll('"', '""')}"` : s
 }

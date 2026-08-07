@@ -56,6 +56,7 @@
       <button class="tab-btn" data-tab="personas">Perszónák</button>
       <button class="tab-btn" data-tab="questionnaires">Kérdőívek</button>
       <button class="tab-btn" data-tab="runs">Futtatások</button>
+      <button class="tab-btn" data-tab="interviews">Interjúk</button>
     </nav>
 
     <!-- Tab Content -->
@@ -231,7 +232,88 @@
           </div>
         </div>
       </div>
+      <!-- Interviews Tab -->
+      <div id="tab-interviews" class="tab-pane">
+        <div class="tab-section">
+          <p id="interviewDisclaimer" class="methodology-warning"></p>
+        </div>
+        <div class="tab-section">
+          <h2>Interjúk szűrése</h2>
+          <div class="filter-bar">
+            <div class="form-group" style="margin-bottom: 0;">
+              <label for="interviewProjectSelect">Projekt</label>
+              <select id="interviewProjectSelect">
+                <option value="">-- Válassz projektet --</option>
+              </select>
+            </div>
+          </div>
+        </div>
+        <div class="tab-section">
+          <h2>Interjú indítása</h2>
+          <form id="interviewForm" class="form-grid">
+            <div class="form-group">
+              <label for="interviewTitle">Az interjú címe</label>
+              <input type="text" id="interviewTitle" required placeholder="pl. Akciókeresési szokások — feltárás">
+            </div>
+            <div class="form-group">
+              <label for="interviewPersona">Perszóna</label>
+              <select id="interviewPersona" required>
+                <option value="">-- Válassz perszónát --</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label for="interviewModel">Modell</label>
+              <select id="interviewModel" required></select>
+            </div>
+            <div class="form-group">
+              <label for="interviewProvider" title="Ugyanazt a modellt az OpenRouter több szolgáltatóhoz irányíthatja, eltérő kvantálással. Ha megadsz egyet, minden forduló oda megy, fallback nélkül.">Szolgáltató rögzítése (opcionális)</label>
+              <input type="text" id="interviewProvider" placeholder="pl. DeepInfra">
+            </div>
+            <div class="form-group">
+              <label for="interviewTemperature">Hőmérséklet (0-2)</label>
+              <input type="number" id="interviewTemperature" min="0" max="2" step="0.1" value="0.8">
+            </div>
+            <div class="form-group">
+              <label for="interviewSeed">Seed</label>
+              <input type="number" id="interviewSeed" step="1" value="0">
+            </div>
+            <button type="submit" class="btn btn-primary">Interjú indítása</button>
+          </form>
+        </div>
+        <div class="tab-section">
+          <h2>Interjúk</h2>
+          <div id="interviewsList" class="list-container">
+            <p class="placeholder">Betöltés...</p>
+          </div>
+        </div>
+      </div>
     </main>
+
+    <!-- Interview Detail View -->
+    <section id="interviewDetailView" class="interview-detail-view" style="display: none;">
+      <div class="run-detail-header">
+        <button id="interviewDetailBackBtn" class="btn btn-secondary back-btn">&larr; Vissza</button>
+        <div class="run-detail-title-row">
+          <h2 id="interviewDetailTitle" tabindex="-1">Interjú</h2>
+          <span class="badge badge-kind">feltáró beszélgetés</span>
+        </div>
+        <p id="interviewDetailDisclaimer" class="methodology-warning"></p>
+        <div id="interviewDetailMeta" class="interview-meta"></div>
+        <div class="run-detail-export">
+          <a id="interviewExportLink" href="" download class="btn btn-secondary">CSV letöltés</a>
+        </div>
+      </div>
+      <div id="interviewTranscript" class="interview-transcript"><p class="placeholder">Betöltés...</p></div>
+      <div class="interview-composer">
+        <label for="interviewQuestion" class="sr-only">Kérdés a perszónához</label>
+        <textarea id="interviewQuestion" rows="3" placeholder="Kérdés a perszónához (Enter küldi, Shift+Enter új sor)"></textarea>
+        <div class="interview-composer-actions">
+          <button id="interviewSendBtn" class="btn btn-primary">Kérdés küldése</button>
+          <span id="interviewSpinner" class="spinner" style="display: none;"></span>
+          <span id="interviewError" class="error-message"></span>
+        </div>
+      </div>
+    </section>
 
     <!-- Response provenance panel -->
     <aside id="provenancePanel" class="provenance-panel" style="display: none;" aria-label="Válasz proveniencia">
@@ -269,6 +351,9 @@
           </div>
         </div>
         <div class="run-detail-stats" id="runDetailStats"></div>
+        <!-- Status and progress change while the researcher reads the page; a
+             screen reader is otherwise never told that anything moved. -->
+        <p id="runStatusLive" class="sr-only" aria-live="polite" role="status"></p>
         <div id="runStaleVersions"></div>
         <div class="run-detail-export">
           <a id="runExportLink" href="" download class="btn btn-secondary">CSV letöltés</a>
@@ -322,14 +407,18 @@
   </div>
 
   <script src="format.js"></script>
+  <script src="parsers.js"></script>
   <script src="version-diff.js"></script>
   <script src="markdown.js"></script>
   <script src="metrics.js"></script>
   <script src="routing.js"></script>
+  <script src="focus-return.js"></script>
   <script src="detail.js"></script>
   <script src="provenance.js"></script>
+  <script src="interview.js"></script>
   <script src="app.js"></script>
   <script src="entity-view.js"></script>
   <script src="run-view.js"></script>
+  <script src="interview-view.js"></script>
 </body>
 </html>

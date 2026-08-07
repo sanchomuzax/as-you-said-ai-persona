@@ -28,7 +28,9 @@ function closeRunDetail(updateHash) {
 document.getElementById('runDetailBackBtn')?.addEventListener('click', () => {
   closeRunDetail(true);
   setActiveTab('runs');
-  refreshRunsList();
+  // The list is re-rendered here, so focus is restored only after the new
+  // markup is in place — on the card with the same id, not the discarded node.
+  void refreshRunsList().then(restoreDetailFocus);
 });
 
 function renderRunDetailHeaderFromCache(runId) {
@@ -55,6 +57,7 @@ function renderRunDetailHeader(run, progress) {
   const invPct = invalidPct(invalid, totalCells);
 
   document.getElementById('runDetailProgressFill').style.width = pct + '%';
+  announceRunProgress(status, done, totalCells, invalid, abstained);
   document.getElementById('runDetailStats').innerHTML = runStatChips({
     done,
     totalCells,
@@ -118,6 +121,24 @@ async function loadSubtab(name) {
   } else if (name === 'evaluation') {
     await loadEvaluationTab(state.currentRunId);
   }
+}
+
+/**
+ * The progress bar and the chips are purely visual. This is the same information
+ * as one sentence, written into a polite live region — announced only when it
+ * actually changes, so a poll every few seconds does not talk over the reader.
+ */
+function announceRunProgress(status, done, totalCells, invalid, abstained) {
+  const region = document.getElementById('runStatusLive');
+  if (!region) return;
+  const parts = [
+    `Állapot: ${statusLabel(status)}`,
+    `${formatNumber(done)} / ${formatNumber(totalCells)} cella kész`
+  ];
+  if (invalid > 0) parts.push(`${formatNumber(invalid)} nem értelmezhető`);
+  if (abstained > 0) parts.push(`${formatNumber(abstained)} tartózkodás`);
+  const message = parts.join(', ') + '.';
+  if (region.textContent !== message) region.textContent = message;
 }
 
 function renderOptionBars(question) {

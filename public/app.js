@@ -14,7 +14,9 @@ let state = {
   eventSource: null,
   progressPollTimer: null,
   activeTab: 'projects',
-  currentEntity: null
+  currentEntity: null,
+  interviews: [],
+  currentInterviewId: null
 };
 
 // API wrapper
@@ -41,57 +43,6 @@ async function apiCall(method, path, body = null) {
 }
 
 // Utility functions
-/**
- * "kulcs: érték" lines. The split is on the FIRST colon only: demographic values
- * routinely contain colons ("széleskörű: külföldi hírek (91%)…"), and splitting
- * on every colon silently truncated the anchor data on a version round-trip.
- */
-function parseDemographics(text) {
-  const demographics = {};
-  String(text || '').split('\n').forEach(line => {
-    const trimmed = line.trim();
-    const separator = trimmed.indexOf(':');
-    if (separator > 0) {
-      const key = trimmed.slice(0, separator).trim();
-      const value = trimmed.slice(separator + 1).trim();
-      if (key && value) demographics[key] = value;
-    }
-  });
-  return demographics;
-}
-
-/**
- * Question blocks: a question line, then "- option" lines. The question line may
- * end with a marker like `[multi_choice]` or `[multi_choice, descending]`, which
- * is how the edit form round-trips the scale settings — without it a version edit
- * would silently re-ask a multi-select question as a sum-to-1 distribution.
- */
-function parseQuestions(text) {
-  const questions = [];
-  const blocks = String(text || '').split(/\n\s*\n/).filter(b => b.trim());
-
-  blocks.forEach(block => {
-    const lines = block.trim().split('\n');
-    if (lines.length === 0) return;
-    const raw = lines[0].trim();
-    const marker = raw.match(/\[([a-z_]+)(?:\s*,\s*(ascending|descending))?\]$/i);
-    const questionText = marker ? raw.slice(0, marker.index).trim() : raw;
-    const options = lines.slice(1)
-      .filter(l => l.trim().startsWith('- '))
-      .map(l => l.trim().substring(2));
-
-    if (questionText && options.length > 0) {
-      const question = { text: questionText, options };
-      if (marker) {
-        question.scaleType = marker[1].toLowerCase();
-        question.scaleDirection = (marker[2] || 'ascending').toLowerCase();
-      }
-      questions.push(question);
-    }
-  });
-  return questions;
-}
-
 /**
  * One response's values. Single choice is a distribution, so each option is shown
  * as its share; multi choice values are independent probabilities and are shown
@@ -150,6 +101,10 @@ async function applyRoute(route) {
     state.activeTab = 'runs';
     setActiveTab('runs');
     await openRunDetail(route.runId, false);
+  } else if (route.interviewId) {
+    state.activeTab = 'interviews';
+    setActiveTab('interviews');
+    await openInterviewDetail(route.interviewId, false);
   } else if (route.entityId) {
     state.activeTab = route.tab;
     setActiveTab(route.tab);
@@ -157,6 +112,7 @@ async function applyRoute(route) {
   } else {
     closeRunDetail(false);
     closeEntityDetail(false);
+    closeInterviewDetail(false);
     state.activeTab = route.tab;
     setActiveTab(route.tab);
     setHash(route.tab, null);
@@ -179,6 +135,8 @@ function showAppScreen() {
 function setActiveTab(tabName) {
   document.getElementById('runDetailView').style.display = 'none';
   document.getElementById('entityDetailView').style.display = 'none';
+  const interviewView = document.getElementById('interviewDetailView');
+  if (interviewView) interviewView.style.display = 'none';
   document.querySelector('.tab-content').style.display = 'block';
   document.querySelectorAll('.tab-pane').forEach(p => p.classList.remove('active'));
   document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
@@ -207,7 +165,8 @@ function updateProjectDropdowns() {
   const selects = [
     document.getElementById('personaProjectSelect'),
     document.getElementById('runProjectSelect'),
-    document.getElementById('questionnaireProjectSelect')
+    document.getElementById('questionnaireProjectSelect'),
+    document.getElementById('interviewProjectSelect')
   ];
 
   selects.forEach(select => {
@@ -228,7 +187,7 @@ function selectProjectEverywhere(projectId) {
   } else {
     localStorage.removeItem('selectedProjectId');
   }
-  ['personaProjectSelect', 'runProjectSelect', 'questionnaireProjectSelect'].forEach(id => {
+  ['personaProjectSelect', 'runProjectSelect', 'questionnaireProjectSelect', 'interviewProjectSelect'].forEach(id => {
     const el = document.getElementById(id);
     if (el) el.value = projectId || '';
   });
@@ -370,7 +329,10 @@ document.getElementById('runsList')?.addEventListener('click', async (e) => {
   }
   // Clicking anywhere on the card opens it, like every other list in the app.
   const card = e.target.closest('.run-card[data-run-card]');
-  if (card) await handleRunAction('details', card.dataset.runCard);
+  if (card) {
+    rememberDetailTrigger('data-run-card', card.dataset.runCard);
+    await handleRunAction('details', card.dataset.runCard);
+  }
 });
 
 document.getElementById('runDetailControls')?.addEventListener('click', async (e) => {
@@ -573,6 +535,18 @@ document.getElementById('runProjectSelect')?.addEventListener('change', async (e
   }
 });
 
+document.getElementById('interviewProjectSelect')?.addEventListener('change', async (e) => {
+  const projectId = e.target.value;
+  selectProjectEverywhere(projectId);
+  if (projectId) {
+    await reloadPersonasList();
+  } else {
+    state.personas = [];
+    renderInterviewPersonaOptions();
+  }
+  await refreshInterviewsList();
+});
+
 document.getElementById('questionnaireProjectSelect')?.addEventListener('change', async (e) => {
   const projectId = e.target.value;
   selectProjectEverywhere(projectId);
@@ -593,6 +567,7 @@ async function reloadPersonasList() {
     state.personas = personas;
     renderPersonasList();
     renderPersonasCheckboxes();
+    renderInterviewPersonaOptions();
   } catch (err) {
     alert('Perszónák betöltése sikertelen: ' + err.message);
   }
@@ -725,6 +700,7 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
     state.activeTab = tabName;
     closeRunDetail(false);
     closeEntityDetail(false);
+    closeInterviewDetail(false);
     setActiveTab(tabName);
     setHash(tabName, null);
   });
@@ -761,6 +737,9 @@ async function loadInitialData() {
     modelSelect.innerHTML = state.models.map(m =>
       `<option value="${escapeHtml(m.id)}" ${m.id === models.default ? 'selected' : ''}>${escapeHtml(m.label)}</option>`
     ).join('');
+    renderInterviewModelOptions(models.default);
+    renderInterviewDisclaimers();
+    renderInterviewPersonaOptions();
 
     // Restore selected project from localStorage
     const storedProjectId = localStorage.getItem('selectedProjectId');
@@ -774,6 +753,10 @@ async function loadInitialData() {
       renderPersonasList();
       renderPersonasCheckboxes();
     }
+    // After the stored project is restored, so the list is not fetched twice —
+    // the first, unfiltered fetch used to paint under a "no interview in this
+    // project" empty state.
+    await refreshInterviewsList();
 
     subscribeToEvents();
     startProgressPolling();

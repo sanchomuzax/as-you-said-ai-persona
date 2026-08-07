@@ -32,26 +32,43 @@ describe('answerLabel', () => {
   })
 })
 
-describe('parseDemographics (loaded from app.js is DOM-bound; logic mirrored here)', () => {
-  // The parser lives in app.js next to the DOM wiring; this asserts the contract
-  // the version round-trip depends on: only the first colon separates key from value.
-  const parse = (text: string): Record<string, string> => {
-    const out: Record<string, string> = {}
-    text.split('\n').forEach((line) => {
-      const trimmed = line.trim()
-      const sep = trimmed.indexOf(':')
-      if (sep > 0) {
-        const key = trimmed.slice(0, sep).trim()
-        const value = trimmed.slice(sep + 1).trim()
-        if (key && value) out[key] = value
-      }
-    })
-    return out
-  }
+const { parseDemographics, parseQuestions } = loadPublicScript<{
+  parseDemographics: (text: string) => Record<string, string>
+  parseQuestions: (text: string) => { text: string; options: string[]; scaleType?: string; scaleDirection?: string }[]
+}>('parsers.js', '{ parseDemographics, parseQuestions }')
 
+// These used to be mirrored in the test because they lived inside the DOM-bound
+// app.js. They now live in parsers.js and the real implementation is under test.
+describe('parseDemographics', () => {
   it('keeps everything after the first colon', () => {
-    expect(parse('hírérdeklődés: széleskörű: külföldi hírek (91%), belföldi (89%)')).toEqual({
+    expect(parseDemographics('hírérdeklődés: széleskörű: külföldi hírek (91%), belföldi (89%)')).toEqual({
       hírérdeklődés: 'széleskörű: külföldi hírek (91%), belföldi (89%)'
     })
+  })
+
+  it('ignores lines without a key or a value', () => {
+    expect(parseDemographics('kor: 34\n\n: üres\nnincs kettőspont\nnem:')).toEqual({ kor: '34' })
+  })
+})
+
+describe('parseQuestions', () => {
+  it('reads a question block with its options', () => {
+    expect(parseQuestions('Kérdés?\n- A\n- B')).toEqual([{ text: 'Kérdés?', options: ['A', 'B'] }])
+  })
+
+  // Without the marker round-trip a version edit silently re-asks a
+  // multi-select question as a sum-to-1 distribution.
+  it('round-trips the scale markers', () => {
+    expect(parseQuestions('Kérdés? [multi_choice, descending]\n- A\n- B')).toEqual([
+      { text: 'Kérdés?', options: ['A', 'B'], scaleType: 'multi_choice', scaleDirection: 'descending' }
+    ])
+  })
+
+  it('defaults the direction when only the scale type is marked', () => {
+    expect(parseQuestions('Kérdés? [multi_choice]\n- A\n- B')[0]?.scaleDirection).toBe('ascending')
+  })
+
+  it('drops a block with no options', () => {
+    expect(parseQuestions('Csak egy kérdés?')).toEqual([])
   })
 })

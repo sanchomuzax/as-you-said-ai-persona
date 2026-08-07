@@ -59,6 +59,12 @@ function migrate(db: DatabaseSync): void {
   if (!ledgerCols.some((c) => c.name === 'cached_tokens')) {
     db.exec('ALTER TABLE token_ledger ADD COLUMN cached_tokens INTEGER NOT NULL DEFAULT 0')
   }
+  // Interviews spend from the same budget but are not measurement. Without this
+  // column a later "what did the runs cost" query would silently include them;
+  // every pre-existing row predates interviews, so the 'run' default is correct.
+  if (!ledgerCols.some((c) => c.name === 'scope')) {
+    db.exec("ALTER TABLE token_ledger ADD COLUMN scope TEXT NOT NULL DEFAULT 'run'")
+  }
   // Older evaluations have no coverage snapshot; NULL means "unknown", which the
   // UI shows as an unmarked evaluation rather than claiming it was complete.
   const evaluationCols = db.prepare('PRAGMA table_info(run_evaluations)').all() as unknown as { name: string }[]
@@ -257,13 +263,63 @@ ${RESPONSES_TABLE}
 
 CREATE TABLE IF NOT EXISTS token_ledger (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
+  -- a run id or an interview id, told apart by the scope column; the hard stop
+  -- and the global budget deliberately span both
   run_id TEXT NOT NULL,
   prompt_tokens INTEGER NOT NULL,
   completion_tokens INTEGER NOT NULL,
   cached_tokens INTEGER NOT NULL DEFAULT 0,
   cost_usd REAL NOT NULL DEFAULT 0,
+  -- 'run' | 'interview' — exploratory spend must stay separable from measurement
+  scope TEXT NOT NULL DEFAULT 'run',
   ts TEXT NOT NULL DEFAULT (datetime('now'))
 );
+
+-- Interviews are exploratory conversations WITH memory, the opposite of the
+-- per-question memory reset the runner enforces. They therefore live in their
+-- own tables: nothing here may ever reach the responses table or the run
+-- aggregation.
+CREATE TABLE IF NOT EXISTS interviews (
+  id TEXT PRIMARY KEY,
+  project_id TEXT REFERENCES projects(id),
+  persona_id TEXT NOT NULL REFERENCES personas(id),
+  title TEXT NOT NULL,
+  model_requested TEXT NOT NULL,
+  temperature REAL NOT NULL,
+  seed INTEGER NOT NULL,
+  provider TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS interview_messages (
+  id TEXT PRIMARY KEY,
+  interview_id TEXT NOT NULL REFERENCES interviews(id),
+  -- 1-based position in the conversation; the researcher question and the
+  -- persona answer are separate turns
+  turn INTEGER NOT NULL,
+  role TEXT NOT NULL,
+  content TEXT NOT NULL,
+  -- persona turns only: the exact message list sent, and the untouched output
+  prompt_rendered TEXT,
+  raw_response TEXT,
+  model_requested TEXT,
+  model_version TEXT,
+  provider TEXT,
+  temperature REAL,
+  seed INTEGER,
+  -- an evidence gap, not an error: the persona said the profile gives no basis
+  abstained INTEGER NOT NULL DEFAULT 0,
+  prompt_tokens INTEGER,
+  completion_tokens INTEGER,
+  cached_tokens INTEGER NOT NULL DEFAULT 0,
+  cost_usd REAL,
+  cache_discount_usd REAL,
+  latency_ms INTEGER,
+  openrouter_request_id TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_interview_turn ON interview_messages(interview_id, turn);
 
 CREATE TABLE IF NOT EXISTS run_evaluations (
   id TEXT PRIMARY KEY,

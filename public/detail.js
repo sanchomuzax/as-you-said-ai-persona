@@ -43,9 +43,26 @@ function detailKeyValues(obj, emptyText) {
     .join('')}</div>`;
 }
 
+/**
+ * A screen reader reads the title and the meta line and then has no idea what
+ * the row does, so the action is named explicitly per entity kind.
+ */
+const ENTITY_OPEN_LABELS = {
+  projects: 'Projekt megnyitása',
+  personas: 'Perszóna megnyitása',
+  questionnaires: 'Kérdőív megnyitása',
+  runs: 'Futtatás megnyitása'
+};
+
+function openLabel(kind, title) {
+  const action = ENTITY_OPEN_LABELS[kind] || 'Megnyitás';
+  return escapeHtml(`${action}: ${title}`);
+}
+
 function entityListItem(kind, id, title, meta) {
   return `
-    <div class="list-item list-item-clickable" data-entity="${escapeHtml(kind)}" data-entity-id="${escapeHtml(id)}" role="button" tabindex="0">
+    <div class="list-item list-item-clickable" data-entity="${escapeHtml(kind)}" data-entity-id="${escapeHtml(id)}"
+         role="button" tabindex="0" aria-label="${openLabel(kind, title)}">
       <div>
         <div class="list-item-title">${escapeHtml(title)}</div>
         ${meta ? `<div class="list-item-meta">${escapeHtml(meta)}</div>` : ''}
@@ -99,7 +116,8 @@ function renderProjectDetail(project, context) {
     ? runs
         .map(
           (r) => `
-      <div class="list-item list-item-clickable" data-run="${escapeHtml(r.id)}" role="button" tabindex="0">
+      <div class="list-item list-item-clickable" data-run="${escapeHtml(r.id)}"
+           role="button" tabindex="0" aria-label="${openLabel('runs', r.name)}">
         <div>
           <div class="list-item-title">${escapeHtml(r.name)}</div>
           <div class="list-item-meta">${escapeHtml(formatDateTime(r.created_at))}</div>
@@ -228,7 +246,8 @@ function renderVersionHistory(versions) {
       const badge = version.isLatest ? ' <span class="badge badge-kind">legfrissebb</span>' : '';
       const kind = version.questions ? 'questionnaires' : 'personas';
       return `
-        <div class="version-entry list-item-clickable" data-entity="${kind}" data-entity-id="${escapeHtml(version.id)}" role="button" tabindex="0">
+        <div class="version-entry list-item-clickable" data-entity="${kind}" data-entity-id="${escapeHtml(version.id)}"
+             role="button" tabindex="0" aria-label="${openLabel(kind, `v${version.version}`)}">
           <div class="version-entry-title">v${escapeHtml(version.version)}${badge}
             <span class="version-entry-date">${escapeHtml(formatDateTime(version.createdAt))}</span>
           </div>

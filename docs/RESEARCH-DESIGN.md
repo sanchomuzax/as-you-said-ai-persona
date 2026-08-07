@@ -133,7 +133,24 @@ responses(id, run_id, persona_id, question_id,
           is_valid, abstained,              -- invalid/refused rows are KEPT, flagged
           prompt_tokens, completion_tokens, cost_usd, latency_ms,
           openrouter_request_id, created_at)   -- append-only, never updated
-token_ledger(id, run_id, ts, prompt_tokens, completion_tokens, cost_usd)
+token_ledger(id, run_id, ts, prompt_tokens, completion_tokens, cost_usd,
+             scope)                       -- 'run' | 'interview': exploratory spend must
+                                          -- stay separable from measurement spend
+
+-- Exploratory interview mode. Deliberately memory-carrying (the opposite of the
+-- per-question reset the runner enforces), therefore NOT measurement and kept out
+-- of `responses` and of every run aggregation by construction — separate tables,
+-- separate routes, separate export.
+interviews(id, project_id, persona_id, title,
+           model_requested, temperature, seed, provider, created_at)
+interview_messages(id, interview_id, turn, role,          -- researcher | persona
+           content,                       -- displayed text (abstention marker stripped)
+           prompt_rendered,               -- persona turns: the EXACT message list sent
+           raw_response,                  -- untouched model output
+           model_requested, model_version, provider, temperature, seed,
+           abstained,                     -- evidence gap, never an error
+           prompt_tokens, completion_tokens, cached_tokens, cost_usd,
+           cache_discount_usd, latency_ms, openrouter_request_id, created_at)
 ```
 
 Every response row stores the **exact rendered prompt**, the permutation used, all model
@@ -159,6 +176,22 @@ Metrics computable directly from this schema: **Repetition Stability** (same see
 3. Each cell = one stateless API call (fresh context), retried with backoff; responses
    parsed (JSON distribution), validated, appended to `responses`.
 4. SSE stream updates the dashboard; export as CSV/JSON including full config.
+
+### 3.5 Interview mode (exploratory, not a measurement)
+
+The literature places synthetic personas on their firmest ground in the *early*,
+hypothesis-generating phase — before a questionnaire exists. Interview mode serves that
+phase and nothing else:
+
+1. One persona, one conversation, free-form questions. The whole history is replayed on
+   every turn, so the persona remembers — the opposite of the runner's per-question
+   memory reset, and the reason an interview can never be aggregated as data.
+2. The budget is checked before every turn; the spend is booked under scope `interview`.
+3. The persona is instructed to open with an abstention marker when the profile gives it
+   no basis. That turn is recorded as an evidence gap (a statement about the persona's
+   coverage), never as an error or an invalid response.
+4. Nothing in the UI may present a transcript as verified, traceable or proven. The
+   output is a hypothesis to be checked against real human data (TSTR).
 
 ## 4. Delivery phases
 

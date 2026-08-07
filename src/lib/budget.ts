@@ -28,12 +28,18 @@ export class BudgetTracker {
     private readonly config: BudgetConfig
   ) {}
 
-  record(runId: string, spend: SpendRecord): void {
+  /**
+   * `scope` says what the id refers to: a measured run, or an exploratory
+   * interview. Both draw on the same budget — a conversation costs real tokens —
+   * but an analysis of what the measurement cost must be able to exclude the
+   * interviews, and that is only possible if the ledger records which is which.
+   */
+  record(runId: string, spend: SpendRecord, scope: 'run' | 'interview' = 'run'): void {
     this.db
       .prepare(
-        'INSERT INTO token_ledger (run_id, prompt_tokens, completion_tokens, cached_tokens, cost_usd) VALUES (?, ?, ?, ?, ?)'
+        'INSERT INTO token_ledger (run_id, prompt_tokens, completion_tokens, cached_tokens, cost_usd, scope) VALUES (?, ?, ?, ?, ?, ?)'
       )
-      .run(runId, spend.promptTokens, spend.completionTokens, spend.cachedTokens ?? 0, spend.costUsd)
+      .run(runId, spend.promptTokens, spend.completionTokens, spend.cachedTokens ?? 0, spend.costUsd, scope)
   }
 
   canSpend(runId: string): boolean {
@@ -65,6 +71,23 @@ export class BudgetTracker {
         )
         .get()
     )
+  }
+
+  /**
+   * What the measurement cost versus what exploration cost. The global counter
+   * deliberately spans both — the money is spent either way — but a reader who
+   * sees one number cannot tell how much of it was questionnaire data.
+   */
+  usageByScope(): { run: Usage; interview: Usage } {
+    const forScope = (scope: string): Usage =>
+      this.sumRow(
+        this.db
+          .prepare(
+            'SELECT COALESCE(SUM(prompt_tokens),0) p, COALESCE(SUM(completion_tokens),0) c, COALESCE(SUM(cached_tokens),0) cached, COALESCE(SUM(cost_usd),0) cost FROM token_ledger WHERE scope = ?'
+          )
+          .get(scope)
+      )
+    return { run: forScope('run'), interview: forScope('interview') }
   }
 
   limits(): BudgetConfig {
