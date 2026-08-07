@@ -47,10 +47,15 @@ function parsedRunConfig(run) {
 }
 
 /**
- * This model's calibration runs, newest first, with the live-polled status
- * winning over the row status (same precedence as every run list). Recognized
- * by the config marker the calibrate endpoint writes; runs launched before the
- * marker existed are caught by the launcher's own naming as a fallback.
+ * This model's calibration runs, newest first, with the live-polled progress
+ * winning over the row's own fields (same precedence as runs-list.js's
+ * renderRunCard) — a running calibration gets fresher numbers from the 5s
+ * poll (runs-list.js's pollRunningProgress), everything else uses the
+ * already-fetched GET /api/runs row (issue #22's enriched fields), so this
+ * never fetches anything of its own (issue #29: no new endpoint, no second
+ * timer). Recognized by the config marker the calibrate endpoint writes; runs
+ * launched before the marker existed are caught by the launcher's own naming
+ * as a fallback.
  */
 function calibrationRunsFor(modelId) {
   return (state.runs || [])
@@ -59,12 +64,19 @@ function calibrationRunsFor(modelId) {
       if (config.model !== modelId) return false;
       return config.calibration === true || run.name === `Kalibráció — ${modelId}`;
     })
-    .map((run) => ({
-      id: run.id,
-      name: run.name,
-      status: (state.runProgress[run.id] && state.runProgress[run.id].status) || run.status,
-      created_at: run.created_at
-    }))
+    .map((run) => {
+      const fallback = runProgressFromRow(run);
+      const live = state.runProgress[run.id] || {};
+      return {
+        id: run.id,
+        name: run.name,
+        status: live.status || run.status,
+        created_at: run.created_at,
+        totalCells: live.totalCells ?? fallback.totalCells,
+        done: live.done ?? fallback.done,
+        usage: live.usage || fallback.usage
+      };
+    })
     .sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)));
 }
 
@@ -141,11 +153,8 @@ function renderProfileRunPicker() {
 async function openModelDetail(modelId, updateHash = true) {
   const view = document.getElementById('modelDetailView');
   if (!view) return;
+  closeAllDetailViews('modelDetailView');
   document.querySelector('.tab-content').style.display = 'none';
-  document.getElementById('runDetailView').style.display = 'none';
-  document.getElementById('entityDetailView').style.display = 'none';
-  const interviewView = document.getElementById('interviewDetailView');
-  if (interviewView) interviewView.style.display = 'none';
   view.style.display = 'block';
   state.currentModelId = modelId;
   if (updateHash) setHash('models', modelId);
@@ -334,6 +343,15 @@ document.addEventListener('DOMContentLoaded', () => {
       }
       return;
     }
+    // The calibration row's own stop control (issue #29): checked before the
+    // row-click branch below, since the button sits INSIDE the row that also
+    // carries data-cal-run — without this it would both stop the run and
+    // navigate to its detail from the same click.
+    const stopBtn = e.target.closest('[data-action="stop"]');
+    if (stopBtn) {
+      await handleRunAction('stop', stopBtn.dataset.run);
+      return;
+    }
     const runRow = e.target.closest('[data-cal-run]');
     if (runRow) {
       rememberDetailTrigger('data-cal-run', runRow.dataset.calRun, detailBody);
@@ -343,6 +361,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
   detailBody?.addEventListener('keydown', async (e) => {
     if (e.key !== 'Enter' && e.key !== ' ') return;
+    // A real <button> (e.g. the stop control above) already handles its own
+    // Enter/Space activation — preventDefault()ing that here to redirect it
+    // into "open the run detail" would silently break stopping by keyboard.
+    if (e.target.closest('button, input, select, textarea')) return;
     const runRow = e.target.closest('[data-cal-run]');
     if (!runRow) return;
     e.preventDefault();

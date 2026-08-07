@@ -27,8 +27,8 @@ async function fetchEntity(kind, id) {
 
 async function openEntityDetail(kind, id, updateHash) {
   if (!ENTITY_KIND_LABELS[kind]) return;
+  closeAllDetailViews('entityDetailView');
   state.currentEntity = { kind, id };
-  closeRunDetail(false);
   document.querySelector('.tab-content').style.display = 'none';
   const view = document.getElementById('entityDetailView');
   view.style.display = 'block';

@@ -109,6 +109,41 @@ function renderDistribution(parsed_json, isMultiChoice) {
   }
 }
 
+// ----- Detail view teardown -----
+// Every detail view's DOM id and the state field(s) it owns, in one place.
+// Each open*Detail used to hand-roll its own list of "every other view to
+// hide" — openEntityDetail knew about runDetailView, openInterviewDetail knew
+// about runDetailView + entityDetailView, openModelDetail knew about all three
+// others, but openRunDetail never learned about modelDetailView at all. That
+// omission (issue #30) is exactly what four independent, hand-maintained lists
+// produce: a view added later never makes it into the lists written before it
+// existed. One shared list fixes the whole class, not just the one instance.
+const DETAIL_VIEWS = [
+  { view: 'entityDetailView', clear: () => { state.currentEntity = null; } },
+  { view: 'runDetailView', clear: () => { state.currentRunId = null; } },
+  { view: 'interviewDetailView', clear: () => { state.currentInterviewId = null; } },
+  { view: 'modelDetailView', clear: () => { state.currentModelId = null; state.currentModelProfile = null; } }
+];
+
+/**
+ * Hides every detail view except `exceptViewId` (omit/pass a falsy value to
+ * hide all of them) and clears the state field(s) each hidden view owns, so a
+ * closed view never leaves a stale id behind for a later poll/render to act on.
+ * Deliberately does not touch `.tab-content` or the hash: an opener shows its
+ * own view and sets the hash right after calling this; a full close (back to a
+ * tab) is handled by the individual close*Detail functions, which know which
+ * tab to reveal and run their own side effects (e.g. closeInterviewDetail's
+ * list refresh).
+ */
+function closeAllDetailViews(exceptViewId) {
+  for (const { view, clear } of DETAIL_VIEWS) {
+    if (view === exceptViewId) continue;
+    const el = document.getElementById(view);
+    if (el) el.style.display = 'none';
+    clear();
+  }
+}
+
 // ----- Hash routing (route table lives in routing.js) -----
 function currentRoute() {
   const route = parseHash(location.hash);

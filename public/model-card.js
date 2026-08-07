@@ -90,16 +90,64 @@ function renderStalenessReasons(reasons) {
     .join('')}</ul>A számok azt írják le, ami a mérés idején igaz volt; a mostani beállításra nem érvényesek.</div>`;
 }
 
-/** One calibration run of this model, as a clickable row with its live status. */
+/**
+ * "X másodperce/perce/órája fut" for a running calibration row (issue #29) —
+ * there was no elapsed-time concept anywhere in the app before this; derived
+ * from the run's created_at, reusing format.js's parseUtcTimestamp so the same
+ * "SQLite writes UTC without a zone marker" trap formatDateTime already
+ * handles is not solved a second, slightly-different way here.
+ */
+function formatElapsed(createdAt) {
+  const started = parseUtcTimestamp(createdAt);
+  if (!started) return null;
+  const seconds = Math.max(0, Math.round((Date.now() - started.getTime()) / 1000));
+  if (seconds < 60) return `${seconds} másodperce fut`;
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 60) return `${minutes} perce fut`;
+  const hours = Math.round(minutes / 60);
+  return `${hours} óra óta fut`;
+}
+
+/**
+ * One calibration run of this model, as a clickable row with its live status.
+ * A running/paused row also shows real progress (issue #29's second defect):
+ * done/total cells with a percentage, tokens/cost spent so far, and elapsed
+ * time — all already available on `run` (calibrationRunsFor in model-view.js
+ * merges the live progress poll over the enriched GET /api/runs row, exactly
+ * like every other run view), so nothing new is fetched to render this.
+ */
 function calibrationRunRow(run) {
+  const isActive = run.status === 'running' || run.status === 'paused';
+  const totalCells = run.totalCells ?? 0;
+  const done = run.done ?? 0;
+  const usage = run.usage || {};
+  const pct = totalCells > 0 ? Math.min(Math.round((done / totalCells) * 100), 100) : 0;
+  const elapsed = isActive ? formatElapsed(run.created_at) : null;
+
+  const progress = isActive
+    ? `
+      <div class="progress-bar" title="${escapeHtml(TOOLTIPS.cells)}">
+        <div class="progress-fill" style="width: ${pct}%"></div>
+      </div>
+      <div class="list-item-meta">${escapeHtml(
+        `${formatNumber(done)} / ${formatNumber(totalCells)} cella (${pct}%) · ${formatNumber(usage.totalTokens || 0)} token · ${formatCost(usage.costUsd || 0)} USD${elapsed ? ' · ' + elapsed : ''}`
+      )}</div>`
+    : '';
+
+  const stopButton = isActive
+    ? `<button type="button" class="btn btn-danger btn-sm" data-action="stop" data-run="${escapeHtml(run.id)}"
+         aria-label="Kalibráció leállítása: ${escapeHtml(run.name)}">Leállítás</button>`
+    : '';
+
   return `
     <div class="list-item list-item-clickable" data-cal-run="${escapeHtml(run.id)}"
          role="button" tabindex="0" aria-label="${openLabel('runs', run.name)}">
       <div>
         <div class="list-item-title">${escapeHtml(run.name)}</div>
         <div class="list-item-meta">${escapeHtml(formatDateTime(run.created_at))}</div>
+        ${progress}
       </div>
-      ${statusBadge(run.status)}
+      <div class="list-item-actions">${stopButton}${statusBadge(run.status)}</div>
     </div>
   `;
 }
@@ -121,6 +169,12 @@ function renderCalibrationWorkflow(entry, context) {
   const probes = (context && context.probes) || [];
   const calRuns = (context && context.calibrationRuns) || [];
   const completed = calRuns.filter((r) => r.status === 'completed');
+  // Issue #29: launching a SECOND calibration for the same model while one is
+  // already running double-spends the budget and hits the #16 concurrency
+  // risk. Scoped to THIS model's own runs only — a different model's launch
+  // control must stay enabled, since calibrationRunsFor (model-view.js)
+  // already filters calRuns down to one model before this ever sees them.
+  const runningCalibration = calRuns.find((r) => r.status === 'running');
   const heading = entry.status === 'missing' ? 'Kalibráció lépésről lépésre' : 'Újrakalibrálás lépésről lépésre';
 
   const step1 =
@@ -131,13 +185,17 @@ function renderCalibrationWorkflow(entry, context) {
       : `<p class="detail-note">A próba-kérdőív közönséges kérdőív: te választod meg, melyik mérje a modell
            perszóna nélküli válaszait.</p>`;
 
+  const runningNotice = runningCalibration
+    ? `<p class="detail-note detail-note-warning">Már fut kalibráció ehhez a modellhez — előbb fejeződjön be, vagy állítsd le lent, mielőtt újat indítanál.</p>`
+    : '';
+
   const launchForm =
     probes.length === 0
       ? ''
-      : `<form class="model-card-calibrate-form form-grid" data-model="${escapeHtml(entry.model)}">
+      : `${runningNotice}<form class="model-card-calibrate-form form-grid" data-model="${escapeHtml(entry.model)}">
           <div class="form-group">
             <label>Próba-kérdőív
-              <select class="model-card-probe-select" required>
+              <select class="model-card-probe-select" required ${runningCalibration ? 'disabled' : ''}>
                 <option value="">-- Válassz próba-kérdőívet --</option>
                 ${probes.map((q) => `<option value="${escapeHtml(q.id)}">${escapeHtml(q.name)}</option>`).join('')}
               </select>
@@ -145,10 +203,10 @@ function renderCalibrationWorkflow(entry, context) {
           </div>
           <div class="form-group">
             <label title="Szolgáltató rögzítése nélkül a profil nem egyetlen kiszolgálót ír le, és a szolgáltató-váltás azonnal elavulttá teszi.">Szolgáltató rögzítése (ajánlott)
-              <input type="text" class="model-card-provider-input" placeholder="pl. DeepInfra">
+              <input type="text" class="model-card-provider-input" placeholder="pl. DeepInfra" ${runningCalibration ? 'disabled' : ''}>
             </label>
           </div>
-          <button type="submit" class="btn btn-primary">Kalibrációs futtatás indítása</button>
+          <button type="submit" class="btn btn-primary" ${runningCalibration ? 'disabled' : ''}>Kalibrációs futtatás indítása</button>
         </form>`;
 
   const runsList =

@@ -7,9 +7,15 @@ function findRunById(runId) {
 }
 
 async function openRunDetail(runId, updateHash) {
+  // Issue #30 root cause: this used to close only the entity detail view
+  // (closeEntityDetail(false)), so a run opened from the model card (or from
+  // the interview detail) left that OTHER view's `display: block` standing —
+  // two full-page detail sections stacked on top of each other. One shared
+  // teardown (app.js) now hides every other detail view, not just the one
+  // this function happened to know about.
+  closeAllDetailViews('runDetailView');
   state.currentRunId = runId;
   closeProvenancePanel();
-  closeEntityDetail(false); // one teardown path, so the two views cannot both be open
   document.querySelector('.tab-content').style.display = 'none';
   document.getElementById('runDetailView').style.display = 'block';
   if (updateHash) setHash('runs', runId);

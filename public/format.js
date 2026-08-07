@@ -34,16 +34,24 @@ function formatMetric(n) {
 /**
  * SQLite writes `datetime('now')` in UTC without a timezone marker, which V8
  * would parse as LOCAL time — showing every timestamp two hours early here.
- * Such values are explicitly marked as UTC before formatting.
+ * Such values are explicitly marked as UTC before parsing. Shared by
+ * formatDateTime below and model-card.js's elapsed-time calculation, so the
+ * UTC-without-marker trap is handled in exactly one place.
  */
-function formatDateTime(value) {
-  if (!value) return '—';
+function parseUtcTimestamp(value) {
+  if (!value) return null;
   const text = String(value);
   const normalized = /^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}$/.test(text)
     ? text.replace(' ', 'T') + 'Z'
     : text;
   const date = new Date(normalized);
-  return Number.isNaN(date.getTime()) ? text : date.toLocaleString('hu-HU');
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function formatDateTime(value) {
+  if (!value) return '—';
+  const date = parseUtcTimestamp(value);
+  return date ? date.toLocaleString('hu-HU') : String(value);
 }
 
 /**

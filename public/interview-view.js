@@ -57,9 +57,8 @@ async function openInterviewDetail(interviewId, updateHash = true) {
   // The panel is pinned to one response; leaving its context must not leave it
   // hovering over unrelated data.
   closeProvenancePanel();
+  closeAllDetailViews('interviewDetailView');
   document.querySelector('.tab-content').style.display = 'none';
-  document.getElementById('runDetailView').style.display = 'none';
-  document.getElementById('entityDetailView').style.display = 'none';
   view.style.display = 'block';
   state.currentInterviewId = interviewId;
   if (updateHash) setHash('interviews', interviewId);
