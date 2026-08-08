@@ -4,10 +4,17 @@ import { loadPublicScript } from './helpers/load-public-script.js'
 interface QuestionLike {
   elicitationMode?: string
   legacyElicitationCount?: number
+  /** Control-arm counterpart of legacyElicitationCount (issue #40 review HIGH). */
+  legacyElicitationBaselineCount?: number
   positionConsistency?: number | null
   repetitionStability?: number | null
   abstainCount?: number
   invalidCount?: number
+  /** Present on the real API payload; used to tell a baseline-only (calibration)
+   *  question apart from a persona-bearing one — same shape renderBaselineOnlyNotice
+   *  already reads (issue #40 review HIGH/B). */
+  byPersona?: Record<string, unknown>
+  baseline?: number[] | null
 }
 
 interface ResponseLike {
@@ -173,6 +180,127 @@ describe('renderMetricChips — elicitation mode', () => {
     const html = renderMetricChips({ elicitationMode: 'multi_choice', legacyElicitationCount: 12 } as QuestionLike)
     expect(html).toContain('12 válasz kihagyva')
     expect(html).toContain(escapeHtml(TOOLTIPS.legacyElicitation))
+  })
+})
+
+/**
+ * Issue #40 review HIGH: `legacyElicitationBaselineCount` (src/lib/results.ts,
+ * issue #40 review MEDIUM — dropped control-arm rows whose elicitation_mode
+ * does not match the question) has NO rendering counterpart anywhere in the
+ * UI. `renderMetricChips` binds only the persona-side `legacyElicitationCount`
+ * into a chip (metrics.js:131-136); a researcher has no way to learn that
+ * control-arm rows were dropped for data-quality reasons. This mirrors the
+ * existing persona-side chip test above, one section up.
+ */
+describe('renderMetricChips — control-arm legacy elicitation chip (issue #40 review HIGH)', () => {
+  it('warns about dropped control-arm rows, distinguishably from the persona-side chip', () => {
+    const html = renderMetricChips({
+      elicitationMode: 'single_choice',
+      legacyElicitationBaselineCount: 5
+    } as QuestionLike)
+    expect(html).toContain('5')
+    expect(html).toMatch(/kihagyva/i)
+    // Must name the control arm explicitly — an unqualified "5 válasz
+    // kihagyva" chip would be indistinguishable from the persona-side one.
+    expect(html).toMatch(/kontroll/i)
+  })
+
+  it('shows the persona-side and control-arm-side legacy warnings together, both counts intact, when both sides dropped rows', () => {
+    const html = renderMetricChips({
+      elicitationMode: 'single_choice',
+      legacyElicitationCount: 3,
+      legacyElicitationBaselineCount: 2
+    } as QuestionLike)
+    expect(html).toContain('3')
+    expect(html).toContain('2')
+    expect(html).toMatch(/kontroll/i)
+  })
+
+  it('stays silent about the control arm when nothing was dropped on that side', () => {
+    const html = renderMetricChips({
+      elicitationMode: 'single_choice',
+      legacyElicitationCount: 0,
+      legacyElicitationBaselineCount: 0
+    } as QuestionLike)
+    expect(html).not.toMatch(/kontroll.*kihagyva|kihagyva.*kontroll/i)
+  })
+
+  it('never emits an unescaped tooltip quote', () => {
+    expect(
+      renderMetricChips({ elicitationMode: 'single_choice', legacyElicitationBaselineCount: 5 } as QuestionLike)
+    ).not.toMatch(/title="[^"]*"[^ =>]/)
+  })
+})
+
+/**
+ * Issue #40 review MEDIUM: the baseline (control-arm) PC tooltip dropped the
+ * metric's own DEFINITION ("hányszor azonos a topválasz" — how many times
+ * the top answer is identical) in favour of wording that reads as "measures
+ * WHAT the top answer is", not "measures HOW STABLE it is". The RS-baseline
+ * sibling tooltip correctly kept the "hányszor azonos" structure — the PC
+ * one is the odd one out.
+ */
+describe('TOOLTIPS.positionConsistencyBaseline (issue #40 review MEDIUM)', () => {
+  it('keeps the metric’s own definition — "hányszor azonos" — like its RS-baseline sibling does, not just what it measures the absence of', () => {
+    expect(TOOLTIPS.positionConsistencyBaseline).toMatch(/hányszor azonos/)
+  })
+})
+
+/**
+ * Issue #40 review, HIGH/B: before #40, a baseline-only question's PC/RS chip
+ * simply did not appear (both were `null`). Since #40 computes real PC/RS for
+ * the control arm, the SAME plain "PC 0.85" chip now appears — with the SAME
+ * generic tooltip — for a persona-bearing question and a persona-free
+ * (calibration) one. The only place that currently says "this question has no
+ * persona data, only the control arm" is the collapsed "Perszóna szintű
+ * bontás" <details> (renderBaselineOnlyNotice), which a reader does not open by
+ * default. The target user is a media professional, not a developer — an
+ * unexplained or misleading metric on the visible surface is a defect (project
+ * rule, issue #28 lineage).
+ *
+ * Design decision (see task report): a question counts as baseline-only using
+ * the SAME condition `renderBaselineOnlyNotice` (this file, below) already
+ * uses — `Object.keys(question.byPersona || {}).length === 0 &&
+ * !!question.baseline` — for consistency with that established convention,
+ * rather than `aggregatedResponseCount === 0` (which can also be 0 in a mixed
+ * run where the persona rows exist but were all invalid/abstained — a
+ * genuinely different situation from "no persona was ever asked").
+ */
+describe('renderMetricChips — control-arm PC/RS chip is distinguishable on a baseline-only question (issue #40 review HIGH/B)', () => {
+  it('marks the PC/RS chip as measuring the control arm when the question has no persona data at all', () => {
+    const html = renderMetricChips({
+      positionConsistency: 0.85,
+      repetitionStability: 0.9,
+      byPersona: {},
+      baseline: [0.9, 0.1]
+    } as QuestionLike)
+    expect(html).toContain('PC 0.85')
+    // Label and/or tooltip must say this is the control arm's own number — a
+    // bare "kontroll" match on the rendered markup (label text OR title
+    // attribute) is enough; this test does not prescribe which.
+    expect(html).toMatch(/kontroll/i)
+  })
+
+  it('leaves today’s plain PC/RS chip wording for a persona-bearing question — no regression', () => {
+    const html = renderMetricChips({
+      positionConsistency: 0.85,
+      repetitionStability: 0.9,
+      byPersona: { p1: { name: 'P1' } },
+      baseline: [0.9, 0.1]
+    } as QuestionLike)
+    expect(html).toContain('PC 0.85')
+    expect(html).not.toMatch(/kontroll/i)
+  })
+
+  it('leaves the plain chip wording when there is no control arm at all (ordinary persona-only run) — no regression', () => {
+    const html = renderMetricChips({
+      positionConsistency: 0.85,
+      repetitionStability: 0.9,
+      byPersona: {},
+      baseline: null
+    } as QuestionLike)
+    expect(html).toContain('PC 0.85')
+    expect(html).not.toMatch(/kontroll/i)
   })
 })
 

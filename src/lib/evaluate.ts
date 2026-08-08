@@ -119,6 +119,17 @@ function buildQuestionLines(results: RunResults): string[] {
       q.legacyElicitationCount > 0
         ? `\n  FIGYELEM: ${q.legacyElicitationCount} válasz régi, hibás elicitationnal készült, ezért ki van hagyva az aggregátumból.`
         : ''
+    // Separate from legacyNote on purpose (mirrors the separate
+    // legacyElicitationBaselineCount counter in results.ts, issue #40 review
+    // MEDIUM): legacyNote's wording names "az aggregátumból" without saying
+    // which one — fine when it fires for a persona-side drop (the persona
+    // aggregate is the only one in scope there), but wrong if reused for a
+    // control-arm drop, since "Kontroll — perszóna nélkül" / "KONTROLL-KAR" is
+    // a DIFFERENT number from the persona aggregate. Named explicitly instead.
+    const legacyBaselineNote =
+      (q.legacyElicitationBaselineCount ?? 0) > 0
+        ? `\n  FIGYELEM: ${q.legacyElicitationBaselineCount} kontroll-kar válasz régi, hibás elicitationnal készült, ezért ki van hagyva a kontroll-kar átlagából.`
+        : ''
 
     // Zero usable responses must never be printed as zero percentages: the judge
     // would read a measured "nobody picked this" where nothing was measured.
@@ -132,13 +143,26 @@ function buildQuestionLines(results: RunResults): string[] {
         const baselineDist = q.baseline
           .map((p, i) => `${q.options[i]}: ${(p * 100).toFixed(1)}%`)
           .join(', ')
+        // Since issue #40, PC/RS ARE computed for a baseline-only question (grouped
+        // by the control arm's own seed/rotation) — but this branch never printed
+        // them, even though buildCalibrationEvaluationPrompt unconditionally tells
+        // the judge that PC < 0.7 makes a question's result mandatory-unreliable.
+        // Labeled "Kontroll-kar", not the bare "PC"/"RS" the persona branch below
+        // uses, so it reads as the control arm's own stability, not a persona's.
         return `Kérdés: ${q.text}
   Nincs perszónás válasz ehhez a kérdéshez (a futtatásnak nincs perszóna-kara, vagy egyik sem adott értékelhető választ).
-  Kontroll — perszóna nélkül: ${baselineDist}${legacyNote}
-  Invalid: ${q.invalidCount}/${q.totalResponses}, Abstain: ${q.abstainCount}/${q.totalResponses}`
+  Kontroll — perszóna nélkül: ${baselineDist}${legacyNote}${legacyBaselineNote}
+  Invalid: ${q.invalidCount}/${q.totalResponses}, Abstain: ${q.abstainCount}/${q.totalResponses}
+  Kontroll-kar pozíció-konzisztencia (PC): ${fmt(q.positionConsistency)}, kontroll-kar ismétlési stabilitás (RS): ${fmt(q.repetitionStability)}`
       }
+      // The control arm can be entirely dropped by the elicitation-mode filter
+      // (issue #40 review MEDIUM) while still having produced legacy rows —
+      // that is exactly the case legacyBaselineNote exists to surface, so it
+      // must reach the text even in the no-data-at-all branch (issue #40
+      // review HIGH), not only the two branches above/below that have SOME
+      // surviving side.
       return `Kérdés: ${q.text}
-  Nincs értékelhető válasz ehhez a kérdéshez.${legacyNote}
+  Nincs értékelhető válasz ehhez a kérdéshez.${legacyNote}${legacyBaselineNote}
   Invalid: ${q.invalidCount}/${q.totalResponses}, Abstain: ${q.abstainCount}/${q.totalResponses}`
     }
 
@@ -151,10 +175,16 @@ function buildQuestionLines(results: RunResults): string[] {
     const baselineLine = q.baseline
       ? `\n  KONTROLL-KAR (perszóna nélküli válasz ugyanerre a kérdésre): ${q.baseline
           .map((p, i) => `${q.options[i]}: ${(p * 100).toFixed(1)}%`)
-          .join(', ')}\n  Perszóna-hatás (JS-divergencia a kontrolltól): ${Object.values(q.byPersona)
-          .map((p) => `${p.name}: ${p.baselineDivergence === null ? 'n/a' : p.baselineDivergence.toFixed(3)}${p.movesModel === false ? ' (a zajszinten belül)' : ''}`)
+          .join(', ')}${legacyBaselineNote}\n  Perszóna-hatás (JS-divergencia a kontrolltól): ${Object.values(q.byPersona)
+          .map((p) => `${p.name}: ${p.baselineDivergence === null ? 'n/a' : p.baselineDivergence.toFixed(3)}${divergenceSuffix(p.movesModel)}`)
           .join('; ')}`
-      : ''
+      // legacyBaselineNote must still reach the judge when the elicitation-mode
+      // filter dropped EVERY control-arm row for this question (q.baseline is
+      // null then), even though the persona side still has data — otherwise the
+      // judge reads "no control arm for this question" instead of "control arm
+      // data was dropped" (issue #40 review HIGH). legacyBaselineNote already
+      // starts with its own leading newline, so it stands in for the whole line.
+      : legacyBaselineNote
     const personaTops = Object.values(q.byPersona)
       .map((p) => {
         const max = Math.max(...p.distribution)
@@ -237,6 +267,23 @@ KIMENET (magyarul, tömören, max ~500 szó):
 
 function fmt(v: number | null): string {
   return v === null ? 'n/a' : v.toFixed(2)
+}
+
+/**
+ * Qualifier for a persona's printed divergence number (issue #40 review
+ * CRITICAL). `movesModel === false` is a genuinely DECIDED result — the
+ * control arm's own noise floor was measured, and the divergence sat inside
+ * it. `movesModel === null` here (only reachable when a real divergence was
+ * already printed, i.e. a control arm exists) means the opposite: the noise
+ * floor could NOT be measured — fewer than 2 surviving control-arm
+ * seed-groups — so the judge must be told the number is real but
+ * uninterpretable, never read as "within noise" (a different, false claim)
+ * and never as an unqualified "moved the model".
+ */
+function divergenceSuffix(movesModel: boolean | null): string {
+  if (movesModel === false) return ' (a zajszinten belül)'
+  if (movesModel === null) return ' (nem eldönthető — kevés kontroll-adat)'
+  return ''
 }
 
 /**

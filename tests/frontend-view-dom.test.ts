@@ -416,4 +416,178 @@ describe('run detail view', () => {
     expect(dom.document.getElementById('runDetailView')!.style.display).toBe('block')
     expect(dom.document.getElementById('runDetailTitle')!.textContent).toContain('Első futás')
   })
+
+  /**
+   * Issue #40 review, HIGH/B, exercised through the REAL overview tab renderer
+   * (public/run-view.js's loadOverviewTab -> metrics.js's renderMetricChips),
+   * not just the isolated helper function — this is the actual visible surface
+   * a researcher reads. Since #40, a baseline-only (calibration) question's PC/RS
+   * chip looks IDENTICAL to a persona-bearing question's — the only place that
+   * currently says "this is the control arm, not a persona" is the collapsed
+   * "Perszóna szintű bontás" <details>, which is not open by default.
+   */
+  describe('overview tab — control-arm PC/RS chip is distinguishable on a baseline-only question (issue #40 review HIGH/B)', () => {
+    function resultsWithBaselineOnlyQuestion(): unknown {
+      return {
+        totalResponses: 2,
+        invalidRate: 0,
+        abstainRate: 0,
+        duplicateResponseCount: 0,
+        questions: [
+          {
+            questionId: 'q1',
+            text: 'Hogyan tájékozódsz?',
+            options: ['Újság', 'App'],
+            scaleType: 'single_choice',
+            elicitationMode: 'single_choice',
+            legacyElicitationCount: 0,
+            aggregatedResponseCount: 0,
+            totalResponses: 2,
+            invalidCount: 0,
+            abstainCount: 0,
+            aggregated: [0, 0],
+            byPersona: {},
+            baseline: [0.9, 0.1],
+            positionConsistency: 0.85,
+            repetitionStability: 0.9
+          }
+        ]
+      }
+    }
+
+    it('marks the chip as the control arm’s on the visible overview tab of a calibration (baseline-only) question', async () => {
+      dom = loadAppDom({
+        routes: runRoutes({ 'GET /api/runs/r1/results': resultsWithBaselineOnlyQuestion() })
+      })
+      await dom.boot()
+      ;(dom.document.querySelector('[data-run-card="r1"]')!).click()
+      await dom.settle()
+
+      const chips = dom.document.querySelector('.question-card .metric-chips')!
+      expect(chips.textContent).toContain('PC 0.85')
+      // Checked via the full markup (innerHTML), not just visible text: the
+      // distinguishing wording is allowed to live in the tooltip/aria-label
+      // (an attribute, not a text node) as well as in the visible label.
+      expect(chips.innerHTML).toMatch(/kontroll/i)
+      // This must be visible WITHOUT opening the collapsed persona-breakdown
+      // <details> — the researcher's default view.
+      const details = dom.document.querySelector('.persona-breakdown-wrap')
+      expect(details?.getAttribute('open')).toBeFalsy()
+    })
+
+    it('leaves the plain PC/RS chip wording for a persona-bearing question on the same overview tab — no regression', async () => {
+      const results = resultsWithBaselineOnlyQuestion() as { questions: Record<string, unknown>[] }
+      results.questions[0]!.byPersona = { per1: { name: 'Anna', distribution: [0.9, 0.1], abstainCount: 0, baselineDivergence: 0, movesModel: false } }
+      dom = loadAppDom({ routes: runRoutes({ 'GET /api/runs/r1/results': results }) })
+      await dom.boot()
+      ;(dom.document.querySelector('[data-run-card="r1"]')!).click()
+      await dom.settle()
+
+      const chips = dom.document.querySelector('.question-card .metric-chips')!
+      expect(chips.textContent).toContain('PC 0.85')
+      expect(chips.innerHTML).not.toMatch(/kontroll/i)
+    })
+  })
+
+  /**
+   * Issue #40 review CRITICAL: `run-view.js`'s `renderPersonaBreakdown` only
+   * special-cases `movesModel === false` (' (zajszint)' suffix,
+   * public/run-view.js:236). Since the CRITICAL fix makes `movesModel` also
+   * come back `null` while `baselineDivergence` is a REAL, non-null number
+   * (control arm exists, but its own noise floor could not be measured — see
+   * the contract in tests/results.test.ts), today's code renders that case
+   * with NO suffix at all — identical to a plain, fully-decided divergence
+   * number. A reader cannot tell "this persona genuinely moved the model"
+   * apart from "we don't actually know". Required contract (mirrors
+   * tests/results.test.ts): the cell must contain the phrase "nem eldönthető"
+   * for this case, and must NOT contain "zajszint" (that word is reserved for
+   * the genuinely-decided, `movesModel === false` case).
+   */
+  describe('persona breakdown — an undecidable movesModel is distinguishable from "within noise" (issue #40 review CRITICAL)', () => {
+    function resultsWithMovesModelCases(): unknown {
+      return {
+        totalResponses: 4,
+        invalidRate: 0,
+        abstainRate: 0,
+        duplicateResponseCount: 0,
+        questions: [
+          {
+            questionId: 'q1',
+            text: 'Hogyan tájékozódsz?',
+            options: ['Újság', 'App'],
+            scaleType: 'single_choice',
+            elicitationMode: 'single_choice',
+            legacyElicitationCount: 0,
+            aggregatedResponseCount: 2,
+            totalResponses: 4,
+            invalidCount: 0,
+            abstainCount: 0,
+            aggregated: [0.69, 0.31],
+            byPersona: {
+              // Undecidable: a real divergence was computed, but the control
+              // arm's own noise floor could not be measured.
+              anna: { name: 'Anna', distribution: [0.78, 0.22], abstainCount: 0, baselineDivergence: 0.0157, movesModel: null },
+              // Genuinely decided: within the measured noise floor — today's
+              // existing behaviour, must not regress.
+              bob: { name: 'Bob', distribution: [0.6, 0.4], abstainCount: 0, baselineDivergence: 0.1, movesModel: false }
+            },
+            baseline: [0.8, 0.2],
+            positionConsistency: 0.9,
+            repetitionStability: 0.9
+          }
+        ]
+      }
+    }
+
+    it('marks Anna’s row (undecidable) differently from Bob’s (genuinely within noise), on the real overview tab', async () => {
+      dom = loadAppDom({ routes: runRoutes({ 'GET /api/runs/r1/results': resultsWithMovesModelCases() }) })
+      await dom.boot()
+      ;(dom.document.querySelector('[data-run-card="r1"]')!).click()
+      await dom.settle()
+
+      const table = dom.document.querySelector('.persona-breakdown-table')!
+      const html = table.innerHTML
+      const annaIdx = html.indexOf('Anna')
+      const bobIdx = html.indexOf('Bob')
+      expect(annaIdx).toBeGreaterThanOrEqual(0)
+      expect(bobIdx).toBeGreaterThan(annaIdx)
+      const annaRowHtml = html.slice(annaIdx, bobIdx)
+      const bobRowHtml = html.slice(bobIdx)
+
+      // Scoped to the divergence CELL'S RENDERED TEXT only, not the whole
+      // row's markup. That cell also carries a `title="…"` tooltip
+      // (metrics.js's TOOLTIPS.personaEffect) which itself contains the
+      // substring "zajszintet" — a whole-row `not.toMatch(/zajszint/i)`
+      // would happen to pass today only because this implementation gave the
+      // undecidable case ITS OWN separate tooltip wording that avoids the
+      // word; a different, equally valid implementation that reused the same
+      // tooltip and only changed the visible suffix would fail this check
+      // for a reason that has nothing to do with the suffix itself (the same
+      // whole-blob scope mistake as tests/results.test.ts's
+      // evaluate.ts-facing test — see that file's comment for the general
+      // pattern). Extracting the cell's own text content — the part after
+      // the tag's closing `>`, before `</td>` — is robust to either choice.
+      function divergenceCellText(rowHtml: string): string {
+        const match = rowHtml.match(/title="[^"]*">([^<]*)<\/td>/)
+        if (!match) throw new Error(`divergence cell not found in: ${rowHtml}`)
+        return match[1]!
+      }
+      const annaCellText = divergenceCellText(annaRowHtml)
+      const bobCellText = divergenceCellText(bobRowHtml)
+
+      // Regression: Bob's genuinely-decided "within noise" case keeps its
+      // existing, already-shipped wording — checked on the cell's own text,
+      // not on a tooltip that would satisfy this trivially either way.
+      expect(bobCellText).toMatch(/zajszint/i)
+
+      // The divergence number itself must still be shown for Anna (never
+      // hidden), together with the required "undecidable" qualifier — and it
+      // must NOT borrow Bob's "within noise" wording, which would be a
+      // different, false claim (her divergence was never actually compared
+      // against a real noise floor).
+      expect(annaCellText).toContain('0.02') // formatMetric(0.0157) === '0.02'
+      expect(annaCellText).toContain('nem eldönthető')
+      expect(annaCellText).not.toMatch(/zajszint/i)
+    })
+  })
 })

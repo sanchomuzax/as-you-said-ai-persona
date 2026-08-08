@@ -526,7 +526,21 @@ describe('computeRunResults — baseline control arm', () => {
 
   it('flags a persona that does not move the model away from its default', () => {
     insertArm({ condition: 'persona', dist: { '0': 0.6, '1': 0.4 } })
-    insertArm({ condition: 'baseline', persona: null, dist: { '0': 0.6, '1': 0.4 } })
+    // TWO control-arm seed-groups (not one): this test's intent is the
+    // DECIDED `false` case ("the persona sits within the model's own noise
+    // — we know that, because we measured the noise"), not the separate
+    // "we don't know" case a single control-arm seed-group now produces
+    // (issue #40 review CRITICAL — see the
+    // 'computeRunResults — movesModel is undecidable …' describe block
+    // below). A single baseline row here would make the noise floor
+    // unmeasurable and `movesModel` would correctly come back `null`
+    // instead of `false`, which is not what this test is about. Both
+    // seed-groups share the same distribution as the persona, so the noise
+    // floor is a genuinely MEASURED zero, and the persona's own divergence
+    // (also zero) does not exceed it — same outcome as before, now reached
+    // for the right reason instead of by the bug's accidental default-0 path.
+    insertArm({ condition: 'baseline', persona: null, dist: { '0': 0.6, '1': 0.4 }, seed: 0 })
+    insertArm({ condition: 'baseline', persona: null, dist: { '0': 0.6, '1': 0.4 }, seed: 1 })
     const q = computeRunResults(db, runId).questions[0]!
     expect(q.byPersona[p1]!.baselineDivergence).toBeCloseTo(0)
     expect(q.byPersona[p1]!.movesModel).toBe(false)
@@ -587,5 +601,571 @@ describe('computeRunResults — baseline control arm', () => {
     expect(prompt).not.toContain('Nincs értékelhető válasz')
     expect(prompt).toContain('Kontroll — perszóna nélkül')
     expect(prompt).toContain('Yes: 80.0%')
+  })
+})
+
+/**
+ * Issue #40: positionConsistency/repetitionStability are computed only from
+ * `valid` (persona-condition rows, grouped by `persona_id`), so the control
+ * arm's rows never enter them — in a calibration run (100% baseline, no
+ * persona at all) both come out `undefined` for every question, even though
+ * PC/RS are the primary product of a calibration run. The fix must feed the
+ * control arm's own valid rows into the same metric, grouped as its OWN
+ * condition (e.g. keyed by `persona_id ?? 'baseline'`), not merged into any
+ * one persona's group and not dropped.
+ */
+describe('computeRunResults — PC/RS include the control arm (issue #40)', () => {
+  function insertBaseline(opts: { seed: number; rotation: number[]; answer: string; dist?: Record<string, number> }): void {
+    db.prepare(
+      `INSERT INTO responses (id, run_id, persona_id, question_id, model_requested, temperature, seed,
+         permutation_json, prompt_rendered, raw_response, parsed_distribution_json, parsed_answer,
+         is_valid, abstained, condition)
+       VALUES (?,?,NULL,?,'m',1,?,?,'p','r',?,?,1,0,'baseline')`
+    ).run(
+      randomUUID(), runId, qid, opts.seed, JSON.stringify(opts.rotation),
+      JSON.stringify(opts.dist ?? { '0': 0.8, '1': 0.2 }), opts.answer
+    )
+  }
+
+  it('computes non-null PC/RS for a baseline-only (calibration) run, matching the same grouping logic used for personas', () => {
+    // Exact mirror of the existing persona-only PC/RS fixture above
+    // ("computes position consistency across rotations and repetition
+    // stability across seeds"), just with condition='baseline' rows instead
+    // of a persona row — proves the SAME grouping logic now also covers the
+    // control arm, rather than a special-cased approximation.
+    insertBaseline({ seed: 0, rotation: [0, 1], answer: '0' })
+    insertBaseline({ seed: 0, rotation: [1, 0], answer: '0' })
+    insertBaseline({ seed: 1, rotation: [0, 1], answer: '1' })
+    const q = computeRunResults(db, runId).questions[0]!
+    // PC groups by (condition, seed): seed=0 -> answers ['0','0'] agree -> 1;
+    // seed=1 -> single-member group ['1'] -> 1. Mean of the two groups = 1.
+    expect(q.positionConsistency).toBe(1)
+    // RS groups by (condition, rotation): rotation=[0,1] -> answers ['0'
+    // (seed0), '1' (seed1)] disagree -> 0; rotation=[1,0] -> single-member
+    // group ['0'] -> 1. Mean of the two groups = 0.5.
+    expect(q.repetitionStability).toBeCloseTo(0.5)
+  })
+
+  it('scores a perfectly self-consistent baseline as fully consistent (1) on both metrics', () => {
+    insertBaseline({ seed: 0, rotation: [0, 1], answer: '0' })
+    insertBaseline({ seed: 0, rotation: [1, 0], answer: '0' })
+    insertBaseline({ seed: 1, rotation: [0, 1], answer: '0' })
+    insertBaseline({ seed: 1, rotation: [1, 0], answer: '0' })
+    const q = computeRunResults(db, runId).questions[0]!
+    // Every seed-group and every rotation-group agrees on '0' throughout.
+    expect(q.positionConsistency).toBe(1)
+    expect(q.repetitionStability).toBe(1)
+  })
+
+  it('scores a maximally disagreeing baseline as fully inconsistent (0) on both metrics', () => {
+    insertBaseline({ seed: 0, rotation: [0, 1], answer: '0' })
+    insertBaseline({ seed: 0, rotation: [1, 0], answer: '1' })
+    insertBaseline({ seed: 1, rotation: [0, 1], answer: '1' })
+    insertBaseline({ seed: 1, rotation: [1, 0], answer: '0' })
+    const q = computeRunResults(db, runId).questions[0]!
+    // seed=0 group: ['0','1'] disagree -> 0; seed=1 group: ['1','0']
+    // disagree -> 0. Mean = 0.
+    expect(q.positionConsistency).toBe(0)
+    // rotation=[0,1] group: ['0' (seed0), '1' (seed1)] disagree -> 0;
+    // rotation=[1,0] group: ['1' (seed0), '0' (seed1)] disagree -> 0. Mean = 0.
+    expect(q.repetitionStability).toBe(0)
+  })
+
+  it('gives the control arm its own group in a mixed run, distinct from both "dropped" and "merged into a persona"', () => {
+    // Persona P1: SAME seed, two rotations, DISAGREEING answers -> its own
+    // group is internally inconsistent (score 0).
+    insertResponse({ dist: { '0': 0.6, '1': 0.4 }, answer: '0', rotation: [0, 1], seed: 0 })
+    insertResponse({ dist: { '0': 0.6, '1': 0.4 }, answer: '1', rotation: [1, 0], seed: 0 })
+    // Control arm: SAME seed and SAME rotations, but internally AGREEING
+    // answers -> its own group is fully consistent (score 1).
+    insertBaseline({ seed: 0, rotation: [0, 1], answer: '0' })
+    insertBaseline({ seed: 0, rotation: [1, 0], answer: '0' })
+
+    const q = computeRunResults(db, runId).questions[0]!
+    // Correct grouping keeps two SEPARATE (condition, seed) groups: persona
+    // ['0','1'] -> 0, control ['0','0'] -> 1. Mean of the two groups = 0.5.
+    //
+    // Two distinct bugs would both miss this number:
+    //  - dropping the control arm entirely (today's bug: `valid` only holds
+    //    persona rows) leaves just the persona group -> 0, not 0.5.
+    //  - a naive fix that keys grouping by seed alone, ignoring condition,
+    //    would pool all four rows into one group ['0','1','0','0'], which
+    //    disagrees -> 0, not 0.5.
+    // 0.5 is reachable only by grouping the control arm on its own.
+    expect(q.positionConsistency).toBeCloseTo(0.5)
+  })
+
+  it('leaves PC/RS for a persona-only run (no control arm at all) unchanged — no regression', () => {
+    insertResponse({ rotation: [0, 1], seed: 0, answer: '0' })
+    insertResponse({ rotation: [1, 0], seed: 0, answer: '0' })
+    insertResponse({ rotation: [0, 1], seed: 1, answer: '1' })
+    const q = computeRunResults(db, runId).questions[0]!
+    expect(q.positionConsistency).toBe(1)
+    expect(q.repetitionStability).toBeCloseTo(0.5)
+  })
+
+  it('computes control-arm PC for a multi_choice question via Jaccard overlap, not exact-match', () => {
+    const mqid = randomUUID()
+    const questionnaireId = (db.prepare('SELECT questionnaire_id q FROM runs WHERE id = ?').get(runId) as { q: string })
+      .q
+    db.prepare(
+      'INSERT INTO questions (id, questionnaire_id, ord, text, scale_type, options_json) VALUES (?,?,3,?,?,?)'
+    ).run(mqid, questionnaireId, 'Melyeket? (kontroll)', 'multi_choice', JSON.stringify(['a', 'b', 'c']))
+
+    function insertBaselineMulti(opts: { seed: number; rotation: number[]; answer: string }): void {
+      db.prepare(
+        `INSERT INTO responses (id, run_id, persona_id, question_id, model_requested, temperature, seed,
+           permutation_json, prompt_rendered, raw_response, parsed_distribution_json, parsed_answer,
+           is_valid, abstained, elicitation_mode, condition)
+         VALUES (?,?,NULL,?,'m',1,?,?,'p','r',?,?,1,0,'multi_choice','baseline')`
+      ).run(
+        randomUUID(), runId, mqid, opts.seed, JSON.stringify(opts.rotation),
+        JSON.stringify({ '0': 0.9, '1': 0.8, '2': 0.1 }), opts.answer
+      )
+    }
+    // Same seed, two different rotations — matches the existing "degrades
+    // gradually" multi_choice PC fixture above (persona version), applied
+    // here to a control-arm-only run.
+    insertBaselineMulti({ seed: 0, rotation: [0, 1, 2], answer: '0,1' })
+    insertBaselineMulti({ seed: 0, rotation: [1, 2, 0], answer: '0,1,2' })
+    const q = computeRunResults(db, runId).questions.find((x) => x.questionId === mqid)!
+    // Both rows land in the same (condition, seed=0) group. Jaccard('0,1',
+    // '0,1,2') = intersection 2 / union 3 = 2/3 — a set overlap, not a
+    // knife-edge 0 (the whole reason multi_choice uses Jaccard, not equality).
+    expect(q.positionConsistency).toBeCloseTo(2 / 3)
+  })
+})
+
+/**
+ * Issue #40 review, MEDIUM: `validBaseline` (src/lib/results.ts) is built with NO
+ * elicitation_mode filter, unlike the persona-side `usable` — so a baseline row
+ * recorded under a stale elicitation mode still lands in `q.baseline` and, since
+ * the #40 fix above, in the PC/RS grouping (`pcRsRows`) too. Concrete failure
+ * mode from the review: question mode is single_choice, a legacy baseline row
+ * has elicitation_mode='multi_choice' and parsed_answer='0,2' — it joins a
+ * (condition, seed) group where every OTHER member answered '0', flipping that
+ * group's score from 1 to 0 under exact-match scoring
+ * (`new Set(['0','0,2']).size === 2`). PC is a hard reliability gate in the
+ * judge prompt (PC < 0.7 -> "KÖTELEZŐ megbízhatatlannak jelölnöd"), so a
+ * silently mis-scored baseline group is not cosmetic.
+ *
+ * The fix must mirror the persona-side filter exactly, including the
+ * null-legacy + single_choice allowance, and must never silently drop the
+ * excluded row.
+ *
+ * Design decision (see task report for the full justification): a SEPARATE
+ * counter, `legacyElicitationBaselineCount`, rather than folding the baseline
+ * drop into the existing `legacyElicitationCount`. That field's one consumer
+ * (evaluate.ts's legacyNote: "X válasz ... ki van hagyva az AGGREGÁTUMBÓL")
+ * names a specific aggregate — the persona one. In a MIXED run (persona rows
+ * AND baseline rows both present for the same question) the persona aggregate
+ * and the control-arm mean are two different numbers; blending a baseline-side
+ * drop into the persona-side counter would misattribute which aggregate lost a
+ * row. `legacyElicitationCount` therefore keeps its current, already-tested
+ * meaning (persona-condition rows only) and a new, equally-reported field
+ * covers the control arm.
+ */
+describe('computeRunResults — baseline rows are filtered by elicitation_mode, mirroring persona rows (issue #40 review MEDIUM)', () => {
+  function insertBaselineRow(opts: {
+    seed: number
+    rotation: number[]
+    answer: string
+    dist?: Record<string, number>
+    mode?: string | null
+  }): void {
+    db.prepare(
+      `INSERT INTO responses (id, run_id, persona_id, question_id, model_requested, temperature, seed,
+         permutation_json, prompt_rendered, raw_response, parsed_distribution_json, parsed_answer,
+         is_valid, abstained, elicitation_mode, condition)
+       VALUES (?,?,NULL,?,'m',1,?,?,'p','r',?,?,1,0,?,'baseline')`
+    ).run(
+      randomUUID(), runId, qid, opts.seed, JSON.stringify(opts.rotation),
+      JSON.stringify(opts.dist ?? { '0': 0.8, '1': 0.2 }), opts.answer, opts.mode === undefined ? null : opts.mode
+    )
+  }
+
+  it('excludes a baseline row whose elicitation_mode does not match the question, from both the baseline mean and PC/RS — and counts the exclusion', () => {
+    // qid's mode is single_choice (default scale_type 'categorical', set in the
+    // top-level beforeEach). Both rows share seed=0, so — if the mismatched row
+    // is not filtered out — they land in the SAME PC group (`baseline|0`),
+    // reproducing the review's exact flip-from-1-to-0 case.
+    insertBaselineRow({ seed: 0, rotation: [0, 1], answer: '0', dist: { '0': 0.9, '1': 0.1 } }) // mode: null -> legacy-allowed on a single_choice question
+    insertBaselineRow({ seed: 0, rotation: [1, 0], answer: '0,2', dist: { '0': 0.53, '1': 0.47 }, mode: 'multi_choice' }) // mismatched mode -> must be excluded
+
+    const q = computeRunResults(db, runId).questions[0]!
+    // Only the matching row survives into the baseline mean.
+    expect(q.baseline).toBeTruthy()
+    expect(q.baseline![0]).toBeCloseTo(0.9)
+    expect(q.baseline![1]).toBeCloseTo(0.1)
+    // PC group `baseline|0` now has a single surviving member ('0') -> fully
+    // consistent. Under the bug, the group is ['0', '0,2'] -> Set size 2 -> 0.
+    expect(q.positionConsistency).toBe(1)
+    // The dropped row is reported, not silently absorbed into the mean.
+    expect((q as unknown as { legacyElicitationBaselineCount: number }).legacyElicitationBaselineCount).toBe(1)
+    // The pre-existing, persona-scoped counter is untouched by a baseline-side drop.
+    expect(q.legacyElicitationCount).toBe(0)
+  })
+
+  it('keeps a null-elicitation_mode baseline row on a single_choice question (mirrors the persona-side null-legacy allowance) — not counted as a drop', () => {
+    insertBaselineRow({ seed: 0, rotation: [0, 1], answer: '0', dist: { '0': 1, '1': 0 } }) // mode left null
+    const q = computeRunResults(db, runId).questions[0]!
+    expect(q.baseline).toBeTruthy()
+    expect(q.baseline![0]).toBeCloseTo(1)
+    expect((q as unknown as { legacyElicitationBaselineCount: number }).legacyElicitationBaselineCount).toBe(0)
+  })
+})
+
+describe('computeRunResults — baseline legacy filtering on a multi_choice question (issue #40 review MEDIUM)', () => {
+  let mqid: string
+
+  function insertBaselineMulti(opts: { dist: Record<string, number>; mode?: string | null; answer?: string; seed?: number }): void {
+    db.prepare(
+      `INSERT INTO responses (id, run_id, persona_id, question_id, model_requested, temperature, seed,
+         permutation_json, prompt_rendered, raw_response, parsed_distribution_json, parsed_answer,
+         is_valid, abstained, elicitation_mode, condition)
+       VALUES (?,?,NULL,?,?,?,?,?,?,?,?,?,1,0,?,'baseline')`
+    ).run(
+      randomUUID(), runId, mqid, 'm', 1.0, opts.seed ?? 0, JSON.stringify([0, 1]), 'p', 'r',
+      JSON.stringify(opts.dist), opts.answer ?? '0', opts.mode === undefined ? 'multi_choice' : opts.mode
+    )
+  }
+
+  beforeEach(() => {
+    mqid = randomUUID()
+    const questionnaireId = (db.prepare('SELECT questionnaire_id q FROM runs WHERE id = ?').get(runId) as { q: string }).q
+    db.prepare(
+      'INSERT INTO questions (id, questionnaire_id, ord, text, scale_type, options_json) VALUES (?,?,1,?,?,?)'
+    ).run(mqid, questionnaireId, 'Melyekből tájékozódsz? (kontroll)', 'multi_choice', JSON.stringify(['Hírlevél', 'Bolt']))
+  })
+
+  it('excludes a legacy (null elicitation_mode) baseline response from a multi_choice control-arm mean, and counts it', () => {
+    insertBaselineMulti({ dist: { '0': 0.9, '1': 0.8 } }) // mode: multi_choice (matches the question)
+    insertBaselineMulti({ dist: { '0': 0.53, '1': 0.47 }, mode: null, seed: 1 }) // legacy: wrongly normalized as single_choice
+    const q = computeRunResults(db, runId).questions.find((x) => x.questionId === mqid)!
+    expect(q.baseline).toBeTruthy()
+    expect(q.baseline![0]).toBeCloseTo(0.9)
+    expect((q as unknown as { legacyElicitationBaselineCount: number }).legacyElicitationBaselineCount).toBe(1)
+  })
+})
+
+/**
+ * Issue #40 review, HIGH/A: `buildQuestionLines` (src/lib/evaluate.ts)'s
+ * baseline-only branch — the branch EVERY question in a calibration run takes,
+ * since `aggregatedResponseCount` is 0 whenever there are no persona rows —
+ * prints the baseline distribution, the legacy note, and invalid/abstain
+ * counts, but NEVER positionConsistency/repetitionStability. Meanwhile
+ * `buildCalibrationEvaluationPrompt` unconditionally instructs the judge: "Ahol
+ * a pozíció-konzisztencia (PC) 0.7 alatt van, ott az adott kérdés eredményét
+ * KÖTELEZŐ megbízhatatlannak jelölnöd" — a number the judge is never actually
+ * given for this branch. Since the #40 fix, PC/RS ARE computed for a
+ * baseline-only question (they used to be null too, compounding the gap) —
+ * they just never reach the prompt text.
+ */
+describe('buildEvaluationPrompt — control-arm PC/RS reaches the judge prompt for a baseline-only question (issue #40 review HIGH/A)', () => {
+  function insertBaseline(opts: { seed: number; rotation: number[]; answer: string }): void {
+    db.prepare(
+      `INSERT INTO responses (id, run_id, persona_id, question_id, model_requested, temperature, seed,
+         permutation_json, prompt_rendered, raw_response, parsed_distribution_json, parsed_answer,
+         is_valid, abstained, condition)
+       VALUES (?,?,NULL,?,'m',1,?,?,'p','r',?,?,1,0,'baseline')`
+    ).run(
+      randomUUID(), runId, qid, opts.seed, JSON.stringify(opts.rotation),
+      JSON.stringify({ '0': 0.8, '1': 0.2 }), opts.answer
+    )
+  }
+
+  it('prints the control arm’s own PC and RS for a calibration (baseline-only) question, explicitly labeled as the control arm’s — not silently omitted', () => {
+    // Exact mirror of the "computes non-null PC/RS for a baseline-only
+    // (calibration) run" fixture in the #40 describe block above: PC = 1,
+    // RS = 0.5 (documented there, row group by row group). No persona rows at
+    // all for this question -> aggregatedResponseCount === 0 -> buildQuestionLines
+    // takes the baseline-only branch.
+    insertBaseline({ seed: 0, rotation: [0, 1], answer: '0' })
+    insertBaseline({ seed: 0, rotation: [1, 0], answer: '0' })
+    insertBaseline({ seed: 1, rotation: [0, 1], answer: '1' })
+
+    const results = computeRunResults(db, runId)
+    const q = results.questions[0]!
+    expect(q.aggregatedResponseCount).toBe(0) // sanity: no persona rows at all for this question
+    expect(q.positionConsistency).toBe(1)
+    expect(q.repetitionStability).toBeCloseTo(0.5)
+
+    const prompt = buildEvaluationPrompt('R', results, { calibration: true })
+
+    // The exact contract this test enforces, spelled out so the implementer does
+    // not have to guess: the baseline-only branch gains a line that (a) names
+    // the control arm explicitly (not a generic "PC"/"RS" label, which would be
+    // indistinguishable from the persona-branch's own PC/RS line) and (b) prints
+    // both numbers with the SAME two-decimal formatting `buildQuestionLines`
+    // already uses for the persona branch (the local `fmt()` helper,
+    // `.toFixed(2)`):
+    //   "Kontroll-kar pozíció-konzisztencia (PC): 1.00, kontroll-kar ismétlési stabilitás (RS): 0.50"
+    expect(prompt).toContain('Kontroll-kar pozíció-konzisztencia (PC): 1.00')
+    expect(prompt).toContain('kontroll-kar ismétlési stabilitás (RS): 0.50')
+  })
+
+  it('adds no control-arm PC/RS line when there is no control arm at all (no persona data AND no baseline) — no regression', () => {
+    const results = {
+      totalResponses: 3,
+      duplicateResponseCount: 0,
+      invalidRate: 0,
+      abstainRate: 0,
+      questions: [
+        {
+          questionId: 'q',
+          text: 'Melyeket?',
+          options: ['a', 'b'],
+          scaleType: 'single_choice',
+          elicitationMode: 'single_choice' as const,
+          legacyElicitationCount: 0,
+          aggregatedResponseCount: 0,
+          totalResponses: 3,
+          invalidCount: 3,
+          abstainCount: 0,
+          aggregated: [0, 0],
+          byPersona: {},
+          baseline: null,
+          positionConsistency: null,
+          repetitionStability: null
+        }
+      ]
+    }
+    const prompt = buildEvaluationPrompt('R', results, { calibration: true })
+    expect(prompt).not.toContain('Kontroll-kar pozíció-konzisztencia')
+    expect(prompt).not.toContain('kontroll-kar ismétlési stabilitás')
+  })
+})
+
+/**
+ * Issue #40 review CRITICAL: `seedNoiseFloor` (src/lib/results.ts) returns 0
+ * whenever the control arm has FEWER THAN 2 of its own seed-groups. Before
+ * this milestone that could only happen when a run itself used a single
+ * seed. Since the elicitation-mode filter added in this same milestone
+ * (issue #40 review MEDIUM, see the `legacyElicitationBaselineCount` describe
+ * blocks above) can drop one seed's only surviving baseline row, it now ALSO
+ * fires on a run configured with >= 2 seeds, whenever exactly one seed's
+ * baseline row happens to be legacy. `movesModel = divergence > noiseFloor`
+ * then reads `divergence > 0`, true for almost any nonzero divergence — a
+ * false "this persona moved the model" for what is actually unmeasured
+ * noise, reaching both the judge prompt (evaluate.ts) and the UI
+ * (run-view.js:236, ' (zajszint)' suffix).
+ *
+ * REQUIRED CONTRACT (spelled out so the implementer does not have to guess):
+ *
+ *   1. `baselineDivergence` is UNCHANGED: it stays `null` ONLY when there is
+ *      no control arm at all for this question (`q.baseline === null`). It
+ *      remains a real number whenever a control-arm mean was computed, even
+ *      if that arm's OWN noise floor could not be measured — "how far is the
+ *      persona from the control arm" and "do we know the control arm's own
+ *      noise level" are two separate facts and must not be conflated into
+ *      one `null`.
+ *
+ *   2. `movesModel` gains a new way to be `null`: whenever the control arm
+ *      has FEWER THAN 2 of its own seed-groups (after the elicitation-mode
+ *      filter), `movesModel` MUST be `null` — never `true` — regardless of
+ *      how large or small the raw divergence is. `movesModel` may only be
+ *      `true`/`false` once the noise floor was ACTUALLY measured (>= 2
+ *      control-arm seed-groups survived the filter).
+ *
+ *   3. The two `null` cases must stay distinguishable by inspecting
+ *      `baselineDivergence` alongside `movesModel`:
+ *        - `baselineDivergence === null` -> "no control arm at all".
+ *        - `movesModel === null && baselineDivergence !== null` -> "control
+ *          arm exists, but its own noise floor is unknown".
+ *
+ *   4. That distinction must reach BOTH reader surfaces, not just the
+ *      computed field:
+ *        - evaluate.ts's per-persona divergence line must print a
+ *          qualifier containing the phrase "nem eldönthető" for this case,
+ *          and must NOT print the existing "a zajszinten belül" qualifier
+ *          (that phrase is reserved for the genuinely-decided `false` case —
+ *          printing it here would be a false claim, since no real noise
+ *          floor was ever compared against).
+ *        - run-view.js's persona-breakdown table cell must likewise carry a
+ *          qualifier containing "nem eldönthető", and must NOT contain
+ *          "zajszint" (which would misleadingly read as the decided
+ *          "within noise" case).
+ *      Both surfaces are exercised by dedicated tests below/elsewhere (this
+ *      file's next describe block for the prompt; tests/frontend-view-dom.test.ts
+ *      for the persona-breakdown table).
+ *
+ * RESOLVED CONFLICT WITH A PRE-EXISTING #40 TEST: the existing test "flags a
+ * persona that does not move the model away from its default"
+ * (`describe('computeRunResults — baseline control arm', …)` above) used to
+ * insert a SINGLE control-arm row (one seed-group). Its divergence was
+ * exactly 0 only by construction of that fixture, which is why the pre-fix
+ * code accidentally produced the "right-looking" `false` there — but under
+ * the contract above a single seed-group makes the noise floor undecidable,
+ * so `movesModel` would correctly become `null`, not `false`, contradicting
+ * that test's own title and intent ("flags … that does NOT move the
+ * model" — a DECIDED `false`, not "we don't know"). Fixed in place (this
+ * file, same describe block, same test): a second, identical-distribution
+ * control-arm seed-group was added so the noise floor is genuinely MEASURED
+ * (and still comes out 0), preserving both the original intent and the
+ * original assertion for the right reason.
+ */
+describe('computeRunResults — movesModel is undecidable (null), not true, when the control arm’s own noise floor cannot be measured (issue #40 review CRITICAL)', () => {
+  function insertBaselineRow(opts: { seed: number; dist: Record<string, number>; mode?: string | null }): void {
+    db.prepare(
+      `INSERT INTO responses (id, run_id, persona_id, question_id, model_requested, temperature, seed,
+         permutation_json, prompt_rendered, raw_response, parsed_distribution_json, parsed_answer,
+         is_valid, abstained, elicitation_mode, condition)
+       VALUES (?,?,NULL,?,'m',1,?,?,'p','r',?,'0',1,0,?,'baseline')`
+    ).run(
+      randomUUID(), runId, qid, opts.seed, JSON.stringify([0, 1]),
+      JSON.stringify(opts.dist), opts.mode === undefined ? null : opts.mode
+    )
+  }
+
+  // Exact fixture from the code review: persona [0.78, 0.22]; control-arm
+  // seed 0 [0.8, 0.2]; control-arm seed 1 [0.5, 0.5]. Independently verified
+  // against the project's own jensenShannon() formula (see task report):
+  // divergence persona-vs-seed0-only = 0.0004349…; divergence
+  // persona-vs-mean-of-both = 0.0150567…; noise floor (seed0 vs seed1) =
+  // 0.0731040….
+  it('reports movesModel as undecidable, not true, when the elicitation-mode filter (issue #40 review MEDIUM) leaves only one control-arm seed-group', () => {
+    insertResponse({ dist: { '0': 0.78, '1': 0.22 } })
+    insertBaselineRow({ seed: 0, dist: { '0': 0.8, '1': 0.2 } }) // mode null -> kept (question is single_choice)
+    insertBaselineRow({ seed: 1, dist: { '0': 0.5, '1': 0.5 }, mode: 'multi_choice' }) // mismatched mode -> dropped
+
+    const q = computeRunResults(db, runId).questions[0]!
+    expect((q as unknown as { legacyElicitationBaselineCount: number }).legacyElicitationBaselineCount).toBe(1)
+    expect(q.baseline).toBeTruthy() // one seed-group still survived: a control-arm mean exists
+    expect(q.byPersona[p1]!.baselineDivergence).toBeCloseTo(0.000435, 5) // real, tiny divergence — NOT null
+    // THE BUG: under today's code this reads `true` (0.000435 > noiseFloor=0).
+    expect(q.byPersona[p1]!.movesModel).toBeNull()
+  })
+
+  it('computes a real noise floor and correctly scores movesModel once both control-arm seed-groups survive the filter — same fixture, no drop', () => {
+    insertResponse({ dist: { '0': 0.78, '1': 0.22 } })
+    insertBaselineRow({ seed: 0, dist: { '0': 0.8, '1': 0.2 } })
+    insertBaselineRow({ seed: 1, dist: { '0': 0.5, '1': 0.5 } }) // mode null too -> kept
+
+    const q = computeRunResults(db, runId).questions[0]!
+    expect((q as unknown as { legacyElicitationBaselineCount: number }).legacyElicitationBaselineCount).toBe(0)
+    expect(q.byPersona[p1]!.baselineDivergence).toBeCloseTo(0.015057, 4) // now against the mean of BOTH seeds
+    expect(q.byPersona[p1]!.movesModel).toBe(false) // 0.0151 < noise floor 0.0731: genuinely within noise
+  })
+
+  it('reports movesModel as undecidable for a run with only ONE control-arm seed to begin with — the more general case, not only reachable via the elicitation-mode filter', () => {
+    insertResponse({ dist: { '0': 0.9, '1': 0.1 } })
+    insertBaselineRow({ seed: 0, dist: { '0': 0.2, '1': 0.8 } }) // single seed, large divergence
+    const q = computeRunResults(db, runId).questions[0]!
+    expect(q.baseline).toBeTruthy()
+    expect(q.byPersona[p1]!.baselineDivergence).toBeGreaterThan(0.3) // ~0.397 — a real, large divergence
+    expect(q.byPersona[p1]!.movesModel).toBeNull() // still undecidable: only one seed-group ever existed
+  })
+
+  it('keeps movesModel AND baselineDivergence both null when there is no control arm at all — distinguishable from the new "undecidable" case above', () => {
+    insertResponse({ dist: { '0': 0.9, '1': 0.1 } })
+    const q = computeRunResults(db, runId).questions[0]!
+    expect(q.baseline).toBeNull()
+    expect(q.byPersona[p1]!.baselineDivergence).toBeNull()
+    expect(q.byPersona[p1]!.movesModel).toBeNull()
+  })
+})
+
+/**
+ * Issue #40 review CRITICAL, continued: the judge prompt (evaluate.ts) must
+ * not silently drop the undecidable-noise-floor case into either "moved the
+ * model" (no qualifier at all) or "within noise" (the existing `false`
+ * qualifier). See the contract spelled out in the describe block above.
+ */
+describe('buildEvaluationPrompt — an undecidable movesModel reads as undecidable, not as "within noise" and not as a plain decided divergence (issue #40 review CRITICAL)', () => {
+  function insertBaselineRow(dist: Record<string, number>): void {
+    db.prepare(
+      `INSERT INTO responses (id, run_id, persona_id, question_id, model_requested, temperature, seed,
+         permutation_json, prompt_rendered, raw_response, parsed_distribution_json, parsed_answer,
+         is_valid, abstained, condition)
+       VALUES (?,?,NULL,?,'m',1,0,?,'p','r',?,'0',1,0,'baseline')`
+    ).run(randomUUID(), runId, qid, JSON.stringify([0, 1]), JSON.stringify(dist))
+  }
+
+  it('prints the divergence but flags it "nem eldönthető" — not "a zajszinten belül" — when the control arm has only one seed-group', () => {
+    insertResponse({ dist: { '0': 0.9, '1': 0.1 } })
+    insertBaselineRow({ '0': 0.2, '1': 0.8 })
+    const results = computeRunResults(db, runId)
+    expect(results.questions[0]!.byPersona[p1]!.movesModel).toBeNull() // sanity, mirrors the contract above
+    expect(results.questions[0]!.byPersona[p1]!.baselineDivergence).not.toBeNull() // sanity
+
+    const prompt = buildEvaluationPrompt('R', results)
+    // Scoped to the PER-PERSONA divergence line only, not the whole prompt.
+    // The prompt also carries a STATIC, every-run rule paragraph
+    // (buildEvaluationPrompt's FONTOS SZABÁLYOK bullet, evaluate.ts) that
+    // itself contains the words "a zajszinten belül" as general reader
+    // guidance, unrelated to this run's data — a whole-prompt
+    // `not.toContain('a zajszinten belül')` can never pass regardless of
+    // what the per-persona line says, and that static paragraph is also
+    // byte-for-byte pinned by tests/evaluate-calibration.test.ts's
+    // GOLDEN_PERSONA_PROMPT (an intentional regression guard, not to be
+    // touched). Extracting just "P1: …" isolates the one line this test is
+    // actually about.
+    const personaLineMatch = prompt.match(/P1: [^\n]*/)
+    expect(personaLineMatch).not.toBeNull()
+    const personaLine = personaLineMatch![0]
+    expect(personaLine).toContain('0.397') // the number itself must still be printed, never hidden
+    expect(personaLine).toContain('nem eldönthető')
+    expect(personaLine).not.toContain('a zajszinten belül') // reserved for the genuinely-decided `false` case
+  })
+})
+
+/**
+ * Issue #40 review HIGH: `legacyBaselineNote` (evaluate.ts's buildQuestionLines)
+ * is only ever spliced into the text from INSIDE a `q.baseline ? … : ''`
+ * branch — both in the `aggregatedResponseCount === 0` fork (baseline-only
+ * question) and in the ordinary (persona-bearing) fork's `baselineLine`. If
+ * the elicitation-mode filter (issue #40 review MEDIUM) drops EVERY baseline
+ * row for a question, `q.baseline` becomes `null` and the whole branch that
+ * carries `legacyBaselineNote` is skipped — even though
+ * `legacyElicitationBaselineCount` was computed correctly and is > 0. The
+ * judge is left thinking the run simply had no control arm for that
+ * question, not that a data-quality drop happened.
+ *
+ * Required fix: `legacyBaselineNote` must reach the rendered text whenever
+ * `legacyElicitationBaselineCount > 0`, independent of whether `q.baseline`
+ * is `null` — in EITHER fork (baseline-only AND ordinary/mixed).
+ */
+describe('buildEvaluationPrompt — the control-arm legacy warning survives even when q.baseline is null (issue #40 review HIGH)', () => {
+  function insertBaselineRow(opts: { seed: number; dist: Record<string, number>; mode: string }): void {
+    db.prepare(
+      `INSERT INTO responses (id, run_id, persona_id, question_id, model_requested, temperature, seed,
+         permutation_json, prompt_rendered, raw_response, parsed_distribution_json, parsed_answer,
+         is_valid, abstained, elicitation_mode, condition)
+       VALUES (?,?,NULL,?,'m',1,?,?,'p','r',?,'0',1,0,?,'baseline')`
+    ).run(randomUUID(), runId, qid, opts.seed, JSON.stringify([0, 1]), JSON.stringify(opts.dist), opts.mode)
+  }
+
+  it('keeps the legacy control-arm warning when EVERY baseline row is filtered out, in a MIXED run where the persona side still has data (review’s exact reproduction)', () => {
+    insertResponse({ dist: { '0': 1, '1': 0 } }) // one valid persona row -> aggregatedResponseCount > 0
+    insertBaselineRow({ seed: 0, dist: { '0': 0.5, '1': 0.5 }, mode: 'multi_choice' })
+    insertBaselineRow({ seed: 1, dist: { '0': 0.5, '1': 0.5 }, mode: 'multi_choice' })
+
+    const results = computeRunResults(db, runId)
+    const q = results.questions[0]!
+    expect(q.baseline).toBeNull() // sanity: the whole control arm was dropped
+    expect(q.aggregatedResponseCount).toBe(1) // sanity: NOT the zero-aggregate branch
+    expect((q as unknown as { legacyElicitationBaselineCount: number }).legacyElicitationBaselineCount).toBe(2)
+
+    const prompt = buildEvaluationPrompt('R', results)
+    // Existing, already-tested wording (evaluate.ts) — this test only asserts
+    // it actually reaches the output when q.baseline is null, not that the
+    // wording itself is new.
+    expect(prompt).toContain('2 kontroll-kar válasz')
+    expect(prompt).toMatch(/régi.*elicitation/i)
+  })
+
+  it('keeps the legacy control-arm warning when the question has NO persona rows at all AND every baseline row is legacy (the zero-aggregate branch)', () => {
+    insertBaselineRow({ seed: 0, dist: { '0': 0.5, '1': 0.5 }, mode: 'multi_choice' })
+    insertBaselineRow({ seed: 1, dist: { '0': 0.9, '1': 0.1 }, mode: 'multi_choice' })
+
+    const results = computeRunResults(db, runId)
+    const q = results.questions[0]!
+    expect(q.baseline).toBeNull()
+    expect(q.aggregatedResponseCount).toBe(0) // sanity: THE zero-aggregate branch
+    expect((q as unknown as { legacyElicitationBaselineCount: number }).legacyElicitationBaselineCount).toBe(2)
+
+    const prompt = buildEvaluationPrompt('R', results)
+    expect(prompt).toContain('Nincs értékelhető válasz')
+    expect(prompt).toContain('2 kontroll-kar válasz')
   })
 })

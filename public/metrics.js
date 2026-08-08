@@ -29,6 +29,10 @@ const TOOLTIPS = {
     'Pozíció-konzisztencia (PC): a topválasz hányszor azonos az opciók eltérő sorrendjénél. 0.7 alatt a kérdés eredménye pozíció-érzékeny, nem megbízható.',
   repetitionStability:
     'Ismétlési stabilitás (RS): azonos beállítás mellett, eltérő seeddel hányszor azonos a topválasz. Alacsony érték: a válasz véletlen ingadozásra érzékeny.',
+  positionConsistencyBaseline:
+    'Kontroll-kar pozíció-konzisztencia (PC): ehhez a kérdéshez nincs perszónás válasz, ez a szám azt méri, hogy a modell saját, perszóna nélküli topválasza hányszor azonos az opciók eltérő sorrendjénél. 0.7 alatt a modell saját pozíció-torzítását mutatja, az eredmény nem megbízható.',
+  repetitionStabilityBaseline:
+    'Kontroll-kar ismétlési stabilitás (RS): ehhez a kérdéshez nincs perszónás válasz, ez a szám azt méri, hogy azonos beállítás mellett, eltérő seeddel hányszor azonos a modell saját topválasza. Alacsony érték: a modell saját válasza véletlen ingadozásra érzékeny.',
   positionWarning:
     'A topválasz megváltozott az opciók sorrendjével (PC < 0.7), ezért ez az eredmény sorrendi hatást tükröz, nem valós preferenciát — döntéshez nem használható.',
   stabilityWarning:
@@ -63,6 +67,8 @@ const TOOLTIPS = {
     'Egyválaszos kérdés: az opciók kizárják egymást, a valószínűségek 100%-ra összegződnek (Style C eloszlás).',
   legacyElicitation:
     'Régi elicitationnal készült válaszok: ezek a többválaszos kérdést is 100%-ra normalizált eloszlásként kérdezték le, ezért mást mérnek. Az aggregátumból kihagyva — az összehasonlíthatóság érdekében a kérdést újra kell futtatni.',
+  legacyElicitationBaseline:
+    'Régi elicitationnal készült kontroll-kar válaszok: ezek a többválaszos kérdést is 100%-ra normalizált eloszlásként kérdezték le, ezért mást mérnek. A kontroll-kar átlagából kihagyva — az összehasonlíthatóság érdekében a kérdést újra kell futtatni.',
   providerSpread:
     'Ezt a futtatást több szolgáltató szolgálta ki ugyanazzal a modell-azonosítóval. A szolgáltatók eltérő kvantálással futtatják a modellt, ezért a válaszok közti eltérés egy része routingból ered, nem a perszónából vagy a seedből — az ismétlési stabilitást (RS) ez rontja. Új futtatásnál a szolgáltató rögzíthető.',
   providerSingle: 'A futtatást végig ugyanaz a szolgáltató szolgálta ki, tehát a modellverzió mellett a futtatókörnyezet is állandó volt.',
@@ -70,6 +76,13 @@ const TOOLTIPS = {
     'Kontroll-kar: ugyanez a kérdés perszóna NÉLKÜL, ugyanazzal a sablonnal, szolgáltatóval és időpontban. Enélkül nem lehet megkülönböztetni a perszóna hatását a modell alapértelmezett válaszától.',
   personaEffect:
     'Perszóna-hatás: a perszóna eloszlásának Jensen–Shannon-távolsága a kontroll-kartól (0 = ugyanaz, 1 = teljesen más). A kontroll-kar saját seedjei közti ingadozás adja a zajszintet; ha a divergencia ennél kisebb, a perszóna nem térítette el a modellt.',
+  // Separate wording, not a variant of personaEffect above: that tooltip's
+  // explanation LEANS on "a kontroll-kar saját ingadozása" being a measured
+  // quantity, which here it isn't — the control arm survived the run with
+  // fewer than 2 of its own seed-groups, so there is nothing to compare the
+  // divergence against yet (issue #40 review CRITICAL).
+  personaEffectUndecidable:
+    'Perszóna-hatás: a perszóna eloszlásának Jensen–Shannon-távolsága a kontroll-kartól (0 = ugyanaz, 1 = teljesen más) — ez a szám valós. Azt viszont nem lehet megállapítani, hogy ez tényleges elmozdulás-e vagy csak véletlen ingadozás, mert ehhez a kérdéshez a kontroll-karnak csak egyetlen mérhető seed-csoportja maradt.',
   duplicateCells:
     'Ismételten rögzített cellák: párhuzamos futtató-hurkok miatt ugyanaz a cella (perszóna × kérdés × rotáció × seed) többször is lefutott. Az elemzés cellánként az első rögzítést használja, a többi megmarad a naplóban ismételt mérésként — az aggregátumot tehát nem torzítják, de a nyers sorszám nagyobb az egyedi celláknál.',
   support:
@@ -113,6 +126,13 @@ function renderMetricChips(question) {
   const chips = [];
   const pc = question.positionConsistency;
   const rs = question.repetitionStability;
+  // Same condition renderBaselineOnlyNotice already uses (issue #40 review
+  // HIGH/B): no persona ever answered this question, only the control arm.
+  // Deliberately NOT `aggregatedResponseCount === 0` — that can also be 0 in a
+  // mixed run where persona rows exist but were all invalid/abstained, which
+  // is a different situation (a persona WAS asked, it just gave no usable
+  // answer) from "no persona was ever asked" here.
+  const isBaselineOnly = Object.keys(question.byPersona || {}).length === 0 && !!question.baseline;
 
   if (question.elicitationMode === 'multi_choice') {
     chips.push(chip('metric-chip metric-chip-info', '☑ Többválaszos', TOOLTIPS.multiChoice));
@@ -126,15 +146,28 @@ function renderMetricChips(question) {
       )
     );
   }
+  // Control-arm-side drop, kept as a separate chip (not folded into the one
+  // above): the persona aggregate and the control-arm mean are two different
+  // numbers, so a bare "N válasz kihagyva" chip would leave the researcher
+  // unable to tell which side lost data (issue #40 review HIGH).
+  if (question.legacyElicitationBaselineCount) {
+    chips.push(
+      chip(
+        'metric-chip metric-chip-warning',
+        '⚠ régi elicitation (kontroll-kar): ' + formatNumber(question.legacyElicitationBaselineCount) + ' válasz kihagyva',
+        TOOLTIPS.legacyElicitationBaseline
+      )
+    );
+  }
 
   if (pc !== undefined && pc !== null) {
-    chips.push(chip('metric-chip', 'PC ' + formatMetric(pc), TOOLTIPS.positionConsistency));
+    chips.push(chip('metric-chip', 'PC ' + formatMetric(pc), isBaselineOnly ? TOOLTIPS.positionConsistencyBaseline : TOOLTIPS.positionConsistency));
     if (pc < 0.7) {
       chips.push(chip('metric-chip metric-chip-warning', '⚠ pozíció-érzékeny — nem megbízható', TOOLTIPS.positionWarning));
     }
   }
   if (rs !== undefined && rs !== null) {
-    chips.push(chip('metric-chip', 'RS ' + formatMetric(rs), TOOLTIPS.repetitionStability));
+    chips.push(chip('metric-chip', 'RS ' + formatMetric(rs), isBaselineOnly ? TOOLTIPS.repetitionStabilityBaseline : TOOLTIPS.repetitionStability));
     if (rs < 0.7) {
       chips.push(chip('metric-chip metric-chip-warning', '⚠ instabil', TOOLTIPS.stabilityWarning));
     }

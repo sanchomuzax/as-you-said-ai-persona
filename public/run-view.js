@@ -207,6 +207,22 @@ function renderOptionBars(question) {
   }).join('');
 }
 
+/**
+ * Suffix for a persona's divergence cell (issue #40 review CRITICAL).
+ * `movesModel === false` is a genuinely decided "within noise" result — the
+ * control arm's own noise floor was measured. `movesModel === null` HERE
+ * (only reached once a real divergence number is already on screen, i.e. a
+ * control arm exists) means the opposite: the noise floor could not be
+ * measured — fewer than 2 surviving control-arm seed-groups — so the reader
+ * must be told the number is real but not yet interpretable, never mistaken
+ * for "within noise" and never for a plain, decided divergence.
+ */
+function divergenceSuffix(movesModel) {
+  if (movesModel === false) return ' (zajszint)';
+  if (movesModel === null) return ' (nem eldönthető — kevés kontroll-adat)';
+  return '';
+}
+
 function renderPersonaBreakdown(question) {
   const byPersona = question.byPersona || {};
   const entries = Object.entries(byPersona);
@@ -230,10 +246,10 @@ function renderPersonaBreakdown(question) {
         <td>${escapeHtml(info.name || personaId)}</td>
         <td>${escapeHtml(topOption || '—')}</td>
         <td class="numeric">${topPct === '—' ? '—' : topPct + '%'}</td>
-        <td class="numeric" title="${escapeHtml(TOOLTIPS.personaEffect)}">${
+        <td class="numeric" title="${escapeHtml(info.movesModel === null && info.baselineDivergence != null ? TOOLTIPS.personaEffectUndecidable : TOOLTIPS.personaEffect)}">${
           info.baselineDivergence === null || info.baselineDivergence === undefined
             ? '—'
-            : formatMetric(info.baselineDivergence) + (info.movesModel === false ? ' (zajszint)' : '')
+            : formatMetric(info.baselineDivergence) + divergenceSuffix(info.movesModel)
         }</td>
         <td class="numeric">${formatNumber(info.abstainCount || 0)}</td>
       </tr>

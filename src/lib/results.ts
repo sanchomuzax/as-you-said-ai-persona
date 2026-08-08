@@ -14,6 +14,15 @@ export interface QuestionResult {
    * from the aggregate — but never silently: the count is reported.
    */
   legacyElicitationCount: number
+  /**
+   * Same drop, but on the control-arm side (`condition = 'baseline'`). Kept
+   * separate from `legacyElicitationCount`: in a mixed run the persona
+   * aggregate and the control-arm mean are two different numbers, and
+   * `legacyElicitationCount`'s one consumer (evaluate.ts's legacyNote) names a
+   * specific aggregate — folding a baseline-side drop into it would
+   * misattribute which aggregate lost a row.
+   */
+  legacyElicitationBaselineCount?: number
   /** Responses actually behind `aggregated` (valid, non-abstained, matching mode). */
   aggregatedResponseCount: number
   totalResponses: number
@@ -30,7 +39,17 @@ export interface QuestionResult {
       abstainCount: number
       /** Jensen-Shannon divergence from the control arm (0..1), null without an arm. */
       baselineDivergence: number | null
-      /** False when the persona's answer sits within the run's own seed noise. */
+      /**
+       * Whether the persona's divergence exceeds the control arm's own seed
+       * noise floor. `null` on two DIFFERENT grounds, distinguishable only via
+       * `baselineDivergence`: no control arm at all (`baselineDivergence` is
+       * also `null` there), or a control arm with fewer than 2 surviving
+       * seed-groups — a real divergence was measured (`baselineDivergence` is
+       * a number), but there is nothing to compare it against, so the answer
+       * is genuinely unknown, never `true` by default (issue #40 review
+       * CRITICAL). `true`/`false` are only produced once a real noise floor
+       * (>= 2 seed-groups) was measured.
+       */
       movesModel: boolean | null
     }
   >
@@ -121,13 +140,29 @@ export function computeRunResults(db: Db, runId: string): RunResults {
     const valid = usable
 
     const aggregated = meanDistribution(valid, options.length)
-    const validBaseline = baselineRows.filter(
+    const parsableBaseline = baselineRows.filter(
       (r) => r.is_valid === 1 && r.abstained === 0 && r.parsed_distribution_json
     )
+    // Same elicitation_mode filter as the persona side (`usable` above), with
+    // the same null-legacy + single_choice allowance — otherwise a baseline row
+    // recorded under a stale mode both skews the control-arm mean and corrupts
+    // its PC/RS group (issue #40 review MEDIUM).
+    const validBaseline = parsableBaseline.filter(
+      (r) => r.elicitation_mode === mode || (r.elicitation_mode === null && mode === 'single_choice')
+    )
+    const legacyElicitationBaselineCount = parsableBaseline.length - validBaseline.length
     const baseline = validBaseline.length > 0 ? meanDistribution(validBaseline, options.length) : null
     // Noise floor: how far the control arm drifts from itself between seeds. A
-    // persona closer than that has not moved the model, it has moved with the noise.
-    const noiseFloor = baseline ? seedNoiseFloor(validBaseline, options.length) : 0
+    // persona closer than that has not moved the model, it has moved with the
+    // noise. `null` (not 0) when fewer than 2 control-arm seed-groups survive
+    // the elicitation-mode filter above — with only one group there is no pair
+    // to measure drift between, so "0 noise" would be a fabricated measurement,
+    // not an absence of one, and every non-zero divergence would then read as
+    // "moved the model" (issue #40 review CRITICAL).
+    const noiseFloor = baseline ? seedNoiseFloor(validBaseline, options.length) : null
+    // PC/RS are computed over both arms together (see below) — the control arm
+    // is real evidence of the model's own stability, not just a comparison point.
+    const pcRsRows = [...valid, ...validBaseline]
 
     const byPersona: QuestionResult['byPersona'] = {}
     for (const row of rows) {
@@ -140,7 +175,11 @@ export function computeRunResults(db: Db, runId: string): RunResults {
           distribution,
           abstainCount: rows.filter((r) => r.persona_id === row.persona_id && r.abstained === 1).length,
           baselineDivergence: divergence,
-          movesModel: divergence === null ? null : divergence > noiseFloor
+          // Undecidable (null) unless BOTH a divergence AND a measured noise
+          // floor exist — a control arm with only one surviving seed-group has
+          // a real divergence but no measurable noise floor, and must not
+          // default to `true` just because `divergence > 0`.
+          movesModel: divergence === null || noiseFloor === null ? null : divergence > noiseFloor
         }
       }
     }
@@ -153,6 +192,7 @@ export function computeRunResults(db: Db, runId: string): RunResults {
       baseline,
       elicitationMode: mode,
       legacyElicitationCount,
+      legacyElicitationBaselineCount,
       aggregatedResponseCount: valid.length,
       // All rows for this question — persona AND control-arm — not just `rows`
       // (persona-condition only): the control arm's own invalid/abstain rows are
@@ -162,8 +202,18 @@ export function computeRunResults(db: Db, runId: string): RunResults {
       abstainCount: allRows.filter((r) => r.abstained === 1).length,
       aggregated,
       byPersona,
-      positionConsistency: consistency(valid, (r) => `${r.persona_id}|${r.seed}`, mode),
-      repetitionStability: consistency(valid, (r) => `${r.persona_id}|${r.permutation_json}`, mode)
+      // PC/RS group by (subject, seed/rotation) — "subject" is the persona for
+      // persona rows and the control arm itself for baseline rows (persona_id
+      // is NULL there). Combining both arms here, keyed this way, means a
+      // baseline-only (calibration) run gets a real PC/RS instead of null, and
+      // a mixed run keeps the control arm's own group separate from every
+      // persona's group rather than dropping it (issue #40).
+      positionConsistency: consistency(pcRsRows, (r) => `${r.persona_id ?? 'baseline'}|${r.seed}`, mode),
+      repetitionStability: consistency(
+        pcRsRows,
+        (r) => `${r.persona_id ?? 'baseline'}|${r.permutation_json}`,
+        mode
+      )
     }
   })
 
@@ -275,15 +325,21 @@ function jensenShannon(p: number[], q: number[]): number {
   return Math.min(Math.max(divergence, 0), 1)
 }
 
-/** Mean divergence between the control arm's own seeds: the run's own noise level. */
-function seedNoiseFloor(baselineRows: ResponseRow[], optionCount: number): number {
+/**
+ * Mean divergence between the control arm's own seeds: the run's own noise
+ * level. `null` when fewer than 2 seed-groups survive — the noise floor is
+ * genuinely unmeasurable then, not zero (issue #40 review CRITICAL: a
+ * fabricated 0 would make every non-zero persona divergence read as "moved
+ * the model").
+ */
+function seedNoiseFloor(baselineRows: ResponseRow[], optionCount: number): number | null {
   const bySeed = new Map<number, ResponseRow[]>()
   for (const row of baselineRows) {
     if (!bySeed.has(row.seed)) bySeed.set(row.seed, [])
     bySeed.get(row.seed)!.push(row)
   }
   const distributions = [...bySeed.values()].map((rows) => meanDistribution(rows, optionCount))
-  if (distributions.length < 2) return 0
+  if (distributions.length < 2) return null
   let sum = 0
   let pairs = 0
   for (let i = 0; i < distributions.length; i++) {
