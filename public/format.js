@@ -72,6 +72,16 @@ function answerLabel(parsedAnswer, options, isMultiChoice) {
   return labels.join(' + ');
 }
 
+/**
+ * The inverse of parseDemographics's "kulcs: érték" split, used to keep the
+ * structured key–value editor's hidden sync textarea (public/detail.js,
+ * public/structured-editors.js — issue #37) in the exact text shape
+ * parseDemographics expects.
+ */
+function pairsToText(pairs) {
+  return (pairs || []).map(([k, v]) => `${k}: ${v}`).join('\n');
+}
+
 /** The inverse of the marker parsing above, used to prefill the edit form. */
 function questionsToText(questions) {
   return (questions || [])

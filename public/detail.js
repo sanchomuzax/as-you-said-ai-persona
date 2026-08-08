@@ -85,6 +85,129 @@ function detailSection(title, body, tooltip) {
   return `<div class="detail-section">${heading}${body}</div>`;
 }
 
+// ----- Structured kulcs–érték and kérdés–opció editors (issue #37) -----
+// Same defect class as #28's provider field: a mini-syntax typed from memory,
+// documented only in a placeholder that disappears the moment the user
+// starts typing. Key and value (question and option) get their own <input>
+// here, so there is no delimiter to parse and no colon ambiguity — a
+// demographic value routinely contains a colon itself
+// ("hírérdeklődés: széleskörű: külföldi hírek (91%)…", see parsers.js).
+//
+// These are pure string builders (this file's own rule, see the header
+// comment above) — the interactive add/remove-row/option wiring and the
+// hidden-textarea sync live in public/structured-editors.js, loaded after
+// every script whose data attributes and element ids these builders share.
+// A hidden textarea still mirrors the rows as exactly the text
+// parseDemographics/parseQuestions expect, pre-filled here so the existing
+// submit handlers (app.js, entity-view.js) keep working unchanged even
+// before structured-editors.js's listeners run a first sync.
+
+const KV_EDITOR_HINTS = {
+  demographics:
+    'Minden sor egy kulcs–érték párt jelent, például „kor” és „25”. Az érték szabadon tartalmazhat kettőspontot vagy vesszőt — nincs szintaxis, amit fejből kellene tudni.',
+  provenance:
+    'A demográfiai mag forrása: honnan származik az adat, mikor kérted le, milyen arányban. Soronként egy kulcs–érték pár, például „forrás” és „KSH Mikrocenzus 2022”.'
+};
+
+const QUESTION_EDITOR_HINT =
+  'Adj meg minden kérdéshez egy szöveget és legalább két választ; új kérdést vagy választ a gombokkal vehetsz fel. A kérdés típusát és a skála irányát alul, a legördülőkben állíthatod.';
+
+/** Converts a persona's demographics/provenance object into [key, value] pairs for the editor. */
+function kvPairsFromObject(obj) {
+  return Object.entries(obj || {}).map(([k, v]) => [k, v === null || v === undefined ? '' : String(v)]);
+}
+
+function kvRowHtml(index, key, value) {
+  return `
+    <div class="kv-row" data-kv-row="${index}">
+      <input type="text" class="kv-key" data-kv-key aria-label="Kulcs" placeholder="pl. kor" value="${escapeHtml(key)}">
+      <input type="text" class="kv-value" data-kv-value aria-label="Érték" placeholder="pl. 25" value="${escapeHtml(value)}">
+      <button type="button" class="btn btn-secondary btn-sm kv-remove" data-kv-remove aria-label="Sor törlése">&times;</button>
+    </div>
+  `;
+}
+
+/** Initial feedback text computed straight from the known pairs — safe to use here without parseDemographics. */
+function kvFeedbackText(pairs) {
+  const filled = (pairs || []).filter(([k]) => (k || '').trim());
+  return filled.length
+    ? 'Mentéskor rögzített mezők: ' + filled.map(([k, v]) => `${k} = ${v}`).join(', ')
+    : 'Még nincs kitöltött sor.';
+}
+
+/**
+ * A key–value row editor: `fieldId` names the hidden textarea that mirrors the
+ * rows as "kulcs: érték" text (what parseDemographics still reads at submit
+ * time), `pairs` are the initial [key, value] entries, `hint` is the
+ * always-visible format explanation (never a placeholder — issue #37).
+ */
+function kvEditorHtml(fieldId, pairs, hint) {
+  const rows = pairs.length ? pairs : [['', '']];
+  return `
+    <div class="kv-editor" data-kv-editor="${fieldId}">
+      <div class="kv-rows" data-kv-rows>${rows.map(([k, v], i) => kvRowHtml(i, k, v)).join('')}</div>
+      <button type="button" class="btn btn-secondary btn-sm kv-add" data-kv-add>+ Sor hozzáadása</button>
+      <p class="form-note">${escapeHtml(hint)}</p>
+      <p class="kv-feedback" data-kv-feedback>${escapeHtml(kvFeedbackText(pairs))}</p>
+      <textarea id="${fieldId}" class="editor-hidden-sync" hidden aria-hidden="true">${escapeHtml(pairsToText(pairs))}</textarea>
+    </div>
+  `;
+}
+
+function questionOptionRowHtml(optIndex, value) {
+  return `
+    <div class="q-option-row" data-q-option="${optIndex}">
+      <span class="q-option-marker" aria-hidden="true">–</span>
+      <input type="text" class="q-option-text" data-q-option-text aria-label="Válaszopció szövege" placeholder="pl. Igen" value="${escapeHtml(value)}">
+      <button type="button" class="btn btn-secondary btn-sm q-option-remove" data-q-option-remove aria-label="Opció törlése">&times;</button>
+    </div>
+  `;
+}
+
+function questionBlockHtml(qIndex, question) {
+  const q = question || {};
+  const options = q.options && q.options.length ? q.options : ['', ''];
+  return `
+    <div class="q-block" data-q-block="${qIndex}">
+      <div class="q-block-header">
+        <span class="q-block-number">${qIndex + 1}.</span>
+        <input type="text" class="q-text" data-q-text aria-label="Kérdés szövege" placeholder="pl. Mennyire vagy elégedett a szolgáltatással?" value="${escapeHtml(q.text || '')}">
+        <button type="button" class="btn btn-secondary btn-sm q-block-remove" data-q-block-remove aria-label="Kérdés törlése">Kérdés törlése</button>
+      </div>
+      <div class="q-options" data-q-options>${options.map((o, i) => questionOptionRowHtml(i, o)).join('')}</div>
+      <button type="button" class="btn btn-secondary btn-sm q-option-add" data-q-option-add>+ Opció hozzáadása</button>
+    </div>
+  `;
+}
+
+/** Initial feedback text computed straight from the known questions — safe to use here without parseQuestions. */
+function questionFeedbackText(questions) {
+  const usable = (questions || []).filter((q) => (q.text || '').trim() && (q.options || []).some((o) => (o || '').trim()));
+  return usable.length
+    ? `Mentéskor ${usable.length} kérdés kerül a kérdőívbe.`
+    : 'Még nincs menthető kérdés — adj meg egy kérdésszöveget és legalább egy választ.';
+}
+
+/**
+ * A question/option block editor: `fieldId` names the hidden textarea that
+ * mirrors the blocks as the "Kérdés? [type, direction]\n- opt" text
+ * parseQuestions still reads at submit time (and what the existing scale
+ * type/direction picker panel, public/scale-picker.js + app.js, re-renders
+ * from — unchanged by this editor).
+ */
+function questionEditorHtml(fieldId, questions, hint) {
+  const list = questions && questions.length ? questions : [{ text: '', options: ['', ''] }];
+  return `
+    <div class="q-editor" data-q-editor="${fieldId}">
+      <div class="q-blocks" data-q-blocks>${list.map((q, i) => questionBlockHtml(i, q)).join('')}</div>
+      <button type="button" class="btn btn-secondary btn-sm q-block-add" data-q-block-add>+ Kérdés hozzáadása</button>
+      <p class="form-note">${escapeHtml(hint)}</p>
+      <p class="q-feedback" data-q-feedback>${escapeHtml(questionFeedbackText(list))}</p>
+      <textarea id="${fieldId}" class="editor-hidden-sync" hidden aria-hidden="true">${escapeHtml(questionsToText(list))}</textarea>
+    </div>
+  `;
+}
+
 function renderProjectDetail(project, context) {
   const personas = context.personas || [];
   const questionnaires = context.questionnaires || [];
@@ -269,8 +392,16 @@ function renderVersionHistory(versions) {
 }
 
 function personaVersionForm(persona) {
-  const demographics = Object.entries(persona.demographics || {}).map(([k, v]) => `${k}: ${v}`).join('\n');
-  const provenance = Object.entries(persona.provenance || {}).map(([k, v]) => `${k}: ${v}`).join('\n');
+  const demographicsEditor = kvEditorHtml(
+    'personaVersionDemographics',
+    kvPairsFromObject(persona.demographics),
+    KV_EDITOR_HINTS.demographics
+  );
+  const provenanceEditor = kvEditorHtml(
+    'personaVersionProvenance',
+    kvPairsFromObject(persona.provenance),
+    KV_EDITOR_HINTS.provenance
+  );
   return `
     <form class="detail-edit-form" id="personaVersionForm" data-persona-id="${escapeHtml(persona.id)}" style="display: none;">
       <div class="form-group">
@@ -278,16 +409,16 @@ function personaVersionForm(persona) {
         <input type="text" id="personaVersionName" value="${escapeHtml(persona.name)}" required>
       </div>
       <div class="form-group">
-        <label for="personaVersionDemographics">Demográfia (kulcs: érték, egy sorban)</label>
-        <textarea id="personaVersionDemographics" rows="6">${escapeHtml(demographics)}</textarea>
+        <label id="personaVersionDemographicsLabel">Demográfia</label>
+        ${demographicsEditor}
       </div>
       <div class="form-group">
         <label for="personaVersionBiography">Életrajz</label>
         <textarea id="personaVersionBiography" rows="4">${escapeHtml(persona.biography || '')}</textarea>
       </div>
       <div class="form-group">
-        <label for="personaVersionProvenance">Provenance / forrás (kulcs: érték, egy sorban)</label>
-        <textarea id="personaVersionProvenance" rows="3">${escapeHtml(provenance)}</textarea>
+        <label id="personaVersionProvenanceLabel" title="${escapeHtml(DETAIL_TOOLTIPS.provenance)}">Provenance / forrás</label>
+        ${provenanceEditor}
         <span class="detail-note">Üresen hagyva törli a rögzített forrást.</span>
       </div>
       <div class="form-group">
@@ -308,7 +439,7 @@ function personaVersionForm(persona) {
 }
 
 function questionnaireVersionForm(questionnaire) {
-  const text = questionsToText(questionnaire.questions);
+  const editor = questionEditorHtml('questionnaireVersionText', questionnaire.questions || [], QUESTION_EDITOR_HINT);
   return `
     <form class="detail-edit-form" id="questionnaireVersionForm" data-questionnaire-id="${escapeHtml(questionnaire.id)}" style="display: none;">
       <div class="form-group">
@@ -316,14 +447,10 @@ function questionnaireVersionForm(questionnaire) {
         <input type="text" id="questionnaireVersionName" value="${escapeHtml(questionnaire.name)}" required>
       </div>
       <div class="form-group">
-        <label for="questionnaireVersionText">Kérdések (üres sor választ el)</label>
-        <div class="questionnaire-editor">
-          <div class="questionnaire-editor-input">
-            <textarea id="questionnaireVersionText" rows="12">${escapeHtml(text)}</textarea>
-          </div>
-          <div class="questionnaire-editor-pickers" id="questionnaireVersionScalePickers"></div>
-        </div>
-        <div class="form-note">Szerkeszd a kérdéseket fent — a típusok és irányok alul jelennek meg.</div>
+        <label id="questionnaireVersionTextLabel">Kérdések</label>
+        ${editor}
+        <div class="questionnaire-editor-pickers" id="questionnaireVersionScalePickers"></div>
+        <div class="form-note">A kérdés típusa és a skála iránya a fenti kérdések alapján itt jelenik meg, és szerkesztés után frissül.</div>
       </div>
       <div class="detail-edit-actions">
         <button type="submit" class="btn btn-primary btn-sm">Új verzió mentése</button>

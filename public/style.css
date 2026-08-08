@@ -1812,3 +1812,113 @@ body {
   font-style: italic;
   margin-top: var(--space-1);
 }
+
+/* ----- Structured kulcs–érték / kérdés–opció editors (issue #37) ----- */
+
+.kv-editor,
+.q-editor {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.kv-rows,
+.q-blocks {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.kv-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr auto;
+  gap: var(--space-2);
+  align-items: center;
+}
+
+.kv-row .kv-key,
+.kv-row .kv-value {
+  padding: var(--space-2);
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  color: var(--color-text);
+  font-size: 13px;
+}
+
+.kv-row .kv-key:focus,
+.kv-row .kv-value:focus,
+.q-block-header .q-text:focus,
+.q-option-row .q-option-text:focus {
+  outline: none;
+  border-color: var(--color-accent);
+  box-shadow: 0 0 0 2px rgba(20, 184, 166, 0.1);
+}
+
+.q-block {
+  background: var(--color-bg-secondary);
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  padding: var(--space-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.q-block-header {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: var(--space-2);
+  align-items: center;
+}
+
+.q-block-number {
+  font-weight: 600;
+  color: var(--color-text-secondary);
+}
+
+.q-block-header .q-text {
+  padding: var(--space-2);
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  color: var(--color-text);
+  font-size: 13px;
+}
+
+.q-options {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding-left: var(--space-4);
+}
+
+.q-option-row {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: var(--space-2);
+  align-items: center;
+}
+
+.q-option-row .q-option-text {
+  padding: var(--space-2);
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  color: var(--color-text);
+  font-size: 13px;
+}
+
+.q-option-marker {
+  color: var(--color-text-secondary);
+}
+
+.kv-feedback,
+.q-feedback {
+  font-size: 12px;
+  color: var(--color-text-secondary);
+  padding: var(--space-2);
+  background: rgba(20, 184, 166, 0.05);
+  border-left: 3px solid var(--color-accent);
+  border-radius: 4px;
+}

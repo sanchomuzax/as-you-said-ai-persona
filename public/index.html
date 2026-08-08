@@ -207,16 +207,40 @@
               <input type="text" id="personaName" required>
             </div>
             <div class="form-group">
-              <label for="personaDemographics">Demográfia (kulcs: érték, egy sorban)</label>
-              <textarea id="personaDemographics" rows="4" placeholder="kor: 25&#10;nem: nő&#10;város: Budapest"></textarea>
+              <label id="personaDemographicsLabel">Demográfia</label>
+              <div class="kv-editor" data-kv-editor="personaDemographics" aria-labelledby="personaDemographicsLabel">
+                <div class="kv-rows" data-kv-rows>
+                  <div class="kv-row" data-kv-row="0">
+                    <input type="text" class="kv-key" data-kv-key aria-label="Kulcs" placeholder="pl. kor">
+                    <input type="text" class="kv-value" data-kv-value aria-label="Érték" placeholder="pl. 25">
+                    <button type="button" class="btn btn-secondary btn-sm kv-remove" data-kv-remove aria-label="Sor törlése">&times;</button>
+                  </div>
+                </div>
+                <button type="button" class="btn btn-secondary btn-sm kv-add" data-kv-add>+ Sor hozzáadása</button>
+                <p class="form-note">Minden sor egy kulcs–érték párt jelent, például „kor” és „25”. Az érték szabadon tartalmazhat kettőspontot vagy vesszőt — nincs szintaxis, amit fejből kellene tudni.</p>
+                <p class="kv-feedback" data-kv-feedback>Még nincs kitöltött sor.</p>
+                <textarea id="personaDemographics" class="editor-hidden-sync" hidden aria-hidden="true"></textarea>
+              </div>
             </div>
             <div class="form-group">
               <label for="personaBiography">Életrajz (opcionális)</label>
               <textarea id="personaBiography" rows="4"></textarea>
             </div>
             <div class="form-group">
-              <label for="personaProvenance" title="A demográfiai mag forrása. A módszertan külső statisztikai forrást ír elő (anchor core) — ide kerül a forrás, a lekérés dátuma és az arányok.">Provenance / forrás (kulcs: érték, egy sorban)</label>
-              <textarea id="personaProvenance" rows="3" placeholder="forrás: KSH Mikrocenzus 2022&#10;lekérve: 2026-08-06&#10;arány: 12%"></textarea>
+              <label id="personaProvenanceLabel" title="A demográfiai mag forrása. A módszertan külső statisztikai forrást ír elő (anchor core) — ide kerül a forrás, a lekérés dátuma és az arányok.">Provenance / forrás</label>
+              <div class="kv-editor" data-kv-editor="personaProvenance" aria-labelledby="personaProvenanceLabel">
+                <div class="kv-rows" data-kv-rows>
+                  <div class="kv-row" data-kv-row="0">
+                    <input type="text" class="kv-key" data-kv-key aria-label="Kulcs" placeholder="pl. forrás">
+                    <input type="text" class="kv-value" data-kv-value aria-label="Érték" placeholder="pl. KSH Mikrocenzus 2022">
+                    <button type="button" class="btn btn-secondary btn-sm kv-remove" data-kv-remove aria-label="Sor törlése">&times;</button>
+                  </div>
+                </div>
+                <button type="button" class="btn btn-secondary btn-sm kv-add" data-kv-add>+ Sor hozzáadása</button>
+                <p class="form-note">A demográfiai mag forrása: honnan származik az adat, mikor kérted le, milyen arányban. Soronként egy kulcs–érték pár, például „forrás” és „KSH Mikrocenzus 2022”.</p>
+                <p class="kv-feedback" data-kv-feedback>Még nincs kitöltött sor.</p>
+                <textarea id="personaProvenance" class="editor-hidden-sync" hidden aria-hidden="true"></textarea>
+              </div>
             </div>
             <div class="form-group">
               <label for="personaStyle">Renderelési stílus</label>
@@ -260,14 +284,37 @@
               <input type="text" id="questionnaireName" required>
             </div>
             <div class="form-group">
-              <label for="questionnaireEditor">Kérdések (üres sor választ el)</label>
-              <div id="questionnaireEditor" class="questionnaire-editor">
-                <div class="questionnaire-editor-input">
-                  <textarea id="questionsText" rows="8" placeholder="Kérdés 1?&#10;- Válasz A&#10;- Válasz B&#10;&#10;Kérdés 2?&#10;- Válasz X&#10;- Válasz Y"></textarea>
+              <label id="questionsEditorLabel">Kérdések</label>
+              <div class="q-editor" data-q-editor="questionsText" aria-labelledby="questionsEditorLabel">
+                <div class="q-blocks" data-q-blocks>
+                  <div class="q-block" data-q-block="0">
+                    <div class="q-block-header">
+                      <span class="q-block-number">1.</span>
+                      <input type="text" class="q-text" data-q-text aria-label="Kérdés szövege" placeholder="pl. Mennyire vagy elégedett a szolgáltatással?">
+                      <button type="button" class="btn btn-secondary btn-sm q-block-remove" data-q-block-remove aria-label="Kérdés törlése">Kérdés törlése</button>
+                    </div>
+                    <div class="q-options" data-q-options>
+                      <div class="q-option-row" data-q-option="0">
+                        <span class="q-option-marker" aria-hidden="true">–</span>
+                        <input type="text" class="q-option-text" data-q-option-text aria-label="Válaszopció szövege" placeholder="pl. Igen">
+                        <button type="button" class="btn btn-secondary btn-sm q-option-remove" data-q-option-remove aria-label="Opció törlése">&times;</button>
+                      </div>
+                      <div class="q-option-row" data-q-option="1">
+                        <span class="q-option-marker" aria-hidden="true">–</span>
+                        <input type="text" class="q-option-text" data-q-option-text aria-label="Válaszopció szövege" placeholder="pl. Nem">
+                        <button type="button" class="btn btn-secondary btn-sm q-option-remove" data-q-option-remove aria-label="Opció törlése">&times;</button>
+                      </div>
+                    </div>
+                    <button type="button" class="btn btn-secondary btn-sm q-option-add" data-q-option-add>+ Opció hozzáadása</button>
+                  </div>
                 </div>
-                <div class="questionnaire-editor-pickers" id="questionnaireScalePickers"></div>
+                <button type="button" class="btn btn-secondary btn-sm q-block-add" data-q-block-add>+ Kérdés hozzáadása</button>
+                <p class="form-note">Adj meg minden kérdéshez egy szöveget és legalább két választ; új kérdést vagy választ a gombokkal vehetsz fel. A kérdés típusát és a skála irányát alul, a legördülőkben állíthatod.</p>
+                <p class="q-feedback" data-q-feedback>Még nincs menthető kérdés.</p>
+                <textarea id="questionsText" class="editor-hidden-sync" hidden aria-hidden="true"></textarea>
               </div>
-              <div class="form-note" id="questionnaireModeHint">Szerkeszd a kérdéseket fent — a típusok és irányok alul jelennek meg.</div>
+              <div class="questionnaire-editor-pickers" id="questionnaireScalePickers"></div>
+              <div class="form-note" id="questionnaireModeHint">A kérdés típusa és a skála iránya a fenti kérdések alapján itt jelenik meg, és szerkesztés után frissül.</div>
             </div>
             <button type="submit" class="btn btn-primary">Kérdőív hozzáadása</button>
           </form>
@@ -613,11 +660,13 @@
   <script src="focus-return.js"></script>
   <script src="collapsible.js"></script>
   <script src="detail.js"></script>
+  <script src="structured-editors.js"></script>
   <script src="provenance.js"></script>
   <script src="interview.js"></script>
   <script src="model-card.js"></script>
   <script src="provider-field.js"></script>
   <script src="app.js"></script>
+  <script src="project-select.js"></script>
   <script src="entity-view.js"></script>
   <script src="runs-list.js"></script>
   <script src="run-view.js"></script>
