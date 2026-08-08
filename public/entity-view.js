@@ -17,6 +17,8 @@ function reconstructQuestionsWithScalePickers(textareaId, pickersContainerId) {
   if (!textarea) return [];
 
   const parsed = parseQuestions(textarea.value);
+  const editor = textarea.closest('[data-q-editor]');
+  const blocks = editor ? [...editor.querySelectorAll('[data-q-block]')] : [];
   return parsed.map((q, idx) => {
     const typeSelect = document.getElementById(`scale-type-${idx}`);
     const directionSelect = document.getElementById(`scale-direction-${idx}`);
@@ -30,12 +32,22 @@ function reconstructQuestionsWithScalePickers(textareaId, pickersContainerId) {
       throw new Error(validation.error);
     }
 
-    return {
+    let metadata = null;
+    const rawMetadata = blocks[idx]?.dataset.qMetadata;
+    if (rawMetadata) metadata = JSON.parse(rawMetadata);
+    const originalOptions = blocks[idx]?.dataset.qOriginalOptions;
+    if (metadata?._reference && originalOptions && JSON.stringify(q.options) !== originalOptions) {
+      throw new Error('Referencia-metaadattal ellátott kérdés válaszopciói nem módosíthatók, mert az opcióindexek elavulnának. Hozz létre új kérdőívet friss referenciával.');
+    }
+    const question = {
       text: q.text,
       options: q.options,
       scaleType,
       scaleDirection
     };
+    // Absence stays absence: adding metadata:null to every legacy question is
+    // harmless in storage, but makes an untouched round-trip look changed.
+    return metadata ? { ...question, metadata } : question;
   });
 }
 
@@ -173,7 +185,9 @@ async function saveNewVersion(kind, form) {
           }
         : {
             name: document.getElementById('questionnaireVersionName').value,
-            questions: reconstructQuestionsWithScalePickers('questionnaireVersionText', 'questionnaireVersionScalePickers')
+            questions: reconstructQuestionsWithScalePickers('questionnaireVersionText', 'questionnaireVersionScalePickers'),
+            sourceQuestionIds: [...document.querySelectorAll('[data-q-editor="questionnaireVersionText"] [data-q-block]')]
+              .map((block) => block.dataset.qId || null)
           };
     const sourceId = kind === 'personas' ? form.dataset.personaId : form.dataset.questionnaireId;
     const created = await apiCall('POST', `/api/${kind}/${encodeURIComponent(sourceId)}/versions`, body);

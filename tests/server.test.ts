@@ -676,6 +676,150 @@ describe('provider pinning and provider spread', () => {
 })
 
 describe('version round-trip must not lose experimental settings', () => {
+  it('matches referenced questions by API id when an earlier unreferenced question is deleted', async () => {
+    const metadata = {
+      _reference: { ertek: '60%', forras: 'KSH', ev: '2025', referenceShare: 0.6, optionIndexes: [0, 2] }
+    }
+    const created = await app.inject({
+      method: 'POST', url: '/api/questionnaires', cookies: cookie,
+      payload: {
+        name: 'Két kérdés',
+        questions: [
+          { text: 'Törlendő Q1?', options: ['Igen', 'Nem'], scaleType: 'single_choice' },
+          { text: 'Változatlan Q2?', options: ['Anna', 'Gábor', 'Judit', 'Péter'], scaleType: 'single_choice', metadata }
+        ]
+      }
+    })
+    const id = created.json().data.id
+    // The client must use the stable source-question id returned by list/detail,
+    // not infer identity from the array position after Q1 disappears.
+    const detail = (await app.inject({ method: 'GET', url: `/api/questionnaires/${id}`, cookies: cookie })).json().data
+    const q2 = detail.questions[1]
+    expect(q2.id).toEqual(expect.any(String))
+
+    const version = await app.inject({
+      method: 'POST', url: `/api/questionnaires/${id}/versions`, cookies: cookie,
+      payload: { name: 'Csak Q2', questions: [q2] }
+    })
+    expect(version.statusCode).toBe(200)
+    const versions = (await app.inject({ method: 'GET', url: `/api/questionnaires/${id}/versions`, cookies: cookie })).json().data
+    expect(versions[1].questions).toHaveLength(1)
+    expect(versions[1].questions[0]).toMatchObject({
+      text: 'Változatlan Q2?',
+      options: ['Anna', 'Gábor', 'Judit', 'Péter'],
+      metadata
+    })
+  })
+
+  it('blocks deleting or rewriting options while preserving stale reference optionIndexes', async () => {
+    const metadata = {
+      _reference: { ertek: '60%', forras: 'KSH', ev: '2025', referenceShare: 0.6, optionIndexes: [0, 2] }
+    }
+    for (const [name, options] of [
+      ['Opciótörlés', ['Anna', 'Gábor']],
+      ['Opcióátírás', ['Más személy', 'Gábor', 'Judit', 'Péter']]
+    ] as const) {
+      const id = (await app.inject({
+        method: 'POST', url: '/api/questionnaires', cookies: cookie,
+        payload: {
+          name,
+          questions: [{ text: 'Ki szerepel?', options: ['Anna', 'Gábor', 'Judit', 'Péter'], scaleType: 'single_choice', metadata }]
+        }
+      })).json().data.id
+      const changed = await app.inject({
+        method: 'POST', url: `/api/questionnaires/${id}/versions`, cookies: cookie,
+        payload: {
+          name,
+          questions: [{ text: 'Ki szerepel?', options, scaleType: 'single_choice', scaleDirection: 'ascending', metadata }]
+        }
+      })
+      expect(changed.statusCode, name).toBe(400)
+      expect(changed.json().error, name).toMatch(/referencia|metaadat|opció/i)
+    }
+  })
+
+  it.each([
+    {
+      name: 'ismeretlen question.id',
+      payload: (q1: Record<string, unknown>, q2: Record<string, unknown>) => ({
+        questions: [{ ...q2, id: 'ismeretlen-kérdés', options: ['Más személy', 'Gábor', 'Judit', 'Péter'] }]
+      })
+    },
+    {
+      name: 'részleges sourceQuestionIds',
+      payload: (q1: Record<string, unknown>, q2: Record<string, unknown>) => ({
+        sourceQuestionIds: [q1['id']],
+        questions: [{ ...q2, id: undefined, options: ['Más személy', 'Gábor', 'Judit', 'Péter'] }]
+      })
+    },
+    {
+      name: 'duplikált question.id',
+      payload: (_q1: Record<string, unknown>, q2: Record<string, unknown>) => ({
+        questions: [
+          q2,
+          { ...q2, options: ['Más személy', 'Gábor', 'Judit', 'Péter'] }
+        ]
+      })
+    }
+  ])('rejects $name instead of letting modified reference options bypass protection', async ({ name, payload }) => {
+    const metadata = {
+      _reference: { ertek: '60%', forras: 'KSH', ev: '2025', referenceShare: 0.6, optionIndexes: [0, 2] }
+    }
+    const id = (await app.inject({
+      method: 'POST', url: '/api/questionnaires', cookies: cookie,
+      payload: {
+        name: `Azonosító-védelem — ${name}`,
+        questions: [
+          { text: 'Q1 metaadat nélkül?', options: ['Igen', 'Nem'], scaleType: 'single_choice' },
+          { text: 'Q2 referenciával?', options: ['Anna', 'Gábor', 'Judit', 'Péter'], scaleType: 'single_choice', metadata }
+        ]
+      }
+    })).json().data.id
+    const source = (await app.inject({ method: 'GET', url: `/api/questionnaires/${id}`, cookies: cookie })).json().data
+    const body = payload(source.questions[0], source.questions[1])
+
+    const changed = await app.inject({
+      method: 'POST', url: `/api/questionnaires/${id}/versions`, cookies: cookie,
+      payload: { name: source.name, ...body }
+    })
+    expect(changed.statusCode).toBe(400)
+    expect(changed.json().error).toMatch(/kérdés|azonosító|referencia|opció/i)
+  })
+
+  it('keeps question metadata through questionnaire list, detail and version APIs', async () => {
+    const metadata = {
+      _scope: 'lokális',
+      _tier: 'gyenge',
+      _torzitas: 'tekintélytorzítás',
+      _reference: {
+        mit: 'nőarány', ertek: '60%', forras: 'KSH', ev: '2025',
+        referenceShare: 0.6, optionIndexes: [0, 2]
+      }
+    }
+    const created = await app.inject({
+      method: 'POST', url: '/api/questionnaires', cookies: cookie,
+      payload: {
+        name: 'Referenciás',
+        questions: [{ text: 'Ki szerepel?', options: ['Anna', 'Gábor', 'Judit', 'Péter'], scaleType: 'single_choice', metadata }]
+      }
+    })
+    expect(created.statusCode).toBe(200)
+    const id = created.json().data.id
+
+    const listed = (await app.inject({ method: 'GET', url: '/api/questionnaires', cookies: cookie })).json().data[0]
+    const detail = (await app.inject({ method: 'GET', url: `/api/questionnaires/${id}`, cookies: cookie })).json().data
+    expect(listed.questions[0].metadata).toEqual(metadata)
+    expect(detail.questions[0].metadata).toEqual(metadata)
+
+    const version = await app.inject({
+      method: 'POST', url: `/api/questionnaires/${id}/versions`, cookies: cookie,
+      payload: { name: 'Referenciás', questions: listed.questions }
+    })
+    expect(version.statusCode).toBe(200)
+    const versions = (await app.inject({ method: 'GET', url: `/api/questionnaires/${id}/versions`, cookies: cookie })).json().data
+    expect(versions[1].questions[0].metadata).toEqual(metadata)
+  })
+
   it('keeps every question type and scale direction when a version is created', async () => {
     const created = await app.inject({
       method: 'POST', url: '/api/questionnaires', cookies: cookie,

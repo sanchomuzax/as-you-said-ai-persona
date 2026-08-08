@@ -290,6 +290,39 @@ describe('persona version edit — structured demographics/provenance editor', (
 })
 
 describe('questionnaire version edit — structured question/option editor', () => {
+  it('blocks an option edit that would silently keep stale reference optionIndexes', async () => {
+    let posted = false
+    const referenced = {
+      ...QUESTIONNAIRE,
+      questions: [{
+        ...QUESTIONNAIRE.questions[0]!,
+        metadata: { _reference: { ertek: '60%', forras: 'KSH', ev: '2025', referenceShare: 0.6, optionIndexes: [0, 2] } }
+      }]
+    }
+    dom = loadAppDom({
+      routes: entityRoutes({
+        'GET /api/questionnaires': [referenced],
+        'GET /api/questionnaires/qn1': referenced,
+        'GET /api/questionnaires/qn1/versions': [referenced],
+        'POST /api/questionnaires/qn1/versions': () => {
+          posted = true
+          return { id: 'qn2' }
+        }
+      })
+    })
+    await dom.boot()
+    await openQuestionnaireEdit(dom)
+    const firstOption = dom.document.querySelector('[data-q-editor="questionnaireVersionText"] [data-q-option-text]')!
+    firstOption.value = 'Teljesen más opció'
+    firstOption.dispatchEvent(new dom.window.Event('input', { bubbles: true }))
+    dom.document.getElementById('questionnaireVersionForm')!
+      .dispatchEvent(new dom.window.Event('submit', { bubbles: true, cancelable: true }))
+    await dom.settle()
+
+    expect(posted).toBe(false)
+    expect(dom.document.getElementById('questionnaireVersionError')!.textContent).toMatch(/referencia|metaadat|opció/i)
+  })
+
   it('round-trips a multi-select, descending question untouched (text, options, scale, order)', async () => {
     let posted: { questions?: unknown[] } | null = null
     dom = loadAppDom({

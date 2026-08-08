@@ -167,8 +167,10 @@ function questionOptionRowHtml(optIndex, value) {
 function questionBlockHtml(qIndex, question) {
   const q = question || {};
   const options = q.options && q.options.length ? q.options : ['', ''];
+  const metadata = q.metadata ? JSON.stringify(q.metadata) : '';
+  const originalOptions = JSON.stringify(options);
   return `
-    <div class="q-block" data-q-block="${qIndex}">
+    <div class="q-block" data-q-block="${qIndex}" data-q-id="${escapeHtml(q.id || '')}" data-q-metadata="${escapeHtml(metadata)}" data-q-original-options="${escapeHtml(originalOptions)}">
       <div class="q-block-header">
         <span class="q-block-number">${qIndex + 1}.</span>
         <input type="text" class="q-text" data-q-text aria-label="Kérdés szövege" placeholder="pl. Mennyire vagy elégedett a szolgáltatással?" value="${escapeHtml(q.text || '')}">

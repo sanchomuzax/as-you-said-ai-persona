@@ -148,7 +148,8 @@ export function registerCatalogRoutes(app: FastifyInstance, deps: CatalogDeps): 
           // A typo here would silently revert a multi-select question to sum-to-1
           // elicitation, so the value is constrained rather than free text.
           scaleType: z.enum(['single_choice', 'multi_choice', 'frequency', 'ordinal', 'categorical']).default('categorical'),
-          scaleDirection: z.enum(['ascending', 'descending']).default('ascending')
+          scaleDirection: z.enum(['ascending', 'descending']).default('ascending'),
+          metadata: z.record(z.unknown()).nullable().optional()
         })
       )
       .min(1)
@@ -181,6 +182,7 @@ export function registerCatalogRoutes(app: FastifyInstance, deps: CatalogDeps): 
       options_json: string
       scale_type: string
       scale_direction: string
+      metadata_json: string | null
     }[]
     return {
       success: true,
@@ -198,25 +200,28 @@ export function registerCatalogRoutes(app: FastifyInstance, deps: CatalogDeps): 
             // carried so an edit can round-trip them: dropping scaleType would
             // silently re-ask a multi-select question as a sum-to-1 distribution
             scaleType: x.scale_type,
-            scaleDirection: x.scale_direction
+            scaleDirection: x.scale_direction,
+            metadata: parseQuestionMetadata(x.metadata_json)
           }))
       }))
     }
   })
 
-  const questionsOf = (questionnaireId: string): { id: string; text: string; options: string[]; scaleType: string }[] =>
+  const questionsOf = (questionnaireId: string): { id: string; text: string; options: string[]; scaleType: string; scaleDirection: string; metadata: Record<string, unknown> | null }[] =>
     (db.prepare('SELECT * FROM questions WHERE questionnaire_id = ? ORDER BY ord').all(questionnaireId) as unknown as {
       id: string
       text: string
       options_json: string
       scale_type: string
       scale_direction: string
+      metadata_json: string | null
     }[]).map((x) => ({
       id: x.id,
       text: x.text,
       options: JSON.parse(x.options_json) as string[],
       scaleType: x.scale_type,
-      scaleDirection: x.scale_direction
+      scaleDirection: x.scale_direction,
+      metadata: parseQuestionMetadata(x.metadata_json)
     }))
 
   app.get('/api/questionnaires/:id', async (req, reply) => {
@@ -278,13 +283,16 @@ export function registerCatalogRoutes(app: FastifyInstance, deps: CatalogDeps): 
   // an English questionnaire silently reverting to 'hu' on its next edit.
   const questionnaireVersionSchema = questionnaireSchema.omit({ projectId: true, language: true }).extend({
     language: z.enum(['hu', 'en']).optional(),
+    sourceQuestionIds: z.array(z.string().min(1).nullable()).optional(),
     questions: z
       .array(
         z.object({
+          id: z.string().min(1).optional(),
           text: z.string().min(1),
           options: z.array(z.string().min(1)).min(2).max(26),
           scaleType: z.enum(['single_choice', 'multi_choice', 'frequency', 'ordinal', 'categorical']),
-          scaleDirection: z.enum(['ascending', 'descending'])
+          scaleDirection: z.enum(['ascending', 'descending']),
+          metadata: z.record(z.unknown()).nullable().optional()
         })
       )
       .min(1)
@@ -297,6 +305,61 @@ export function registerCatalogRoutes(app: FastifyInstance, deps: CatalogDeps): 
     const body = questionnaireVersionSchema.safeParse(req.body)
     if (!body.success) return reply.code(400).send({ success: false, error: body.error.issues[0]?.message })
 
+    const sourceQuestions = db.prepare('SELECT id, options_json, metadata_json FROM questions WHERE questionnaire_id = ? ORDER BY ord')
+      .all(id) as unknown as { id: string; options_json: string; metadata_json: string | null }[]
+    const sourceIds = new Set(sourceQuestions.map((question) => question.id))
+    const sidecarIds = body.data.sourceQuestionIds
+    const carriesQuestionIds = body.data.questions.some((question) => question.id !== undefined) || sidecarIds !== undefined
+    const identityError = (message: string) => reply.code(400).send({
+      success: false,
+      error: `A kérdésazonosítók hibásak: ${message}. A referencia-opciók biztonsága miatt a verzió nem menthető.`
+    })
+    if (sidecarIds && sidecarIds.length !== body.data.questions.length) {
+      return identityError('a sourceQuestionIds listának minden beküldött kérdéshez egy elemet kell tartalmaznia')
+    }
+    const mappedIds: (string | null)[] = []
+    for (const [index, question] of body.data.questions.entries()) {
+      const embedded = question.id ?? null
+      const sidecar = sidecarIds?.[index] ?? null
+      if (embedded && sidecar && embedded !== sidecar) return identityError('az id és a sourceQuestionIds eltér egymástól')
+      const mapped = embedded ?? sidecar
+      if (mapped && !sourceIds.has(mapped)) return identityError(`ismeretlen kérdésazonosító: ${mapped}`)
+      mappedIds.push(mapped)
+    }
+    const nonNullIds = mappedIds.filter((value): value is string => value !== null)
+    if (new Set(nonNullIds).size !== nonNullIds.length) return identityError('egy kérdésazonosító többször szerepel')
+    if (carriesQuestionIds) {
+      const unmappedReference = body.data.questions.find((question, index) =>
+        question.metadata?.['_reference'] !== undefined && mappedIds[index] === null
+      )
+      if (unmappedReference) return identityError('referencia-metaadatos kérdéshez hiányzik a forráskérdés azonosítója')
+      for (const [index, mappedId] of mappedIds.entries()) {
+        if (!mappedId) continue
+        const original = sourceQuestions.find((question) => question.id === mappedId)!
+        const originalReference = parseQuestionMetadata(original.metadata_json)?.['_reference'] ?? null
+        const submittedReference = body.data.questions[index]?.metadata?.['_reference'] ?? null
+        if (JSON.stringify(submittedReference) !== JSON.stringify(originalReference)) {
+          return identityError('a referencia-metaadat nem egyezik a forráskérdésével')
+        }
+      }
+    }
+    for (const [index, original] of sourceQuestions.entries()) {
+      const metadata = parseQuestionMetadata(original.metadata_json)
+      if (!metadata?.['_reference']) continue
+      // Current clients carry the immutable source question id, so deleting an
+      // unrelated earlier question cannot shift this comparison. Positional
+      // fallback protects older clients that do not know the new field yet.
+      const next = carriesQuestionIds
+        ? body.data.questions[mappedIds.indexOf(original.id)]
+        : body.data.questions[index]
+      if (next && JSON.stringify(next.options) !== original.options_json) {
+        return reply.code(400).send({
+          success: false,
+          error: 'Referencia-metaadattal ellátott kérdés válaszopciói nem módosíthatók, mert az opcióindexek elavulnának. Hozz létre új kérdőívet friss referenciával.'
+        })
+      }
+    }
+
     const lineageId = String(source['lineage_id'] ?? source['id'])
     const nextVersion = nextVersionFor('questionnaires', lineageId)
     const newId = randomUUID()
@@ -308,8 +371,11 @@ export function registerCatalogRoutes(app: FastifyInstance, deps: CatalogDeps): 
       )
       body.data.questions.forEach((q, ord) => {
         db.prepare(
-          'INSERT INTO questions (id, questionnaire_id, ord, text, scale_type, options_json, scale_direction) VALUES (?,?,?,?,?,?,?)'
-        ).run(randomUUID(), newId, ord, q.text, q.scaleType, JSON.stringify(q.options), q.scaleDirection)
+          'INSERT INTO questions (id, questionnaire_id, ord, text, scale_type, options_json, scale_direction, metadata_json) VALUES (?,?,?,?,?,?,?,?)'
+        ).run(
+          randomUUID(), newId, ord, q.text, q.scaleType, JSON.stringify(q.options), q.scaleDirection,
+          q.metadata ? JSON.stringify(q.metadata) : null
+        )
       })
       db.exec('COMMIT')
     } catch (error) {
@@ -334,8 +400,11 @@ export function registerCatalogRoutes(app: FastifyInstance, deps: CatalogDeps): 
       )
       body.data.questions.forEach((q, ord) => {
         db.prepare(
-          'INSERT INTO questions (id, questionnaire_id, ord, text, scale_type, options_json, scale_direction) VALUES (?,?,?,?,?,?,?)'
-        ).run(randomUUID(), id, ord, q.text, q.scaleType, JSON.stringify(q.options), q.scaleDirection)
+          'INSERT INTO questions (id, questionnaire_id, ord, text, scale_type, options_json, scale_direction, metadata_json) VALUES (?,?,?,?,?,?,?,?)'
+        ).run(
+          randomUUID(), id, ord, q.text, q.scaleType, JSON.stringify(q.options), q.scaleDirection,
+          q.metadata ? JSON.stringify(q.metadata) : null
+        )
       })
       db.exec('COMMIT')
     } catch (error) {
@@ -369,4 +438,14 @@ function parseJsonOrNull(value: unknown): unknown {
   } catch {
     return null
   }
+}
+
+/** Question metadata drives analysis, so corruption must fail loudly instead of disappearing. */
+function parseQuestionMetadata(value: unknown): Record<string, unknown> | null {
+  if (value === null || value === undefined || value === '') return null
+  const parsed = JSON.parse(String(value)) as unknown
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+    throw new Error('A kérdés metaadata nem JSON-objektum')
+  }
+  return parsed as Record<string, unknown>
 }

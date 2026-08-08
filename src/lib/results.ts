@@ -1,11 +1,27 @@
 import type { Db } from '../db.js'
 import { elicitationModeFor, type ElicitationMode } from './parse.js'
 
+export interface ReferenceComparison {
+  measuredShare: number | null
+  referenceShare: number
+  differencePercentagePoints: number | null
+  source: string
+  year: string
+  valueLabel: string
+  measurementArm: 'persona' | 'baseline' | null
+}
+
 export interface QuestionResult {
   questionId: string
   text: string
   options: string[]
   scaleType: string
+  /** Versioned research context stored with the exact question snapshot. */
+  metadata?: Record<string, unknown> | null
+  /** Explicit, source-backed comparison; null means no usable reference was recorded. */
+  referenceComparison?: ReferenceComparison | null
+  /** Why a recorded _reference could not be evaluated; null when absent or usable. */
+  referenceIssue?: string | null
   /** How this question was asked; multi_choice options are independent, not a distribution. */
   elicitationMode: ElicitationMode
   /**
@@ -99,10 +115,10 @@ interface ResponseRow {
 export function computeRunResults(db: Db, runId: string): RunResults {
   const questions = db
     .prepare(
-      `SELECT q.id, q.text, q.options_json, q.scale_type FROM questions q
+      `SELECT q.id, q.text, q.options_json, q.scale_type, q.metadata_json FROM questions q
        JOIN runs r ON r.questionnaire_id = q.questionnaire_id WHERE r.id = ? ORDER BY q.ord`
     )
-    .all(runId) as unknown as { id: string; text: string; options_json: string; scale_type: string }[]
+    .all(runId) as unknown as { id: string; text: string; options_json: string; scale_type: string; metadata_json: string | null }[]
 
   const allResponses = db
     .prepare(
@@ -184,11 +200,22 @@ export function computeRunResults(db: Db, runId: string): RunResults {
       }
     }
 
+    const metadata = parseQuestionMetadata(q.metadata_json)
+    const reference = compareWithReference(
+      metadata,
+      valid.length > 0 ? aggregated : baseline,
+      valid.length > 0 ? 'persona' : baseline ? 'baseline' : null,
+      options.length
+    )
+
     return {
       questionId: q.id,
       text: q.text,
       options,
       scaleType: q.scale_type,
+      metadata,
+      referenceComparison: reference.comparison,
+      referenceIssue: reference.issue,
       baseline,
       elicitationMode: mode,
       legacyElicitationCount,
@@ -225,6 +252,57 @@ export function computeRunResults(db: Db, runId: string): RunResults {
     invalidRate: total ? responses.filter((r) => r.is_valid === 0).length / total : 0,
     abstainRate: total ? responses.filter((r) => r.abstained === 1).length / total : 0
   }
+}
+
+function parseQuestionMetadata(value: string | null): Record<string, unknown> | null {
+  if (value === null || value === '') return null
+  const parsed = JSON.parse(value) as unknown
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+    throw new Error('A kérdés metaadata nem JSON-objektum')
+  }
+  return parsed as Record<string, unknown>
+}
+
+function compareWithReference(
+  metadata: Record<string, unknown> | null,
+  distribution: number[] | null,
+  measurementArm: 'persona' | 'baseline' | null,
+  optionCount: number
+): { comparison: ReferenceComparison | null; issue: string | null } {
+  const raw = metadata?.['_reference']
+  if (raw === undefined) return { comparison: null, issue: null }
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
+    return { comparison: null, issue: 'Hibás referencia-metaadat: a _reference mezőnek objektumnak kell lennie.' }
+  }
+  const reference = raw as Record<string, unknown>
+  const referenceShare = reference['referenceShare']
+  const optionIndexes = reference['optionIndexes']
+  const indexesValid = Array.isArray(optionIndexes) && optionIndexes.length > 0 &&
+    optionIndexes.every((index) => Number.isInteger(index) && Number(index) >= 0 && Number(index) < optionCount) &&
+    new Set(optionIndexes.map(Number)).size === optionIndexes.length
+  if (
+    typeof referenceShare !== 'number' || !Number.isFinite(referenceShare) || referenceShare < 0 || referenceShare > 1 ||
+    !indexesValid
+  ) {
+    return {
+      comparison: null,
+      issue: 'Hiányos vagy hibás referencia-metaadat: a referenceShare (0–1) és az egyedi, érvényes optionIndexes kötelező.'
+    }
+  }
+
+  const total = distribution?.reduce((sum, value) => sum + value, 0) ?? 0
+  const measuredShare = distribution && total > 0
+    ? optionIndexes.reduce((sum, index) => sum + (distribution[Number(index)] ?? 0), 0) / total
+    : null
+  return { comparison: {
+    measuredShare,
+    referenceShare,
+    differencePercentagePoints: measuredShare === null ? null : (measuredShare - referenceShare) * 100,
+    source: typeof reference['forras'] === 'string' ? reference['forras'] : 'Nincs rögzített forrás',
+    year: typeof reference['ev'] === 'string' ? reference['ev'] : 'Nincs rögzített év',
+    valueLabel: typeof reference['ertek'] === 'string' ? reference['ertek'] : `${Math.round(referenceShare * 100)}%`,
+    measurementArm
+  }, issue: null }
 }
 
 /** One row per experimental cell; the first recording of a cell wins. */

@@ -34,6 +34,12 @@ function insertResponse(opts: {
 
 beforeEach(() => {
   db = createDb(':memory:')
+  const questionColumns = db.prepare('PRAGMA table_info(questions)').all() as unknown as { name: string }[]
+  if (!questionColumns.some((c) => c.name === 'metadata_json')) {
+    // Keep the output contract independently red on today's code instead of
+    // failing only because the migration test already found the missing column.
+    db.exec('ALTER TABLE questions ADD COLUMN metadata_json TEXT')
+  }
   const questionnaireId = randomUUID()
   qid = randomUUID()
   p1 = randomUUID()
@@ -78,6 +84,66 @@ describe('computeRunResults', () => {
     const r = computeRunResults(db, runId)
     expect(r.questions[0]!.positionConsistency).toBe(1) // seed 0 group consistent, seed 1 single-member group consistent
     expect(r.questions[0]!.repetitionStability).toBeCloseTo(0.5) // [0,1] group has {0,1}; [1,0] group has {0}
+  })
+
+  it('returns a machine-readable measured-vs-reference difference with source and year', () => {
+    const metadata = {
+      _scope: 'lokális',
+      _reference: {
+        mit: 'nőarány',
+        ertek: '96%',
+        forras: 'KSH, Szám-Lap: tanári hivatás',
+        ev: '2023-2025',
+        // Explicit machine fields: the result code must not infer gender from names.
+        referenceShare: 0.96,
+        optionIndexes: [0, 2]
+      }
+    }
+    db.prepare('UPDATE questions SET options_json = ?, metadata_json = ? WHERE id = ?').run(
+      JSON.stringify(['Nagy Erika', 'Nagy Zoltán', 'Szabó Mónika', 'Szabó Balázs']),
+      JSON.stringify(metadata),
+      qid
+    )
+    insertResponse({ dist: { '0': 0.2, '1': 0.3, '2': 0.2, '3': 0.3 }, rotation: [0, 1, 2, 3] })
+
+    const question = computeRunResults(db, runId).questions[0]!
+    expect(question).toHaveProperty('metadata', metadata)
+    expect(question).toHaveProperty('referenceComparison')
+    const comparison = (question as unknown as { referenceComparison: Record<string, unknown> }).referenceComparison
+    expect(comparison).toMatchObject({
+      measuredShare: 0.4,
+      referenceShare: 0.96,
+      source: 'KSH, Szám-Lap: tanári hivatás',
+      year: '2023-2025'
+    })
+    expect(comparison['differencePercentagePoints']).toBeCloseTo(-56)
+  })
+
+  it('uses null for a missing reference instead of fabricating a zero comparison', () => {
+    const question = computeRunResults(db, runId).questions[0]!
+    expect(question).toHaveProperty('metadata', null)
+    expect(question).toHaveProperty('referenceComparison', null)
+  })
+
+  it('reports a malformed _reference schema loudly instead of treating it as absent', () => {
+    db.prepare('UPDATE questions SET metadata_json = ? WHERE id = ?').run(
+      JSON.stringify({
+        _reference: {
+          ertek: '15,7%',
+          forras: 'EU IKT-statisztika',
+          ev: '2023-2025',
+          referenceShare: 0.157
+          // optionIndexes is mandatory for a machine-computed share.
+        }
+      }),
+      qid
+    )
+    const question = computeRunResults(db, runId).questions[0]! as unknown as {
+      referenceComparison: unknown
+      referenceIssue?: string | null
+    }
+    expect(question.referenceComparison).toBeNull()
+    expect(question.referenceIssue).toMatch(/hibás|hiányos|optionIndexes|opcióindex/i)
   })
 })
 

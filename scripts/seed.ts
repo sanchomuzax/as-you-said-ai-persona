@@ -43,7 +43,7 @@ const seedSchema = z.object({
           // elicitation, so the value is constrained rather than free text.
           scaleType: z.enum(['single_choice', 'multi_choice', 'frequency', 'ordinal', 'categorical']).default('categorical'),
               scaleDirection: z.enum(['ascending', 'descending']).default('ascending')
-            })
+            }).catchall(z.unknown())
           )
           .min(1)
       })
@@ -101,9 +101,13 @@ for (const questionnaire of seed.questionnaires) {
   try {
     db.prepare('INSERT INTO questionnaires (id, project_id, name) VALUES (?,?,?)').run(qid, projectId, questionnaire.name)
     questionnaire.questions.forEach((q, ord) => {
+      const metadata = Object.fromEntries(Object.entries(q).filter(([key]) => key.startsWith('_')))
       db.prepare(
-        'INSERT INTO questions (id, questionnaire_id, ord, text, scale_type, options_json, scale_direction) VALUES (?,?,?,?,?,?,?)'
-      ).run(randomUUID(), qid, ord, q.text, q.scaleType, JSON.stringify(q.options), q.scaleDirection)
+        'INSERT INTO questions (id, questionnaire_id, ord, text, scale_type, options_json, scale_direction, metadata_json) VALUES (?,?,?,?,?,?,?,?)'
+      ).run(
+        randomUUID(), qid, ord, q.text, q.scaleType, JSON.stringify(q.options), q.scaleDirection,
+        Object.keys(metadata).length > 0 ? JSON.stringify(metadata) : null
+      )
     })
     db.exec('COMMIT')
   } catch (error) {

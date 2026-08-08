@@ -36,6 +36,13 @@ function migrate(db: DatabaseSync): void {
   if (!questionnaireCols.some((c) => c.name === 'lineage_id')) {
     db.exec('ALTER TABLE questionnaires ADD COLUMN lineage_id TEXT')
   }
+  // Issue #41: question-level research context belongs to the immutable
+  // question snapshot. Existing questions genuinely have no recorded metadata,
+  // so NULL is the only honest migration value (never an invented empty object).
+  const questionCols = db.prepare('PRAGMA table_info(questions)').all() as unknown as { name: string }[]
+  if (!questionCols.some((c) => c.name === 'metadata_json')) {
+    db.exec('ALTER TABLE questions ADD COLUMN metadata_json TEXT')
+  }
   // Only touches rows that need it: this runs at every boot, possibly while a run
   // is executing, and an unconditional UPDATE would take a write lock for nothing.
   db.exec('UPDATE personas SET lineage_id = id WHERE lineage_id IS NULL')
@@ -323,7 +330,10 @@ CREATE TABLE IF NOT EXISTS questions (
   text TEXT NOT NULL,
   scale_type TEXT NOT NULL DEFAULT 'categorical',
   options_json TEXT NOT NULL,
-  scale_direction TEXT NOT NULL DEFAULT 'ascending'
+  scale_direction TEXT NOT NULL DEFAULT 'ascending',
+  -- Versioned research context (_reference, _scope, _tier, _torzitas, ...).
+  -- NULL means none was recorded; it must stay distinct from a measured zero.
+  metadata_json TEXT
 );
 
 CREATE TABLE IF NOT EXISTS runs (

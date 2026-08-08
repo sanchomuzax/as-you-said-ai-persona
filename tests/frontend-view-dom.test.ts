@@ -256,6 +256,101 @@ describe('run detail view', () => {
     expect(dom.document.getElementById('runDetailStats')!.textContent).toContain('2')
   })
 
+  it('shows the measured/reference difference and provenance, without a made-up zero for missing metadata', async () => {
+    const baseQuestion = {
+      options: ['Anna', 'Gábor', 'Judit', 'Péter'], scaleType: 'single_choice', elicitationMode: 'single_choice',
+      legacyElicitationCount: 0, aggregatedResponseCount: 1, totalResponses: 1, invalidCount: 0, abstainCount: 0,
+      aggregated: [0.2, 0.3, 0.2, 0.3], byPersona: {}, baseline: null,
+      positionConsistency: 1, repetitionStability: 1
+    }
+    dom = loadAppDom({
+      routes: runRoutes({
+        'GET /api/runs/r1/results': {
+          totalResponses: 2, invalidRate: 0, abstainRate: 0, duplicateResponseCount: 0,
+          questions: [
+            {
+              ...baseQuestion, questionId: 'with-ref', text: 'Referenciás kérdés',
+              metadata: { _reference: { ertek: '96%', forras: 'KSH, Szám-Lap', ev: '2023-2025', referenceShare: 0.96, optionIndexes: [0, 2] } },
+              referenceComparison: {
+                measuredShare: 0.4, referenceShare: 0.96, differencePercentagePoints: -56,
+                source: 'KSH, Szám-Lap', year: '2023-2025'
+              }
+            },
+            { ...baseQuestion, questionId: 'without-ref', text: 'Metaadat nélküli kérdés', metadata: null, referenceComparison: null }
+          ]
+        }
+      })
+    })
+    await dom.boot()
+    ;(dom.document.querySelector('[data-run-card="r1"]')!).click()
+    await dom.settle()
+
+    const cards = dom.document.querySelectorAll('.question-card')
+    expect(cards).toHaveLength(2)
+    const referenced = cards[0]!.textContent!
+    expect(referenced).toContain('40%')
+    expect(referenced).toContain('96%')
+    expect(referenced).toMatch(/56\s*(százalékpont|százalékponttal)/i)
+    expect(referenced).toMatch(/alacsonyabb|alatta/i)
+    expect(referenced).toContain('KSH, Szám-Lap')
+    expect(referenced).toContain('2023-2025')
+
+    const missing = cards[1]!.textContent!
+    expect(missing).not.toMatch(/referencia|eltérés/i)
+    expect(missing).not.toMatch(/0\s*százalékpont/i)
+  })
+
+  it('renders malformed references loudly and preserves decimal/near-zero comparison semantics', async () => {
+    const base = {
+      options: ['A', 'B'], scaleType: 'single_choice', elicitationMode: 'single_choice',
+      legacyElicitationCount: 0, aggregatedResponseCount: 1, totalResponses: 1, invalidCount: 0, abstainCount: 0,
+      aggregated: [0.2, 0.8], byPersona: {}, baseline: null, positionConsistency: 1, repetitionStability: 1
+    }
+    dom = loadAppDom({
+      routes: runRoutes({
+        'GET /api/runs/r1/results': {
+          totalResponses: 3, invalidRate: 0, abstainRate: 0, duplicateResponseCount: 0,
+          questions: [
+            {
+              ...base, questionId: 'invalid-reference', text: 'Hibás referencia', referenceComparison: null,
+              referenceIssue: 'Hiányos referencia-metaadat: az optionIndexes nincs megadva.'
+            },
+            {
+              ...base, questionId: 'decimal-reference', text: 'Tizedes referencia',
+              referenceComparison: {
+                measuredShare: 0.2, referenceShare: 0.157, differencePercentagePoints: 4.3,
+                source: 'EU IKT-statisztika', year: '2023-2025', valueLabel: '15,7%', measurementArm: 'persona'
+              }
+            },
+            {
+              ...base, questionId: 'near-zero', text: 'Lebegőpontos egyezés',
+              referenceComparison: {
+                measuredShare: 0.15700000000000003, referenceShare: 0.157,
+                differencePercentagePoints: 2.7755575615628914e-15,
+                source: 'EU IKT-statisztika', year: '2023-2025', valueLabel: '15,7%', measurementArm: 'persona'
+              }
+            }
+          ]
+        }
+      })
+    })
+    await dom.boot()
+    ;(dom.document.querySelector('[data-run-card="r1"]')!).click()
+    await dom.settle()
+
+    const cards = dom.document.querySelectorAll('.question-card')
+    expect(cards).toHaveLength(3)
+    expect.soft(cards[0]!.textContent).toMatch(/hiányos referencia-metaadat|optionIndexes|opcióindex/i)
+
+    const decimal = cards[1]!.textContent!
+    expect.soft(decimal).toContain('15,7%')
+    expect.soft(decimal).not.toMatch(/referencia:\s*16%/i)
+
+    const nearZero = cards[2]!.textContent!
+    expect.soft(nearZero).toMatch(/megegyezik/i)
+    expect.soft(nearZero).not.toMatch(/0\s*százalékponttal\s*magasabb/i)
+  })
+
   // public/run-view.js's refreshRunDetailHeader falls back to
   // `state.runProgress[runId] || {}` when /progress fails — empty for a
   // non-running run, since boot no longer pre-populates it (issue #22). A run

@@ -105,7 +105,7 @@ personas(id, project_id, name, version, anchor_core_json, attributes_json,
          provenance_json,                -- VoC sources, temporal range, item counts
          biography, created_at)          -- immutable snapshots; edits create new version
 questionnaires(id, name, version, created_at)
-questions(id, questionnaire_id, ord, text, scale_type, options_json, scale_direction)
+questions(id, questionnaire_id, ord, text, scale_type, options_json, scale_direction, metadata_json)
 runs(id, questionnaire_id, name, status, config_json, token_budget, created_at)
      -- config_json: models, temperature, elicitation style, permutation plan, seeds,
      --              transparency-checklist fields

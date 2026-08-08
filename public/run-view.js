@@ -207,6 +207,32 @@ function renderOptionBars(question) {
   }).join('');
 }
 
+function renderReferenceComparison(question) {
+  const comparison = question.referenceComparison;
+  if (question.referenceIssue) {
+    return `<p class="detail-note detail-note-warning reference-comparison">A referencia nem értékelhető: ${escapeHtml(question.referenceIssue)}</p>`;
+  }
+  if (!comparison) return '';
+  const formatPercent = (share) => {
+    const value = Math.round(share * 1000) / 10;
+    return value.toLocaleString('hu-HU', { maximumFractionDigits: 1 }) + '%';
+  };
+  const referencePct = comparison.valueLabel || formatPercent(comparison.referenceShare);
+  const provenance = `${comparison.source} · ${comparison.year}`;
+  if (comparison.measuredShare === null || comparison.differencePercentagePoints === null) {
+    return `<p class="detail-note detail-note-warning reference-comparison">Referencia: ${escapeHtml(referencePct)} (${escapeHtml(provenance)}). Nincs értékelhető mérés az eltérés kiszámításához.</p>`;
+  }
+  const measuredPct = formatPercent(comparison.measuredShare);
+  const delta = comparison.differencePercentagePoints;
+  const roundedDelta = Math.round(Math.abs(delta) * 10) / 10;
+  const direction = roundedDelta === 0 ? 'megegyezik a referenciával' : delta < 0 ? 'alacsonyabb' : 'magasabb';
+  const arm = comparison.measurementArm === 'baseline' ? 'Kontrollkar' : 'Perszónaátlag';
+  const difference = roundedDelta === 0
+    ? direction
+    : `${roundedDelta} százalékponttal ${direction}`;
+  return `<p class="detail-note reference-comparison"><strong>${arm}: ${measuredPct}</strong> · referencia: ${escapeHtml(referencePct)} · ${difference}. Forrás: ${escapeHtml(provenance)}.</p>`;
+}
+
 /**
  * Suffix for a persona's divergence cell (issue #40 review CRITICAL).
  * `movesModel === false` is a genuinely decided "within noise" result — the
@@ -302,6 +328,7 @@ async function loadOverviewTab(runId) {
         <div class="option-bars">
           ${renderLegacyOnlyNotice(q) || renderOptionBars(q)}
         </div>
+        ${renderReferenceComparison(q)}
         <details class="persona-breakdown-wrap">
           <summary>Perszóna szintű bontás</summary>
           ${renderBaselineOnlyNotice(q)}
@@ -542,4 +569,3 @@ document.getElementById('runEvaluateBtn')?.addEventListener('click', async () =>
     spinner.style.display = 'none';
   }
 });
-
