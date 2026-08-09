@@ -57,6 +57,28 @@ existing stack.** Revisit only if the UI outgrows what vanilla JS can maintain.
 - **Live progress**: during a run, real-time feedback — counters ticking, cells
   turning green, cost updating.
 
+## 6b. Evidentiary gap as a visual system (2026-08-09 revision)
+
+Screenshot: [`docs/mockups/evidentiary-gap-inspector.png`](mockups/evidentiary-gap-inspector.png)
+
+The gap stops being a single amber card and becomes a **signal that propagates
+through the whole interface**:
+
+- The persona's avatar glyph carries a **break/gap mark**, so the incompleteness is
+  visible on the card itself, before reading any text.
+- The same broken glyph appears in the inspector header — one identity, one signal,
+  consistent across panels.
+- Selecting the abstaining persona opens **its own** provenance card, not the
+  previous one: the gap and its explanation sit in the same place as the profile
+  that produced it.
+- An **Abstention Reason** section derives the reason from calibration data.
+- Demographic chips follow the persona (HR-relevant here), so profile and gap are
+  read together.
+
+This is the right direction: it connects the finding to the methodology instead of
+leaving abstention as a footnote. **The visual system is approved; the placeholder
+copy inside it is not — see §7.**
+
 ## 7. Where the mockup contradicts our methodology (must not be copied)
 
 The prototype contains placeholder content that would break our own rules if it
@@ -77,6 +99,20 @@ shipped as-is. Recorded so nobody implements it faithfully:
 4. **"85%-ban invalid választ ad"** as a generic caption — invalid rates are
    measured per model and per question; the UI must show the measured value or
    say it is unknown, never an illustrative number.
+5. **A green "GROUNDED Profil" badge on an abstaining persona** (2026-08-09
+   revision) — the strongest contradiction in the set. The persona has just
+   declared it lacks evidence for the topic; a green grounding shield next to that
+   states the opposite. Adding a small gap glyph beside the shield does not fix it,
+   because the badge's colour and word are what a user reads first. Grounding is
+   **per topic**, not per persona: the badge must render the coverage for *this*
+   question — grounded, partially covered, or **not grounded** — with the amber or
+   neutral state as its own visual, not a green badge with a caveat attached.
+6. **The 85% figure and "kényszerítve" wording reappeared** in the revision's
+   Abstention Reason text, both flagged above (§7.3, §7.4). The reason text must be
+   generated from the run's own recorded data: which persona attributes were
+   available, what the measured invalid rate is for this model and question, and
+   that the model *declared* its boundary. If a number is not measured, the panel
+   says so — an invented number in an audit panel is worse than no number.
 
 ## 8. Relationship to existing work
 
