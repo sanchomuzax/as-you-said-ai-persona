@@ -1,6 +1,6 @@
 {
   "name": "as-you-said-ai-persona",
-  "version": "0.28.0",
+  "version": "0.28.1",
   "description": "AI persona survey research platform (OpenRouter, Style C elicitation, token budgets)",
   "type": "module",
   "license": "MIT",
