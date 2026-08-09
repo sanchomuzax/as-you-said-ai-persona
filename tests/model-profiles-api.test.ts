@@ -36,6 +36,13 @@ class StubClient implements ChatClient {
   }
 }
 
+/** Keeps launched runs active while concurrency guards are asserted. */
+class BlockingClient implements ChatClient {
+  async complete(): Promise<ChatResult> {
+    return new Promise<ChatResult>(() => undefined)
+  }
+}
+
 let app: FastifyInstance
 let db: Db
 let cookie: { asys_session: string }
@@ -333,6 +340,130 @@ describe('GET /api/model-profiles/:id', () => {
 })
 
 describe('POST /api/models/:model/calibrate', () => {
+  async function useBlockingClient(): Promise<void> {
+    await app.close()
+    db = createDb(':memory:')
+    app = buildServer({ db, config: testConfig, models: testModels, client: new BlockingClient() })
+    await app.ready()
+    cookie = await login()
+    seedCalibrationRun('historical')
+  }
+
+  it('accepts exactly one of two concurrent calibration launches for the same model', async () => {
+    await useBlockingClient()
+
+    const responses = await Promise.all([
+      app.inject({
+        method: 'POST', url: '/api/models/m1/calibrate', cookies: cookie,
+        payload: { questionnaireId: 'probe', seeds: [0] }
+      }),
+      app.inject({
+        method: 'POST', url: '/api/models/m1/calibrate', cookies: cookie,
+        payload: { questionnaireId: 'probe', seeds: [0] }
+      })
+    ])
+
+    expect(responses.map((res) => res.statusCode).sort()).toEqual([200, 409])
+    const created = db.prepare("SELECT COUNT(*) c FROM runs WHERE name = 'Kalibráció — m1' AND id != 'historical'").get() as { c: number }
+    expect(created.c).toBe(1)
+  })
+
+  it('still allows concurrent calibration launches for different models', async () => {
+    await useBlockingClient()
+
+    const responses = await Promise.all([
+      app.inject({
+        method: 'POST', url: '/api/models/m1/calibrate', cookies: cookie,
+        payload: { questionnaireId: 'probe', seeds: [0] }
+      }),
+      app.inject({
+        method: 'POST', url: '/api/models/m2/calibrate', cookies: cookie,
+        payload: { questionnaireId: 'probe', seeds: [0] }
+      })
+    ])
+
+    expect(responses.map((res) => res.statusCode)).toEqual([200, 200])
+  })
+
+  it('treats an exact marker-era launcher name as a legacy calibration lock', async () => {
+    await useBlockingClient()
+    db.prepare('INSERT INTO runs (id, questionnaire_id, name, status, config_json) VALUES (?,?,?,?,?)').run(
+      'legacy-active', 'probe', 'Kalibráció — m1', 'running',
+      JSON.stringify({ model: 'm1', temperature: 1, seeds: [0], baselineArm: true })
+    )
+
+    const response = await app.inject({
+      method: 'POST', url: '/api/models/m1/calibrate', cookies: cookie,
+      payload: { questionnaireId: 'probe', seeds: [0] }
+    })
+
+    expect(response.statusCode).toBe(409)
+  })
+
+  it('does not classify a similarly named ordinary run as a legacy calibration', async () => {
+    await useBlockingClient()
+    db.prepare('INSERT INTO runs (id, questionnaire_id, name, status, config_json) VALUES (?,?,?,?,?)').run(
+      'ordinary-active', 'probe', 'Kalibráció — m1 — kézi kontroll', 'running',
+      JSON.stringify({ model: 'm1', temperature: 1, seeds: [0], baselineArm: true })
+    )
+
+    const response = await app.inject({
+      method: 'POST', url: '/api/models/m1/calibrate', cookies: cookie,
+      payload: { questionnaireId: 'probe', seeds: [0] }
+    })
+
+    expect(response.statusCode).toBe(200)
+  })
+
+  it.each([
+    ['malformed JSON', '{'],
+    ['shape-invalid JSON', 'null']
+  ])('fails closed and loudly when an active legacy calibration has %s config', async (_case, configJson) => {
+    await useBlockingClient()
+    db.prepare('INSERT INTO runs (id, questionnaire_id, name, status, config_json) VALUES (?,?,?,?,?)').run(
+      `corrupt-active-${_case}`, 'probe', 'Kalibráció — m1', 'running', configJson
+    )
+
+    const response = await app.inject({
+      method: 'POST', url: '/api/models/m1/calibrate', cookies: cookie,
+      payload: { questionnaireId: 'probe', seeds: [0] }
+    })
+    const body = response.json() as { success?: boolean; error?: string }
+
+    expect(response.statusCode).toBe(409)
+    expect(body.success).toBe(false)
+    expect(body.error?.trim().length).toBeGreaterThan(0)
+  })
+
+  it('returns a handled client error when a resumable run has shape-invalid config', async () => {
+    seedCalibrationRun('resume-fixture')
+    db.prepare('INSERT INTO runs (id, questionnaire_id, name, status, config_json) VALUES (?,?,?,?,?)').run(
+      'shape-invalid-resume', 'probe', 'Kalibráció — m1', 'paused', 'null'
+    )
+
+    const response = await app.inject({ method: 'POST', url: '/api/runs/shape-invalid-resume/resume', cookies: cookie })
+    const body = response.json() as { success?: boolean; error?: string }
+
+    expect(response.statusCode).toBe(400)
+    expect(body.success).toBe(false)
+    expect(body.error?.trim().length).toBeGreaterThan(0)
+  })
+
+  it('refuses to resume a calibration while another active calibration for the same model exists', async () => {
+    seedCalibrationRun('historical')
+    const config = JSON.stringify({ model: 'm1', temperature: 1, seeds: [0], baselineArm: true, calibration: true })
+    db.prepare('INSERT INTO runs (id, questionnaire_id, name, status, config_json) VALUES (?,?,?,?,?)').run(
+      'active-cal', 'probe', 'Kalibráció — m1', 'running', config
+    )
+    db.prepare('INSERT INTO runs (id, questionnaire_id, name, status, config_json) VALUES (?,?,?,?,?)').run(
+      'paused-cal', 'probe', 'Kalibráció — m1', 'paused', config
+    )
+
+    const response = await app.inject({ method: 'POST', url: '/api/runs/paused-cal/resume', cookies: cookie })
+    expect(response.statusCode).toBe(409)
+    expect((db.prepare('SELECT status FROM runs WHERE id = ?').get('paused-cal') as { status: string }).status).toBe('paused')
+  })
+
   it('launches a persona-free probe run and reports only control cells', async () => {
     seedCalibrationRun('seedrun')
     const res = await app.inject({

@@ -197,6 +197,170 @@ describe('the running calibration card offers a stop control and a way into the 
     expect(dom.window.location.hash).toBe('#runs/cal-run-1')
     expect(dom.document.getElementById('runDetailView')!.style.display).toBe('block')
   })
+
+  it.each(['paused', 'budget_exhausted'])('offers a working Resume control for a %s calibration without navigating away', async (status) => {
+    const resumable = calRun({ status })
+    dom = loadAppDom({
+      routes: routes({
+        'GET /api/runs': [resumable],
+        'POST /api/runs/cal-run-1/resume': {},
+        ...detailRoutesFor(resumable)
+      })
+    })
+    await dom.boot()
+    dom.document.querySelector('[data-model="m2"]')!.click()
+    await dom.settle()
+
+    const resume = dom.document.querySelector('#modelDetailBody [data-action="resume"][data-run="cal-run-1"]')
+    expect(resume, `${status} calibration must expose Resume`).not.toBeNull()
+    const hashBefore = dom.window.location.hash
+    resume!.click()
+    await dom.settle()
+    expect(dom.calls.some((call) => call.method === 'POST' && call.url === '/api/runs/cal-run-1/resume')).toBe(true)
+    expect(dom.window.location.hash).toBe(hashBefore)
+  })
+
+  it('repaints the focused model card after Stop so the server-side paused state is visible', async () => {
+    let runListCalls = 0
+    const running = calRun({ status: 'running' })
+    const paused = calRun({ status: 'paused' })
+    dom = loadAppDom({
+      routes: routes({
+        'GET /api/runs': () => (++runListCalls === 1 ? [running] : [paused]),
+        'POST /api/runs/cal-run-1/stop': {},
+        ...detailRoutesFor(running)
+      })
+    })
+    ;(dom.window as unknown as { confirm: () => boolean }).confirm = () => true
+    await dom.boot()
+    dom.document.querySelector('[data-model="m2"]')!.click()
+    await dom.settle()
+
+    dom.document.querySelector('#modelDetailBody [data-action="stop"][data-run="cal-run-1"]')!.click()
+    await dom.settle()
+
+    expect(dom.calls.some((call) => call.method === 'POST' && call.url === '/api/runs/cal-run-1/stop')).toBe(true)
+    expect(dom.document.querySelector('#modelDetailBody [data-action="resume"][data-run="cal-run-1"]')).not.toBeNull()
+    expect(dom.document.getElementById('modelDetailBody')!.textContent).toMatch(/szünet|folytatás/i)
+  })
+})
+
+describe('loadInitialData invalidates stale live progress (issue #29 review)', () => {
+  it('lets a fresh completed row win after reload instead of preserving the cached running status', async () => {
+    let runListCalls = 0
+    const running = calRun({ status: 'running' })
+    const completed = calRun({ status: 'completed', done_cells: 8, response_count: 8 })
+    dom = loadAppDom({
+      routes: routes({
+        'GET /api/runs': () => (++runListCalls === 1 ? [running] : [completed]),
+        ...detailRoutesFor(running)
+      })
+    })
+    await dom.boot()
+    dom.document.querySelector('[data-model="m2"]')!.click()
+    await dom.settle()
+
+    const poll = (dom.window as unknown as { pollRunningProgress: () => Promise<void> }).pollRunningProgress
+    await poll()
+    await dom.settle()
+    const loadInitialData = (dom.window as unknown as { loadInitialData: () => Promise<void> }).loadInitialData
+    await loadInitialData()
+    await dom.settle()
+
+    expect(dom.document.querySelector('#modelDetailBody [data-action="record-profile"]')).not.toBeNull()
+    expect(dom.document.getElementById('modelDetailBody')!.textContent).toMatch(/kész/i)
+    expect(dom.document.querySelector('#modelDetailBody [data-cal-run="cal-run-1"] .badge-completed')).not.toBeNull()
+    expect(dom.document.querySelector('#modelDetailBody [data-cal-run="cal-run-1"] .badge-running')).toBeNull()
+  })
+})
+
+describe('a rejected on-card calibration launch refreshes the focused card (issue #29 review)', () => {
+  it('renders the blocking run and disables the launch form after a real 409 response', async () => {
+    const blocking = calRun({ id: 'blocking-calibration' })
+    dom = loadAppDom({ routes: routes() })
+    await dom.boot()
+    dom.document.querySelector('[data-model="m2"]')!.click()
+    await dom.settle()
+
+    dom.document.querySelector('#modelDetailBody .model-card-probe-select')!.value = 'probe'
+    const submit = dom.document.querySelector('#modelDetailBody button[type="submit"]')!
+    submit.focus()
+    const calls: { method: string; url: string }[] = []
+    const browser = dom.window as unknown as {
+      fetch: (url: string, init?: { method?: string }) => Promise<{ status: number; json: () => Promise<unknown> }>
+    }
+    browser.fetch = async (url, init = {}) => {
+      const method = init.method ?? 'GET'
+      calls.push({ method, url })
+      if (method === 'POST' && url === '/api/models/m2/calibrate') {
+        return { status: 409, json: async () => ({ success: false, error: 'Már van aktív kalibráció' }) }
+      }
+      if (method === 'GET' && url === '/api/runs') {
+        return { status: 200, json: async () => ({ success: true, data: [blocking] }) }
+      }
+      throw new Error(`Unexpected request after launch: ${method} ${url}`)
+    }
+
+    submit.click()
+    await dom.settle()
+
+    expect(calls).toContainEqual({ method: 'POST', url: '/api/models/m2/calibrate' })
+    expect(dom.lastAlert()).toMatch(/aktív kalibráció/i)
+    expect(dom.document.querySelector('#modelDetailBody [data-cal-run="blocking-calibration"]')).not.toBeNull()
+    expect(dom.document.querySelector('#modelDetailBody button[type="submit"]')!.disabled).toBe(true)
+  })
+
+  it('renders an exact-name malformed legacy blocker after the focused launch receives 409', async () => {
+    const blocking = calRun({ id: 'malformed-blocker', config_json: '{broken' })
+    dom = loadAppDom({ routes: routes() })
+    await dom.boot()
+    dom.document.querySelector('[data-model="m2"]')!.click()
+    await dom.settle()
+
+    dom.document.querySelector('#modelDetailBody .model-card-probe-select')!.value = 'probe'
+    const submit = dom.document.querySelector('#modelDetailBody button[type="submit"]')!
+    submit.focus()
+    const browser = dom.window as unknown as {
+      fetch: (url: string, init?: { method?: string }) => Promise<{ status: number; json: () => Promise<unknown> }>
+    }
+    browser.fetch = async (url, init = {}) => {
+      const method = init.method ?? 'GET'
+      if (method === 'POST' && url === '/api/models/m2/calibrate') {
+        return { status: 409, json: async () => ({ success: false, error: 'Már van aktív kalibráció' }) }
+      }
+      if (method === 'GET' && url === '/api/runs') {
+        return { status: 200, json: async () => ({ success: true, data: [blocking] }) }
+      }
+      throw new Error(`Unexpected request after launch: ${method} ${url}`)
+    }
+
+    submit.click()
+    await dom.settle()
+
+    expect(dom.lastAlert()).toMatch(/aktív kalibráció/i)
+    expect(dom.document.querySelector('#modelDetailBody [data-cal-run="malformed-blocker"]')).not.toBeNull()
+    expect(dom.document.querySelector('#modelDetailBody button[type="submit"]')!.disabled).toBe(true)
+  })
+})
+
+describe('the model card uses the backend legacy-calibration boundary (issue #29 review)', () => {
+  it('does not treat an exact-name ordinary run with calibration:false as a calibration', async () => {
+    const ordinary = calRun({
+      id: 'explicitly-ordinary',
+      config_json: JSON.stringify({
+        model: 'm2', temperature: 1, seeds: [0, 1], baselineArm: true, calibration: false
+      })
+    })
+    dom = loadAppDom({
+      routes: routes({ 'GET /api/runs': [ordinary], ...detailRoutesFor(ordinary) })
+    })
+    await dom.boot()
+    dom.document.querySelector('[data-model="m2"]')!.click()
+    await dom.settle()
+
+    expect(dom.document.querySelector('#modelDetailBody [data-cal-run="explicitly-ordinary"]')).toBeNull()
+    expect(dom.document.querySelector('#modelDetailBody button[type="submit"]')!.disabled).toBe(false)
+  })
 })
 
 describe('finishing visibly transitions the card to "done — profile recordable" (issue #29)', () => {

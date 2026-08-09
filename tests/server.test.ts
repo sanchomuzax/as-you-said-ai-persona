@@ -39,6 +39,12 @@ class StubClient implements ChatClient {
   }
 }
 
+class BlockingClient implements ChatClient {
+  async complete(): Promise<ChatResult> {
+    return new Promise<ChatResult>(() => undefined)
+  }
+}
+
 let app: FastifyInstance
 let cookie: { asys_session: string }
 
@@ -127,6 +133,93 @@ describe('restart recovery', () => {
     const rows = db.prepare('SELECT COUNT(*) c FROM responses WHERE run_id = ?').get(runId) as { c: number }
     expect(rows.c).toBe(2)
     await restarted.close()
+  })
+
+  it('auto-resumes at most one interrupted calibration per model and leaves the other resumable', async () => {
+    const db = createDb(':memory:')
+    db.prepare('INSERT INTO questionnaires (id, name) VALUES (?,?)').run('probe', 'Próba')
+    db.prepare('INSERT INTO questions (id, questionnaire_id, ord, text, options_json) VALUES (?,?,0,?,?)').run(
+      'q', 'probe', 'Q?', JSON.stringify(['a', 'b'])
+    )
+    const config = JSON.stringify({
+      model: 'deepseek/deepseek-v4-flash', temperature: 1, seeds: [0], baselineArm: true, calibration: true
+    })
+    for (const id of ['cal-a', 'cal-b']) {
+      db.prepare("INSERT INTO runs (id, questionnaire_id, name, status, config_json) VALUES (?,?,?,'running',?)").run(
+        id, 'probe', `Kalibráció — ${id}`, config
+      )
+    }
+
+    const restarted = buildServer({ db, config: testConfig, models: testModels, client: new BlockingClient() })
+    await restarted.ready()
+    try {
+      const statuses = db.prepare("SELECT status, COUNT(*) c FROM runs GROUP BY status").all() as unknown as {
+        status: string
+        c: number
+      }[]
+      expect(Object.fromEntries(statuses.map((row) => [row.status, row.c]))).toEqual({ paused: 1, running: 1 })
+    } finally {
+      await restarted.close()
+    }
+  })
+
+  it('deduplicates exact-name legacy calibrations at startup before the config marker existed', async () => {
+    const db = createDb(':memory:')
+    db.prepare('INSERT INTO questionnaires (id, name) VALUES (?,?)').run('legacy-probe', 'Próba')
+    db.prepare('INSERT INTO questions (id, questionnaire_id, ord, text, options_json) VALUES (?,?,0,?,?)').run(
+      'legacy-q', 'legacy-probe', 'Q?', JSON.stringify(['a', 'b'])
+    )
+    const legacyConfig = JSON.stringify({
+      model: 'deepseek/deepseek-v4-flash', temperature: 1, seeds: [0], baselineArm: true
+    })
+    for (const id of ['legacy-cal-a', 'legacy-cal-b']) {
+      db.prepare("INSERT INTO runs (id, questionnaire_id, name, status, config_json) VALUES (?,?,?,'running',?)").run(
+        id, 'legacy-probe', 'Kalibráció — deepseek/deepseek-v4-flash', legacyConfig
+      )
+    }
+
+    const restarted = buildServer({ db, config: testConfig, models: testModels, client: new BlockingClient() })
+    await restarted.ready()
+    try {
+      const statuses = db.prepare("SELECT status, COUNT(*) c FROM runs GROUP BY status").all() as unknown as {
+        status: string
+        c: number
+      }[]
+      expect(Object.fromEntries(statuses.map((row) => [row.status, row.c]))).toEqual({ paused: 1, running: 1 })
+    } finally {
+      await restarted.close()
+    }
+  })
+
+  it('still auto-resumes similarly named ordinary interrupted runs independently', async () => {
+    const db = createDb(':memory:')
+    db.prepare('INSERT INTO questionnaires (id, name) VALUES (?,?)').run('ordinary-probe', 'Próba')
+    db.prepare('INSERT INTO questions (id, questionnaire_id, ord, text, options_json) VALUES (?,?,0,?,?)').run(
+      'ordinary-q', 'ordinary-probe', 'Q?', JSON.stringify(['a', 'b'])
+    )
+    const ordinaryConfig = JSON.stringify({
+      model: 'deepseek/deepseek-v4-flash', temperature: 1, seeds: [0], baselineArm: true
+    })
+    for (const id of ['ordinary-similar-a', 'ordinary-similar-b']) {
+      db.prepare("INSERT INTO runs (id, questionnaire_id, name, status, config_json) VALUES (?,?,?,'running',?)").run(
+        id, 'ordinary-probe', 'Kalibráció — deepseek/deepseek-v4-flash — kézi kontroll', ordinaryConfig
+      )
+    }
+
+    const restarted = buildServer({ db, config: testConfig, models: testModels, client: new BlockingClient() })
+    await restarted.ready()
+    try {
+      const statuses = db.prepare("SELECT id, status FROM runs ORDER BY id").all() as unknown as {
+        id: string
+        status: string
+      }[]
+      expect(statuses).toEqual([
+        { id: 'ordinary-similar-a', status: 'running' },
+        { id: 'ordinary-similar-b', status: 'running' }
+      ])
+    } finally {
+      await restarted.close()
+    }
   })
 })
 
