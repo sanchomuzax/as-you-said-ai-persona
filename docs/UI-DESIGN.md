@@ -101,6 +101,42 @@ model and question, and the calibration profile's validity). The earlier
 placeholder figure and the "forced abstention" wording are gone. §7.5 and §7.6
 are resolved by this revision.
 
+### Inspector panel — approved copy (2026-08-09, final)
+
+Screenshot of the last iteration: [`docs/mockups/inspector-final.png`](mockups/inspector-final.png)
+
+The structure and logic are settled. The copy below is the approved wording;
+implement it verbatim (with real values substituted), because each element carries
+a methodological commitment.
+
+**Badge** — state only, no sub-list. The topics belong to the Coverage section;
+duplicating them on the badge produced two slightly different lists in the mockup.
+
+> 🛡️(broken, amber) **„Nem megalapozott ehhez a témához"**
+
+**Coverage** — section heading, then two mutually exclusive lists. A topic must
+never appear in both; in the mockup it did, and a section that contradicts itself
+is worse than no section at all.
+
+> **Lefedettség**
+> **Megalapozott témák:** Toborzás, Bérszámfejtés, Munkavállalói elégedettség
+> **Nem megalapozott témák:** Szoftverfejlesztési keretrendszerek, Pénzügyi modellezés
+
+**Abstention reason** — a real section heading (same weight as *Lefedettség*, no
+quotation marks), then the explanation **before** the numbers. Data without a
+stated cause is not an audit trail:
+
+> **Tartózkodás oka**
+> A perszóna profilja nem tartalmaz a kérdés témájához („szoftverfejlesztési
+> keretrendszerek") kapcsolódó attribútumot. A modell ezért explicit módon jelezte
+> a tudáshatárát, ahelyett hogy tippelt volna.
+>
+> *Mért értékek ennél a kérdésnél: tartózkodás 4/8 válasz · érvénytelen 0/8 ·
+> a modell kalibrációs profilja: érvényes (2026-08-07).*
+
+Every number in the italic line comes from the run's own records. If a value is
+not measured, the line says so rather than omitting it silently.
+
 ## 7. Where the mockup contradicts our methodology (must not be copied)
 
 The prototype contains placeholder content that would break our own rules if it
