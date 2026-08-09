@@ -341,6 +341,17 @@ function modelRoutes(overrides: Record<string, unknown> = {}): Record<string, un
 }
 
 describe('Modellek tab controller', () => {
+  it('does not tell researchers that an arbitrary questionnaire is a calibration probe', async () => {
+    dom = loadAppDom({ routes: modelRoutes() })
+    await dom.boot()
+
+    const modelsTab = dom.document.getElementById('tab-models')!
+    expect(modelsTab.textContent).toMatch(/kijelölt.*verziózott.*próba-kérdőív/is)
+    expect(modelsTab.textContent).not.toMatch(/bármelyik kérdőív használható próbaként/i)
+    expect(dom.document.querySelector('label[for="calibrationQuestionnaire"]')!.getAttribute('title'))
+      .toMatch(/kalibrációs célra kijelölt/i)
+  })
+
   it('lists the calibration status of every configured model', async () => {
     dom = loadAppDom({ routes: modelRoutes() })
     await dom.boot()
