@@ -1,4 +1,4 @@
-import type { RunResults } from './results.js'
+import { POSITION_SHIFT_MIN_SAMPLE, type RunResults } from './results.js'
 import type { StoredProfile, ProfileStatus } from './profile.js'
 
 /**
@@ -130,6 +130,7 @@ function buildQuestionLines(results: RunResults): string[] {
       (q.legacyElicitationBaselineCount ?? 0) > 0
         ? `\n  FIGYELEM: ${q.legacyElicitationBaselineCount} kontroll-kar válasz régi, hibás elicitationnal készült, ezért ki van hagyva a kontroll-kar átlagából.`
         : ''
+    const positionShiftLine = buildPositionShiftLine(q)
 
     // Zero usable responses must never be printed as zero percentages: the judge
     // would read a measured "nobody picked this" where nothing was measured.
@@ -153,7 +154,7 @@ function buildQuestionLines(results: RunResults): string[] {
   Nincs perszónás válasz ehhez a kérdéshez (a futtatásnak nincs perszóna-kara, vagy egyik sem adott értékelhető választ).
   Kontroll — perszóna nélkül: ${baselineDist}${legacyNote}${legacyBaselineNote}
   Invalid: ${q.invalidCount}/${q.totalResponses}, Abstain: ${q.abstainCount}/${q.totalResponses}
-  Kontroll-kar pozíció-konzisztencia (PC): ${fmt(q.positionConsistency)}, kontroll-kar ismétlési stabilitás (RS): ${fmt(q.repetitionStability)}`
+  Kontroll-kar pozíció-konzisztencia (PC): ${fmt(q.positionConsistency)}, kontroll-kar ismétlési stabilitás (RS): ${fmt(q.repetitionStability)}${positionShiftLine}`
       }
       // The control arm can be entirely dropped by the elicitation-mode filter
       // (issue #40 review MEDIUM) while still having produced legacy rows —
@@ -163,7 +164,7 @@ function buildQuestionLines(results: RunResults): string[] {
       // surviving side.
       return `Kérdés: ${q.text}
   Nincs értékelhető válasz ehhez a kérdéshez.${legacyNote}${legacyBaselineNote}
-  Invalid: ${q.invalidCount}/${q.totalResponses}, Abstain: ${q.abstainCount}/${q.totalResponses}`
+  Invalid: ${q.invalidCount}/${q.totalResponses}, Abstain: ${q.abstainCount}/${q.totalResponses}${positionShiftLine}`
     }
 
     const dist = q.aggregated
@@ -199,8 +200,38 @@ function buildQuestionLines(results: RunResults): string[] {
   ${distLabel}: ${dist}${legacyNote}
   Perszónánkénti topválasz: ${personaTops}${baselineLine}
   Invalid: ${q.invalidCount}/${q.totalResponses}, Abstain: ${q.abstainCount}/${q.totalResponses}
-  ${stabilityLabel}: ${fmt(q.positionConsistency)}, Ismétlési stabilitás (RS): ${fmt(q.repetitionStability)}`
+  ${stabilityLabel}: ${fmt(q.positionConsistency)}, Ismétlési stabilitás (RS): ${fmt(q.repetitionStability)}${positionShiftLine}`
   })
+}
+
+function buildPositionShiftLine(question: RunResults['questions'][number]): string {
+  if (question.elicitationMode !== 'single_choice') return ''
+  const sampleSize = question.positionShiftSampleSize
+  const shift = question.positionShift
+  if (shift === null) {
+    return `\n  Pozíció-eltolódás: nem elég adat (${sampleSize}/${POSITION_SHIFT_MIN_SAMPLE} értékelhető cella); ez nem nulla eltolódás.`
+  }
+
+  const direction = Math.abs(shift) < 0.005 ? 'nincs irányeltolódás' : shift < 0 ? 'primacy' : 'recency'
+  const signedValue = shift > 0 ? `+${shift.toFixed(2)}` : shift.toFixed(2)
+  const tier = question.metadata?.['_tier']
+  if (tier === 'gyenge') {
+    const observed = direction === 'recency'
+      ? 'a recency-jelzés összhangban van a csapda elvárásával'
+      : direction === 'primacy'
+        ? 'a primacy-jelzés nem támasztja alá a csapdát'
+        : 'az iránysemleges jelzés nem dönti el, hogy a csapda megfelel-e az elvárásnak'
+    return `\n  Pozíció-eltolódás: ${direction} ${signedValue} (n=${sampleSize}). Pollyanna-csapda (_tier: gyenge): ${observed}; a primacy-jelzés nem támasztja alá, hogy ez csapda. Ez diagnosztikai jel, nem automatikus termékminősítés.`
+  }
+  if (tier === 'jó') {
+    const observed = direction === 'primacy'
+      ? 'a primacy-jelzés összhangban van a jó kontroll elvárásával'
+      : direction === 'recency'
+        ? 'a recency-jelzés nem támasztja alá a jó kontroll elvárását'
+        : 'az iránysemleges jelzés nem dönti el a jó kontroll megfelelőségét'
+    return `\n  Pozíció-eltolódás: ${direction} ${signedValue} (n=${sampleSize}). Pollyanna-kontroll (_tier: jó): ${observed}. Ez diagnosztikai jel, nem automatikus termékminősítés.`
+  }
+  return `\n  Pozíció-eltolódás: ${direction} ${signedValue} (n=${sampleSize}). Diagnosztikai jel, nem automatikus termékminősítés.`
 }
 
 /**

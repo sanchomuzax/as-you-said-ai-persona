@@ -1,6 +1,8 @@
 import type { Db } from '../db.js'
 import { elicitationModeFor, type ElicitationMode } from './parse.js'
 
+export const POSITION_SHIFT_MIN_SAMPLE = 8
+
 export interface ReferenceComparison {
   measuredShare: number | null
   referenceShare: number
@@ -75,6 +77,14 @@ export interface QuestionResult {
   positionConsistency: number | null
   /** Repetition Stability: share of (persona, rotation) groups whose top choice is identical across seeds. */
   repetitionStability: number | null
+  /**
+   * Mean displayed position of the single top choice, normalized to 0..1 and
+   * centred on 0.5. Negative means primacy; positive means recency. `null`
+   * means the direction was not measurable, never a measured zero.
+   */
+  positionShift: number | null
+  /** Valid, non-abstaining, single-choice cells behind `positionShift`. */
+  positionShiftSampleSize: number
 }
 
 export interface RunResults {
@@ -208,6 +218,8 @@ export function computeRunResults(db: Db, runId: string): RunResults {
       options.length
     )
 
+    const measuredPositionShift = positionShift(pcRsRows, options.length, mode)
+
     return {
       questionId: q.id,
       text: q.text,
@@ -240,7 +252,9 @@ export function computeRunResults(db: Db, runId: string): RunResults {
         pcRsRows,
         (r) => `${r.persona_id ?? 'baseline'}|${r.permutation_json}`,
         mode
-      )
+      ),
+      positionShift: measuredPositionShift.value,
+      positionShiftSampleSize: measuredPositionShift.sampleSize
     }
   })
 
@@ -252,6 +266,52 @@ export function computeRunResults(db: Db, runId: string): RunResults {
     invalidRate: total ? responses.filter((r) => r.is_valid === 0).length / total : 0,
     abstainRate: total ? responses.filter((r) => r.abstained === 1).length / total : 0
   }
+}
+
+/**
+ * Direction of the position effect for one question (issue #39).
+ *
+ * `permutation_json[i]` is the ORIGINAL option index displayed at position i.
+ * Only a single-choice answer has one well-defined displayed position. The
+ * input rows have already passed validity, abstention, elicitation-mode and
+ * duplicate-cell filtering; malformed answer/rotation pairs still stay out of
+ * the denominator so the returned sample size exposes the remaining gap.
+ */
+function positionShift(
+  rows: ResponseRow[],
+  optionCount: number,
+  mode: ElicitationMode
+): { value: number | null; sampleSize: number } {
+  if (mode !== 'single_choice' || optionCount < 2) return { value: null, sampleSize: 0 }
+
+  const positions: number[] = []
+  for (const row of rows) {
+    if (row.parsed_answer === null || row.parsed_answer === '' || row.parsed_answer.includes(',')) continue
+    const answer = Number(row.parsed_answer)
+    if (!Number.isInteger(answer) || answer < 0 || answer >= optionCount) continue
+
+    let rotation: unknown
+    try {
+      rotation = JSON.parse(row.permutation_json)
+    } catch {
+      continue
+    }
+    if (
+      !Array.isArray(rotation) ||
+      rotation.length !== optionCount ||
+      rotation.some((index) => !Number.isInteger(index) || index < 0 || index >= optionCount) ||
+      new Set(rotation).size !== optionCount
+    ) continue
+
+    const displayedPosition = rotation.indexOf(answer)
+    if (displayedPosition < 0) continue
+    positions.push(displayedPosition / (optionCount - 1))
+  }
+
+  const sampleSize = positions.length
+  if (sampleSize < POSITION_SHIFT_MIN_SAMPLE) return { value: null, sampleSize }
+  const meanPosition = positions.reduce((sum, position) => sum + position, 0) / sampleSize
+  return { value: meanPosition - 0.5, sampleSize }
 }
 
 function parseQuestionMetadata(value: string | null): Record<string, unknown> | null {

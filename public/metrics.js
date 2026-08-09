@@ -3,6 +3,8 @@
 // metric shown carries a hover explanation (issue #2). No DOM access: unit-tested
 // without a browser environment.
 
+const POSITION_SHIFT_MIN_SAMPLE = 8;
+
 const STATUS_LABELS = {
   pending: 'Függőben',
   running: 'Fut',
@@ -33,6 +35,14 @@ const TOOLTIPS = {
     'Kontroll-kar pozíció-konzisztencia (PC): ehhez a kérdéshez nincs perszónás válasz, ez a szám azt méri, hogy a modell saját, perszóna nélküli topválasza hányszor azonos az opciók eltérő sorrendjénél. 0.7 alatt a modell saját pozíció-torzítását mutatja, az eredmény nem megbízható.',
   repetitionStabilityBaseline:
     'Kontroll-kar ismétlési stabilitás (RS): ehhez a kérdéshez nincs perszónás válasz, ez a szám azt méri, hogy azonos beállítás mellett, eltérő seeddel hányszor azonos a modell saját topválasza. Alacsony érték: a modell saját válasza véletlen ingadozásra érzékeny.',
+  positionShiftPrimacy:
+    'Primacy: a modell az elsőként mutatott opciót preferálja, ami jellemzően azt jelzi, hogy az opciókat jó minőségűnek látja. Ez diagnosztikai jel, nem termékminősítés.',
+  positionShiftRecency:
+    'Recency: a modell a később, különösen az utolsóként mutatott opciót preferálja, ami jellemzően azt jelzi, hogy az opciókat gyengébb minőségűnek látja. Ez diagnosztikai jel, nem termékminősítés.',
+  positionShiftNeutral:
+    'Nem látszik irányított pozíció-eltolódás: az átlagos választási hely a skála közepe körül van. Ez nem zár ki középsőhely- vagy egyszerre jelentkező első- és utolsóhely-hatást.',
+  positionShiftInsufficient:
+    'A pozíció-eltolódáshoz legalább ' + POSITION_SHIFT_MIN_SAMPLE + ' érvényes, nem tartózkodó egyválaszos cella kell. A hiányzó érték nem nulla eltolódást jelent, hanem azt, hogy a mutató még nem mérhető.',
   positionWarning:
     'A topválasz megváltozott az opciók sorrendjével (PC < 0.7), ezért ez az eredmény sorrendi hatást tükröz, nem valós preferenciát — döntéshez nem használható.',
   stabilityWarning:
@@ -170,6 +180,32 @@ function renderMetricChips(question) {
     chips.push(chip('metric-chip', 'RS ' + formatMetric(rs), isBaselineOnly ? TOOLTIPS.repetitionStabilityBaseline : TOOLTIPS.repetitionStability));
     if (rs < 0.7) {
       chips.push(chip('metric-chip metric-chip-warning', '⚠ instabil', TOOLTIPS.stabilityWarning));
+    }
+  }
+  if (question.elicitationMode === 'single_choice') {
+    const shift = question.positionShift;
+    const sampleSize = Number.isInteger(question.positionShiftSampleSize) ? question.positionShiftSampleSize : 0;
+    if (typeof shift === 'number' && Number.isFinite(shift)) {
+      const nearZero = Math.abs(shift) < 0.005;
+      const label = nearZero
+        ? 'Nincs irányeltolódás ' + formatMetric(shift)
+        : shift < 0
+          ? 'Primacy (elsőbbségi hatás) ' + formatMetric(shift)
+          : 'Recency (utolsóhely-hatás) +' + formatMetric(shift);
+      const tooltip = nearZero
+        ? TOOLTIPS.positionShiftNeutral
+        : shift < 0
+          ? TOOLTIPS.positionShiftPrimacy
+          : TOOLTIPS.positionShiftRecency;
+      chips.push(chip('metric-chip', label + ' · n=' + formatNumber(sampleSize), tooltip));
+    } else {
+      chips.push(
+        chip(
+          'metric-chip metric-chip-info',
+          'Pozíció-eltolódás: nem elég adat (' + formatNumber(sampleSize) + '/' + POSITION_SHIFT_MIN_SAMPLE + ')',
+          TOOLTIPS.positionShiftInsufficient
+        )
+      );
     }
   }
   if (question.abstainCount) {

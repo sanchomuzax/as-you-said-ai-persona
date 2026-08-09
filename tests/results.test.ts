@@ -17,18 +17,23 @@ function insertResponse(opts: {
   abstained?: boolean
   rotation?: number[]
   seed?: number
-  persona?: string
+  persona?: string | null
+  questionId?: string
+  elicitationMode?: 'single_choice' | 'multi_choice'
+  condition?: 'persona' | 'baseline' | null
 }): void {
   db.prepare(
     `INSERT INTO responses (id, run_id, persona_id, question_id, model_requested, temperature, seed,
-       permutation_json, prompt_rendered, raw_response, parsed_distribution_json, parsed_answer, is_valid, abstained)
-     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+       permutation_json, prompt_rendered, raw_response, parsed_distribution_json, parsed_answer, is_valid, abstained,
+       elicitation_mode, condition)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
   ).run(
-    randomUUID(), runId, opts.persona ?? p1, qid, 'm', 1.0, opts.seed ?? 0,
+    randomUUID(), runId, opts.persona === undefined ? p1 : opts.persona, opts.questionId ?? qid, 'm', 1.0, opts.seed ?? 0,
     JSON.stringify(opts.rotation ?? [0, 1]), 'p', 'r',
     opts.dist === null ? null : JSON.stringify(opts.dist ?? { '0': 0.8, '1': 0.2 }),
     opts.answer === undefined ? '0' : opts.answer,
-    opts.valid === false ? 0 : 1, opts.abstained ? 1 : 0
+    opts.valid === false ? 0 : 1, opts.abstained ? 1 : 0,
+    opts.elicitationMode ?? null, opts.condition ?? 'persona'
   )
 }
 
@@ -145,9 +150,124 @@ describe('computeRunResults', () => {
     expect(question.referenceComparison).toBeNull()
     expect(question.referenceIssue).toMatch(/hibás|hiányos|optionIndexes|opcióindex/i)
   })
+
+  describe('position shift (issue #39)', () => {
+    function insertPositionChoices(
+      questionId: string,
+      side: 'first' | 'last',
+      count = 8,
+      opts: { valid?: boolean; abstained?: boolean; elicitationMode?: 'single_choice' | 'multi_choice' } = {}
+    ): void {
+      const rotations = [
+        [0, 1, 2],
+        [1, 2, 0],
+        [2, 0, 1]
+      ]
+      for (let seed = 0; seed < count; seed++) {
+        const rotation = rotations[seed % rotations.length]!
+        const originalAnswer = rotation[side === 'first' ? 0 : rotation.length - 1]!
+        insertResponse({
+          questionId,
+          rotation,
+          seed,
+          answer: String(originalAnswer),
+          dist: { '0': 1, '1': 0, '2': 0 },
+          valid: opts.valid,
+          abstained: opts.abstained,
+          elicitationMode: opts.elicitationMode ?? 'single_choice'
+        })
+      }
+    }
+
+    function positionFields(question: unknown): { positionShift: number | null; positionShiftSampleSize: number } {
+      const value = question as { positionShift: number | null; positionShiftSampleSize: number }
+      return { positionShift: value.positionShift, positionShiftSampleSize: value.positionShiftSampleSize }
+    }
+
+    it('computes primacy and recency independently per question from the chosen original answer and its displayed rotation', () => {
+      const q2 = randomUUID()
+      const questionnaireId = (
+        db.prepare('SELECT questionnaire_id FROM questions WHERE id = ?').get(qid) as { questionnaire_id: string }
+      ).questionnaire_id
+      db.prepare(
+        'UPDATE questions SET options_json = ? WHERE id = ?'
+      ).run(JSON.stringify(['A', 'B', 'C']), qid)
+      db.prepare(
+        'INSERT INTO questions (id, questionnaire_id, ord, text, scale_type, options_json) VALUES (?,?,1,?,?,?)'
+      ).run(q2, questionnaireId, 'Második kérdés?', 'single_choice', JSON.stringify(['A', 'B', 'C']))
+
+      insertPositionChoices(qid, 'first')
+      insertPositionChoices(q2, 'last')
+
+      const [primacy, recency] = computeRunResults(db, runId).questions.map(positionFields)
+      expect(primacy).toEqual({ positionShift: -0.5, positionShiftSampleSize: 8 })
+      expect(recency).toEqual({ positionShift: 0.5, positionShiftSampleSize: 8 })
+    })
+
+    it('deduplicates cells, excludes invalid and abstaining rows, and keeps a loud sample count below the threshold', () => {
+      db.prepare('UPDATE questions SET options_json = ? WHERE id = ?').run(JSON.stringify(['A', 'B', 'C']), qid)
+      insertPositionChoices(qid, 'first', 7)
+      // Same experimental cell as seed 0: append-only duplicate, not an eighth observation.
+      // Production prevents new duplicates, but old/imported logs may contain
+      // them; mirror the repository's existing duplicate-response fixture.
+      db.exec('DROP INDEX IF EXISTS idx_responses_cell')
+      insertResponse({
+        rotation: [0, 1, 2], seed: 0, answer: '2', dist: { '0': 0, '1': 0, '2': 1 }, elicitationMode: 'single_choice'
+      })
+      insertResponse({
+        rotation: [0, 2, 1], seed: 20, answer: '0', dist: null, valid: false, elicitationMode: 'single_choice'
+      })
+      insertResponse({
+        rotation: [2, 1, 0], seed: 21, answer: '2', dist: null, abstained: true, elicitationMode: 'single_choice'
+      })
+
+      expect(positionFields(computeRunResults(db, runId).questions[0])).toEqual({
+        positionShift: null,
+        positionShiftSampleSize: 7
+      })
+    })
+
+    it('does not assign the ambiguous single-choice position-shift metric to a multi-choice question', () => {
+      db.prepare('UPDATE questions SET scale_type = ?, options_json = ? WHERE id = ?').run(
+        'multi_choice', JSON.stringify(['A', 'B', 'C']), qid
+      )
+      insertPositionChoices(qid, 'first', 8, { elicitationMode: 'multi_choice' })
+
+      expect(positionFields(computeRunResults(db, runId).questions[0])).toEqual({
+        positionShift: null,
+        positionShiftSampleSize: 0
+      })
+    })
+  })
 })
 
 describe('buildEvaluationPrompt', () => {
+  function weakTierCalibrationPrompt(displayedPosition: 0 | 1 | 2): string {
+    db.prepare('UPDATE questions SET options_json = ?, metadata_json = ? WHERE id = ?').run(
+      JSON.stringify(['A', 'B', 'C']),
+      JSON.stringify({ _tier: 'gyenge', _torzitas: 'Pollyanna' }),
+      qid
+    )
+    const rotations = [[0, 1, 2], [1, 2, 0], [2, 0, 1]]
+    for (let seed = 0; seed < 8; seed++) {
+      const rotation = rotations[seed % rotations.length]!
+      insertResponse({
+        rotation,
+        seed,
+        answer: String(rotation[displayedPosition]),
+        dist: { '0': 1, '1': 0, '2': 0 },
+        elicitationMode: 'single_choice',
+        persona: null,
+        condition: 'baseline'
+      })
+    }
+    return buildEvaluationPrompt('Kalibráció', computeRunResults(db, runId), { calibration: true })
+  }
+
+  function positionShiftLine(prompt: string): string {
+    return prompt.split('\n').find((line) => line.includes('Pozíció-eltolódás:')) ?? ''
+  }
+
   it('embeds computed metrics and anti-bias instructions', () => {
     insertResponse({ dist: { '0': 0.9, '1': 0.1 } })
     const prompt = buildEvaluationPrompt('R', computeRunResults(db, runId))
@@ -156,6 +276,27 @@ describe('buildEvaluationPrompt', () => {
     expect(prompt).toContain('Pollyanna')
     expect(prompt).toContain('TSTR')
     expect(prompt).toContain('spurious split')
+  })
+
+  it('frames a weak-tier Pollyanna item position shift as a diagnostic trap signal, never an automatic product rating (issue #39)', () => {
+    const prompt = weakTierCalibrationPrompt(2)
+    expect(prompt).toMatch(/pozíció-eltolódás[^\n]*(recency|\+0[,.]50)/i)
+    expect(prompt).toMatch(/recency[^\n]*(összhangban|megfelel)[^\n]*csapda/i)
+    expect(prompt).toMatch(/primacy[^\n]*(nem támasztja alá|nem validálja)[^\n]*csapda/i)
+    expect(prompt).toMatch(/diagnosztikai jel/i)
+    expect(prompt).toMatch(/nem automatikus[^\n]*termék|minősítésre[^\n]*nem/i)
+  })
+
+  it('says on the measured question line that actual primacy does not support the weak Pollyanna trap (issue #39 review)', () => {
+    const line = positionShiftLine(weakTierCalibrationPrompt(0))
+    expect(line).toMatch(/pozíció-eltolódás[^\n]*primacy[^\n]*-0[,.]50[^\n]*n=8/i)
+    expect(line).toMatch(/primacy[^\n]*nem támasztja alá[^\n]*csapd/i)
+  })
+
+  it('keeps a measured neutral shift undecided instead of validating or rejecting the weak Pollyanna trap', () => {
+    const line = positionShiftLine(weakTierCalibrationPrompt(1))
+    expect(line).toMatch(/pozíció-eltolódás[^\n]*nincs irányeltolódás[^\n]*0[,.]00[^\n]*n=8/i)
+    expect(line).toMatch(/iránysemleges[^\n]*nem dönti el[^\n]*csapda/i)
   })
 })
 
@@ -482,6 +623,8 @@ describe('buildEvaluationPrompt — no fabricated numbers', () => {
             p: { name: 'P', distribution: [0, 0], abstainCount: 0, baselineDivergence: null, movesModel: null }
           },
           baseline: null,
+          positionShift: null,
+          positionShiftSampleSize: 0,
           positionConsistency: null,
           repetitionStability: null
         }
@@ -991,6 +1134,8 @@ describe('buildEvaluationPrompt — control-arm PC/RS reaches the judge prompt f
           aggregated: [0, 0],
           byPersona: {},
           baseline: null,
+          positionShift: null,
+          positionShiftSampleSize: 0,
           positionConsistency: null,
           repetitionStability: null
         }

@@ -8,6 +8,8 @@ interface QuestionLike {
   legacyElicitationBaselineCount?: number
   positionConsistency?: number | null
   repetitionStability?: number | null
+  positionShift?: number | null
+  positionShiftSampleSize?: number
   abstainCount?: number
   invalidCount?: number
   /** Present on the real API payload; used to tell a baseline-only (calibration)
@@ -162,6 +164,38 @@ describe('renderMetricChips', () => {
       /title="[^"]*"[^ =>]/
     )
     expect(renderMetricChips({ abstainCount: 1 })).not.toMatch(/title="[^"]*"[^ =>]/)
+  })
+
+  it('shows the position direction in Hungarian with a plain-language explanation', () => {
+    const html = renderMetricChips({
+      elicitationMode: 'single_choice',
+      positionShift: -0.5,
+      positionShiftSampleSize: 8
+    })
+    expect(html).toMatch(/elsőbbségi hatás|primacy/i)
+    expect(html).toContain('-0.50')
+    expect(html).toMatch(/elsőként mutatott opciót preferálja/i)
+    expect(html).toMatch(/jó minőségűnek látja/i)
+  })
+
+  it('renders an explicit “nem elég adat” chip instead of formatting a missing shift as zero', () => {
+    const html = renderMetricChips({
+      elicitationMode: 'single_choice',
+      positionShift: null,
+      positionShiftSampleSize: 7
+    })
+    expect(html).toMatch(/nem elég adat/i)
+    expect(html).toContain('7')
+    expect(html).not.toMatch(/(?:eltolódás|primacy|recency)[^<]*0[,.]00/i)
+  })
+
+  it('does not show a position-shift chip for multi-choice questions', () => {
+    const html = renderMetricChips({
+      elicitationMode: 'multi_choice',
+      positionShift: null,
+      positionShiftSampleSize: 0
+    })
+    expect(html).not.toMatch(/pozíció-eltolódás|primacy|recency|nem elég adat/i)
   })
 })
 
