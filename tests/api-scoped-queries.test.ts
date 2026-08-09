@@ -49,6 +49,10 @@ async function get(url: string) {
   return app.inject({ method: 'GET', url, cookies: cookie })
 }
 
+async function post(url: string, payload: Record<string, unknown>) {
+  return app.inject({ method: 'POST', url, cookies: cookie, payload })
+}
+
 /** Two projects plus a global questionnaire, so filtering has something to get wrong. */
 function seed(): void {
   db.prepare('INSERT INTO projects (id, name, application_domain) VALUES (?,?,?)').run('p1', 'Startlap', 'Hírportál')
@@ -163,6 +167,89 @@ describe('GET /api/runs?project=', () => {
 })
 
 describe('GET /api/questionnaires', () => {
+  it('exposes the same effective probe designation and version on list, detail and versions APIs', async () => {
+    db.prepare("UPDATE questionnaires SET is_calibration_probe = 1 WHERE id = 'qn2'").run()
+    const data = (await get('/api/questionnaires')).json().data as {
+      id: string
+      version?: number
+      isCalibrationProbe?: boolean
+    }[]
+
+    expect(data.find((q) => q.id === 'qn2')).toMatchObject({ version: 1, isCalibrationProbe: true })
+    expect(data.find((q) => q.id === 'qn1')).toMatchObject({ version: 1, isCalibrationProbe: false })
+
+    const detail = (await get('/api/questionnaires/qn2')).json().data
+    const versions = (await get('/api/questionnaires/qn2/versions')).json().data
+    expect(detail).toMatchObject({ id: 'qn2', version: 1, isCalibrationProbe: true })
+    expect(versions).toEqual([
+      expect.objectContaining({ id: 'qn2', version: 1, isCalibrationProbe: true })
+    ])
+  })
+
+  it('accepts an explicit authoritative probe flag outside the legacy named project and inherits it across versions', async () => {
+    const questions = [{
+      text: 'Próbakérdés?', options: ['Igen', 'Nem'], scaleType: 'single_choice', scaleDirection: 'ascending'
+    }]
+    const designated = await post('/api/questionnaires', {
+      projectId: 'p1', name: 'Explicit próba', isCalibrationProbe: true, questions
+    })
+    const ordinary = await post('/api/questionnaires', {
+      projectId: 'p1', name: 'Explicit kutatás', isCalibrationProbe: false, questions
+    })
+    expect(designated.statusCode).toBe(200)
+    expect(ordinary.statusCode).toBe(200)
+    const designatedId = designated.json().data.id as string
+    const ordinaryId = ordinary.json().data.id as string
+
+    const next = await post(`/api/questionnaires/${designatedId}/versions`, {
+      name: 'Explicit próba v2', questions
+    })
+    expect(next.statusCode).toBe(200)
+
+    const list = (await get('/api/questionnaires')).json().data
+    expect(list.find((q: { id: string }) => q.id === next.json().data.id))
+      .toMatchObject({ version: 2, isCalibrationProbe: true })
+    expect((await get(`/api/questionnaires/${designatedId}`)).json().data)
+      .toMatchObject({ version: 1, isCalibrationProbe: true })
+    const designatedVersions = (await get(`/api/questionnaires/${designatedId}/versions`)).json().data
+    expect(designatedVersions).toHaveLength(2)
+    expect(designatedVersions.every((q: { isCalibrationProbe?: boolean }) => q.isCalibrationProbe === true)).toBe(true)
+    expect((await get(`/api/questionnaires/${ordinaryId}`)).json().data)
+      .toMatchObject({ version: 1, isCalibrationProbe: false })
+  })
+
+  it('rejects an explicit probe flag on a new version instead of silently ignoring it', async () => {
+    const response = await post('/api/questionnaires/qn1/versions', {
+      name: 'Első kérdőív v2',
+      isCalibrationProbe: true,
+      questions: [{
+        text: 'Első kérdőív pontosított kérdése?', options: ['A', 'B'],
+        scaleType: 'single_choice', scaleDirection: 'ascending'
+      }]
+    })
+
+    expect(response.statusCode).toBe(400)
+    const versions = (await get('/api/questionnaires/qn1/versions')).json().data
+    expect(versions).toHaveLength(1)
+    expect(versions[0]).toMatchObject({ version: 1, isCalibrationProbe: false })
+  })
+
+  it('lets an explicit false opt an ordinary questionnaire out of the legacy named project default', async () => {
+    db.prepare("UPDATE projects SET name = 'Modell-baseline próba' WHERE id = 'p1'").run()
+    const created = await post('/api/questionnaires', {
+      projectId: 'p1', name: 'Ordinary kontroll', isCalibrationProbe: false,
+      questions: [{
+        text: 'Kutatási kérdés?', options: ['Igen', 'Nem'], scaleType: 'single_choice', scaleDirection: 'ascending'
+      }]
+    })
+    expect(created.statusCode).toBe(200)
+    const id = created.json().data.id as string
+
+    const list = (await get('/api/questionnaires')).json().data
+    expect(list.find((q: { id: string }) => q.id === id))
+      .toMatchObject({ version: 1, isCalibrationProbe: false })
+  })
+
   it('carries the questions of each returned questionnaire, and no others', async () => {
     const data = (await get('/api/questionnaires?project=p1')).json().data as {
       id: string

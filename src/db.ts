@@ -29,6 +29,21 @@ function migrate(db: DatabaseSync): void {
   if (!questionnaireCols.some((c) => c.name === 'language')) {
     db.exec("ALTER TABLE questionnaires ADD COLUMN language TEXT NOT NULL DEFAULT 'hu'")
   }
+  const needsCalibrationProbeBackfill = !questionnaireCols.some((c) => c.name === 'is_calibration_probe')
+  if (needsCalibrationProbeBackfill) {
+    db.exec('BEGIN')
+    try {
+      db.exec('ALTER TABLE questionnaires ADD COLUMN is_calibration_probe INTEGER NOT NULL DEFAULT 0')
+      // One-time compatibility bridge for databases created before #27. Once
+      // committed, the durable flag is authoritative, including explicit false.
+      db.exec(`UPDATE questionnaires SET is_calibration_probe = 1
+        WHERE project_id IN (SELECT id FROM projects WHERE name = 'Modell-baseline próba')`)
+      db.exec('COMMIT')
+    } catch (error) {
+      db.exec('ROLLBACK')
+      throw error
+    }
+  }
   // Existing rows are each their own lineage root: they were the only version.
   if (!personaCols.some((c) => c.name === 'lineage_id')) {
     db.exec('ALTER TABLE personas ADD COLUMN lineage_id TEXT')
@@ -320,6 +335,8 @@ CREATE TABLE IF NOT EXISTS questionnaires (
   -- existed, not a guess. Drives the elicitation TEMPLATE's default language
   -- for runs against this questionnaire (src/server.ts, POST /api/runs).
   language TEXT NOT NULL DEFAULT 'hu',
+  -- Durable designation used by calibration selectors and profile audits.
+  is_calibration_probe INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 

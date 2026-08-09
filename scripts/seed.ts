@@ -34,6 +34,7 @@ const seedSchema = z.object({
     .array(
       z.object({
         name: z.string().min(1),
+        isCalibrationProbe: z.boolean().optional(),
         questions: z
           .array(
             z.object({
@@ -92,14 +93,27 @@ process.stdout.write(`Personas: ${created} created, ${seed.personas.length - cre
 
 let qCreated = 0
 for (const questionnaire of seed.questionnaires) {
+  const explicitCalibrationProbe = questionnaire.isCalibrationProbe
+  const isCalibrationProbe = explicitCalibrationProbe ?? seed.project.name === 'Modell-baseline próba'
   const exists = db
     .prepare('SELECT id FROM questionnaires WHERE project_id = ? AND name = ?')
-    .get(projectId, questionnaire.name)
-  if (exists) continue
+    .get(projectId, questionnaire.name) as { id: string } | undefined
+  if (exists) {
+    // A legacy ordinary seed with no flag must not erase a durable designation
+    // made later through the API. The legacy baseline project remains an
+    // opt-in bridge; an explicit boolean is authoritative in either direction.
+    if (explicitCalibrationProbe !== undefined || isCalibrationProbe) {
+      db.prepare('UPDATE questionnaires SET is_calibration_probe = ? WHERE id = ?')
+        .run(isCalibrationProbe ? 1 : 0, exists.id)
+    }
+    continue
+  }
   const qid = randomUUID()
   db.exec('BEGIN')
   try {
-    db.prepare('INSERT INTO questionnaires (id, project_id, name) VALUES (?,?,?)').run(qid, projectId, questionnaire.name)
+    db.prepare('INSERT INTO questionnaires (id, project_id, name, is_calibration_probe) VALUES (?,?,?,?)').run(
+      qid, projectId, questionnaire.name, isCalibrationProbe ? 1 : 0
+    )
     questionnaire.questions.forEach((q, ord) => {
       const metadata = Object.fromEntries(Object.entries(q).filter(([key]) => key.startsWith('_')))
       db.prepare(

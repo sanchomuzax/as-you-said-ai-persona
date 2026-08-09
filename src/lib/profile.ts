@@ -84,6 +84,8 @@ export interface QuestionProfile {
 }
 
 export interface ProfileMetrics {
+  /** Audit label for an ordinary questionnaire used as a calibration override. */
+  probeInterpretability?: 'standard' | 'limited'
   perQuestion: QuestionProfile[]
   /**
    * PriDe-style prior bias: how often the model picks each POSITION, once the

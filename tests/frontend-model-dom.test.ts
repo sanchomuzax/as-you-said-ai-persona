@@ -189,7 +189,7 @@ describe('renderModelCard', () => {
  * demanded hand-copied run ids).
  */
 describe('renderCalibrationWorkflow', () => {
-  const PROBES = [{ id: 'probe', name: 'Próba-kérdőív' }]
+  const PROBES = [{ id: 'probe', name: 'Próba-kérdőív', version: 2, isCalibrationProbe: true }]
 
   it('puts a launch form with the probe options on the card', () => {
     const html = card.renderCalibrationWorkflow({ model: 'm2', label: 'M2', status: 'missing' }, { probes: PROBES })
@@ -197,6 +197,31 @@ describe('renderCalibrationWorkflow', () => {
     expect(html).toContain('data-model="m2"')
     expect(html).toContain('Próba-kérdőív')
     expect(html).toContain('Kalibrációs futtatás indítása')
+  })
+
+  it('warns in Hungarian when an explicit override supplies an ordinary questionnaire', () => {
+    const html = card.renderCalibrationWorkflow(
+      { model: 'm2', label: 'M2', status: 'missing' },
+      { probes: [{ id: 'ordinary', name: 'Üzleti kutatás', version: 1, isCalibrationProbe: false }] }
+    )
+
+    expect(html).toMatch(/nem kalibrációs célra tervezett.*korlátozottan értelmezhető/is)
+  })
+
+  it('shows the probe name and version on a calibration run row', () => {
+    const html = card.renderCalibrationWorkflow(
+      { model: 'm2', label: 'M2', status: 'missing' },
+      {
+        probes: PROBES,
+        calibrationRuns: [{
+          id: 'cal-1', name: 'Kalibráció — m2', status: 'running', created_at: '2026-08-07 10:00:00',
+          probeName: 'Default-perszóna próba', probeVersion: 2
+        }]
+      }
+    )
+
+    expect(html).toContain('Default-perszóna próba')
+    expect(html).toMatch(/v2/)
   })
 
   it('numbers the steps in order', () => {
@@ -334,6 +359,42 @@ describe('Modellek tab controller', () => {
     expect(dom.document.getElementById('modelDetailBody')!.textContent).toContain('m1-2026-05')
   })
 
+  it('shows a visible methodology warning on a limited profile in the model list', async () => {
+    dom = loadAppDom({
+      routes: modelRoutes({
+        'GET /api/model-profiles': [{
+          model: 'm1', label: 'Modell 1', status: 'valid', reasons: [],
+          summary: {
+            positivityOffset: 0.267, priorBiasMaxDeviation: 0, invalidRate: 0,
+            abstainRate: 0, cellCount: 8, costUsd: 0.008, probeInterpretability: 'limited'
+          },
+          profile: { id: 'prof-1' }
+        }]
+      })
+    })
+    await dom.boot()
+
+    expect(dom.document.getElementById('modelsList')!.textContent)
+      .toMatch(/nem kalibrációs célra tervezett.*korlátozottan értelmezhető/is)
+  })
+
+  it('shows a visible methodology warning from limited profile-detail metrics', async () => {
+    dom = loadAppDom({
+      routes: modelRoutes({
+        'GET /api/model-profiles/prof-1': {
+          ...PROFILE,
+          metrics: { ...PROFILE.metrics, probeInterpretability: 'limited' }
+        }
+      })
+    })
+    await dom.boot()
+    dom.document.querySelector('[data-model="m1"]')!.click()
+    await dom.settle()
+
+    expect(dom.document.getElementById('modelDetailBody')!.textContent)
+      .toMatch(/nem kalibrációs célra tervezett.*korlátozottan értelmezhető/is)
+  })
+
   it('shows the uncalibrated explanation without fetching a profile', async () => {
     dom = loadAppDom({ routes: modelRoutes() })
     await dom.boot()
@@ -352,23 +413,49 @@ describe('Modellek tab controller', () => {
     expect(dom.document.getElementById('modelDetailTitle')!.textContent).toBe('Modell 1')
   })
 
-  it('offers every configured model and questionnaire for calibration', async () => {
+  it('offers configured models but only designated probes for calibration', async () => {
     dom = loadAppDom({
       routes: modelRoutes({
-        'GET /api/questionnaires': [{ id: 'probe', name: 'Próba-kérdőív', questions: [] }]
+        'GET /api/questionnaires': [
+          { id: 'probe', name: 'Default-perszóna próba', version: 2, isCalibrationProbe: true, questions: [] },
+          { id: 'ordinary', name: 'Üzleti kutatás', version: 1, isCalibrationProbe: false, questions: [] }
+        ]
       })
     })
     await dom.boot()
     expect(dom.document.getElementById('calibrationModel')!.textContent).toContain('Modell 1')
-    expect(dom.document.getElementById('calibrationQuestionnaire')!.textContent).toContain('Próba-kérdőív')
+    expect(dom.document.getElementById('calibrationQuestionnaire')!.textContent).toContain('Default-perszóna próba')
+    expect(dom.document.getElementById('calibrationQuestionnaire')!.textContent).not.toContain('Üzleti kutatás')
+    expect(dom.document.getElementById('calibrationQuestionnaire')!.textContent).toMatch(/v2/)
     expect(dom.document.getElementById('profileModel')!.textContent).toContain('Modell 2')
+  })
+
+  it('offers only designated probes on the model-card launcher too', async () => {
+    dom = loadAppDom({
+      routes: modelRoutes({
+        'GET /api/questionnaires': [
+          { id: 'probe', name: 'Default-perszóna próba', version: 2, isCalibrationProbe: true, questions: [] },
+          { id: 'ordinary', name: 'Üzleti kutatás', version: 1, isCalibrationProbe: false, questions: [] }
+        ]
+      })
+    })
+    await dom.boot()
+    dom.document.querySelector('[data-model="m2"]')!.click()
+    await dom.settle()
+
+    const text = dom.document.querySelector('.model-card-probe-select')!.textContent
+    expect(text).toContain('Default-perszóna próba')
+    expect(text).not.toContain('Üzleti kutatás')
+    expect(text).toMatch(/v2/)
   })
 
   it('launches a calibration run for the selected model and probe', async () => {
     let posted: { url: string; body: unknown } | null = null
     dom = loadAppDom({
       routes: modelRoutes({
-        'GET /api/questionnaires': [{ id: 'probe', name: 'Próba-kérdőív', questions: [] }],
+        'GET /api/questionnaires': [
+          { id: 'probe', name: 'Próba-kérdőív', version: 1, isCalibrationProbe: true, questions: [] }
+        ],
         'POST /api/models/m1/calibrate': (body: unknown, url: string) => {
           posted = { url, body }
           return { runId: 'run-9' }
@@ -412,11 +499,35 @@ describe('Modellek tab controller', () => {
     stale_versions: 0
   }
 
+  it('shows a visible methodology warning from a limited GET /api/runs marker', async () => {
+    dom = loadAppDom({
+      routes: modelRoutes({
+        'GET /api/runs': [{
+          ...CAL_RUN,
+          config_json: JSON.stringify({
+            model: 'm2', temperature: 1, seeds: [0, 1], baselineArm: true, calibration: true,
+            calibrationProbeInterpretability: 'limited'
+          })
+        }]
+      })
+    })
+    await dom.boot()
+    dom.document.querySelector('[data-model="m2"]')!.click()
+    await dom.settle()
+
+    const runRow = dom.document.querySelector('[data-cal-run="cal-run-1"]')
+    expect(runRow).not.toBeNull()
+    expect(runRow!.textContent)
+      .toMatch(/nem kalibrációs célra tervezett.*korlátozottan értelmezhető/is)
+  })
+
   it('launches a calibration straight from the model card', async () => {
     let posted: unknown = null
     dom = loadAppDom({
       routes: modelRoutes({
-        'GET /api/questionnaires': [{ id: 'probe', name: 'Próba-kérdőív', questions: [] }],
+        'GET /api/questionnaires': [
+          { id: 'probe', name: 'Próba-kérdőív', version: 1, isCalibrationProbe: true, questions: [] }
+        ],
         'POST /api/models/m2/calibrate': (body: unknown) => {
           posted = body
           return { runId: 'run-9' }
@@ -437,7 +548,9 @@ describe('Modellek tab controller', () => {
   it('guards the on-card launch behind a chosen probe, like the tab-level form', async () => {
     dom = loadAppDom({
       routes: modelRoutes({
-        'GET /api/questionnaires': [{ id: 'probe', name: 'Próba-kérdőív', questions: [] }]
+        'GET /api/questionnaires': [
+          { id: 'probe', name: 'Próba-kérdőív', version: 1, isCalibrationProbe: true, questions: [] }
+        ]
       })
     })
     await dom.boot()

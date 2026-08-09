@@ -78,6 +78,7 @@ function calibrationRunsFor(modelId) {
         (config.calibration === undefined && exactLegacyName);
     })
     .map((run) => {
+      const config = parsedRunConfig(run);
       const fallback = runProgressFromRow(run);
       const live = state.runProgress[run.id] || {};
       return {
@@ -87,7 +88,10 @@ function calibrationRunsFor(modelId) {
         created_at: run.created_at,
         totalCells: live.totalCells ?? fallback.totalCells,
         done: live.done ?? fallback.done,
-        usage: live.usage || fallback.usage
+        usage: live.usage || fallback.usage,
+        probeName: run.questionnaire_name || null,
+        probeVersion: run.questionnaire_version ?? null,
+        probeInterpretability: config?.calibrationProbeInterpretability || null
       };
     })
     .sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)));
@@ -114,7 +118,7 @@ async function ensureProviderOptions(modelId) {
 /** Everything the on-card workflow needs, computed from already-fetched state. */
 function modelCardContext(modelId) {
   return {
-    probes: state.probeQuestionnaires || [],
+    probes: (state.probeQuestionnaires || []).filter((q) => q.isCalibrationProbe === true),
     calibrationRuns: calibrationRunsFor(modelId),
     providerOptions: (state.providerOptionsCache && state.providerOptionsCache[modelId]?.options) || []
   };
@@ -131,13 +135,13 @@ function renderCalibrationForm() {
   modelSelect.innerHTML = options;
   const profileModelSelect = document.getElementById('profileModel');
   if (profileModelSelect) profileModelSelect.innerHTML = options;
-  // Every questionnaire, not the project-filtered list: the probe usually lives
-  // in a dedicated calibration project, so filtering by the currently selected
-  // project would hide exactly the one the researcher wants.
-  const probes = state.probeQuestionnaires || [];
+  // Only durable calibration instruments, across every project. Ordinary
+  // research questionnaires remain addressable by the API as an explicit,
+  // limited-interpretability override, but are not offered by default.
+  const probes = (state.probeQuestionnaires || []).filter((q) => q.isCalibrationProbe === true);
   questionnaireSelect.innerHTML =
     '<option value="">-- Válassz próba-kérdőívet --</option>' +
-    probes.map((q) => `<option value="${escapeHtml(q.id)}">${escapeHtml(q.name)}</option>`).join('');
+    probes.map((q) => `<option value="${escapeHtml(q.id)}">${escapeHtml(q.name)} — v${escapeHtml(q.version)}</option>`).join('');
   renderProfileRunPicker();
   // refreshCalibrationProviderSelect lives in provider-field.js, shared with
   // the run and interview forms' equivalent "Szolgáltató rögzítése" fields.

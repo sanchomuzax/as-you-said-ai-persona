@@ -77,7 +77,9 @@ function routes(overrides: Record<string, unknown> = {}): Record<string, unknown
       { model: 'm1', label: 'Modell 1', status: 'missing', reasons: [], summary: null, profile: null },
       { model: 'm2', label: 'Modell 2', status: 'missing', reasons: [], summary: null, profile: null }
     ],
-    'GET /api/questionnaires': [{ id: 'probe', name: 'Próba-kérdőív', questions: [] }],
+    'GET /api/questionnaires': [{
+      id: 'probe', name: 'Próba-kérdőív', version: 1, isCalibrationProbe: true, questions: []
+    }],
     'GET /api/runs': [],
     ...overrides
   })

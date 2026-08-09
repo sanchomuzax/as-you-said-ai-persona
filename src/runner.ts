@@ -29,6 +29,8 @@ export interface RunConfig {
    * moment the label wording changes.
    */
   calibration?: boolean
+  /** Whether the chosen calibration questionnaire was designed for this use. */
+  calibrationProbeInterpretability?: 'standard' | 'limited'
   /**
    * The elicitation TEMPLATE's own language (issue #33) — distinct from the
    * questionnaire's content language. Absent on every run created before this

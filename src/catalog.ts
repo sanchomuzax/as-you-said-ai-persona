@@ -135,6 +135,7 @@ export function registerCatalogRoutes(app: FastifyInstance, deps: CatalogDeps): 
   const questionnaireSchema = z.object({
     projectId: z.string().min(1).optional(),
     name: z.string().min(1),
+    isCalibrationProbe: z.boolean().optional(),
     // CONTENT language of the questions/options (issue #33) — drives the
     // elicitation TEMPLATE's default language for runs against this
     // questionnaire. Defaults to 'hu': this project's whole corpus is
@@ -155,7 +156,8 @@ export function registerCatalogRoutes(app: FastifyInstance, deps: CatalogDeps): 
       .min(1)
   })
 
-  const LATEST_QUESTIONNAIRES = `SELECT q.* FROM questionnaires q
+  const LATEST_QUESTIONNAIRES = `SELECT q.*, q.is_calibration_probe AS effective_calibration_probe
+     FROM questionnaires q
      WHERE q.version = (SELECT MAX(q2.version) FROM questionnaires q2 WHERE q2.lineage_id = q.lineage_id)`
 
   app.get('/api/questionnaires', async (req) => {
@@ -167,6 +169,8 @@ export function registerCatalogRoutes(app: FastifyInstance, deps: CatalogDeps): 
       name: string
       project_id: string | null
       language: string
+      version: number
+      effective_calibration_probe: number
     }[]
     // Scoped to the questionnaires actually being returned: this used to scan
     // the whole questions table on every call and filter in memory.
@@ -191,6 +195,8 @@ export function registerCatalogRoutes(app: FastifyInstance, deps: CatalogDeps): 
         projectId: q.project_id,
         name: q.name,
         language: q.language,
+        version: q.version,
+        isCalibrationProbe: q.effective_calibration_probe === 1,
         questions: questions
           .filter((x) => x.questionnaire_id === q.id)
           .map((x) => ({
@@ -236,6 +242,7 @@ export function registerCatalogRoutes(app: FastifyInstance, deps: CatalogDeps): 
         projectId: row['project_id'],
         language: row['language'],
         version: row['version'],
+        isCalibrationProbe: row['is_calibration_probe'] === 1,
         createdAt: row['created_at'],
         isLatest: isLatestVersion('questionnaires', row),
         questions: questionsOf(id)
@@ -255,6 +262,7 @@ export function registerCatalogRoutes(app: FastifyInstance, deps: CatalogDeps): 
       version: number
       project_id: string | null
       language: string
+      is_calibration_probe: number
       created_at: string
     }[]
     const latest = Math.max(...versions.map((v) => v.version))
@@ -266,6 +274,7 @@ export function registerCatalogRoutes(app: FastifyInstance, deps: CatalogDeps): 
         version: v.version,
         projectId: v.project_id,
         language: v.language,
+        isCalibrationProbe: v.is_calibration_probe === 1,
         createdAt: v.created_at,
         isLatest: v.version === latest,
         questions: questionsOf(v.id)
@@ -281,7 +290,10 @@ export function registerCatalogRoutes(app: FastifyInstance, deps: CatalogDeps): 
   // `language` is the one exception: left OPTIONAL (no default) so a caller that
   // omits it inherits the SOURCE questionnaire's own language below, instead of
   // an English questionnaire silently reverting to 'hu' on its next edit.
-  const questionnaireVersionSchema = questionnaireSchema.omit({ projectId: true, language: true }).extend({
+  const questionnaireVersionSchema = questionnaireSchema
+    .omit({ projectId: true, language: true, isCalibrationProbe: true })
+    .strict()
+    .extend({
     language: z.enum(['hu', 'en']).optional(),
     sourceQuestionIds: z.array(z.string().min(1).nullable()).optional(),
     questions: z
@@ -296,7 +308,7 @@ export function registerCatalogRoutes(app: FastifyInstance, deps: CatalogDeps): 
         })
       )
       .min(1)
-  })
+    })
 
   app.post('/api/questionnaires/:id/versions', async (req, reply) => {
     const { id } = req.params as { id: string }
@@ -366,8 +378,9 @@ export function registerCatalogRoutes(app: FastifyInstance, deps: CatalogDeps): 
     const language = body.data.language ?? (source['language'] as string | undefined) ?? 'hu'
     db.exec('BEGIN')
     try {
-      db.prepare('INSERT INTO questionnaires (id, project_id, lineage_id, name, version, language) VALUES (?,?,?,?,?,?)').run(
-        newId, (source['project_id'] as string | null) ?? null, lineageId, body.data.name, nextVersion, language
+      db.prepare('INSERT INTO questionnaires (id, project_id, lineage_id, name, version, language, is_calibration_probe) VALUES (?,?,?,?,?,?,?)').run(
+        newId, (source['project_id'] as string | null) ?? null, lineageId, body.data.name, nextVersion, language,
+        Number(source['is_calibration_probe'] ?? 0)
       )
       body.data.questions.forEach((q, ord) => {
         db.prepare(
@@ -389,14 +402,19 @@ export function registerCatalogRoutes(app: FastifyInstance, deps: CatalogDeps): 
     const body = questionnaireSchema.safeParse(req.body)
     if (!body.success) return reply.code(400).send({ success: false, error: body.error.issues[0]?.message })
     const id = randomUUID()
+    const project = body.data.projectId
+      ? db.prepare('SELECT id, name FROM projects WHERE id = ?').get(body.data.projectId) as
+          | { id: string; name: string }
+          | undefined
+      : undefined
     if (body.data.projectId) {
-      const project = db.prepare('SELECT id FROM projects WHERE id = ?').get(body.data.projectId)
       if (!project) return reply.code(400).send({ success: false, error: 'Ismeretlen projekt' })
     }
+    const isCalibrationProbe = body.data.isCalibrationProbe ?? project?.name === 'Modell-baseline próba'
     db.exec('BEGIN')
     try {
-      db.prepare('INSERT INTO questionnaires (id, project_id, lineage_id, name, language) VALUES (?,?,?,?,?)').run(
-        id, body.data.projectId ?? null, id, body.data.name, body.data.language
+      db.prepare('INSERT INTO questionnaires (id, project_id, lineage_id, name, language, is_calibration_probe) VALUES (?,?,?,?,?,?)').run(
+        id, body.data.projectId ?? null, id, body.data.name, body.data.language, isCalibrationProbe ? 1 : 0
       )
       body.data.questions.forEach((q, ord) => {
         db.prepare(
