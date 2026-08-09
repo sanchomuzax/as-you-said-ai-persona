@@ -451,6 +451,8 @@ document.getElementById('logoutBtn')?.addEventListener('click', async () => {
     await apiCall('POST', '/api/logout');
   } catch {}
   state.authenticated = false;
+  state.runProgress = {};
+  state.runProgressErrors = {};
   showLoginScreen();
 });
 
@@ -630,6 +632,7 @@ async function loadInitialData() {
     state.projects = projects;
     state.personas = personas;
     state.questionnaires = questionnaires;
+    window.invalidateStaleRunProgress?.(runs);
     state.runs = runs;
 
     renderProjectsList();

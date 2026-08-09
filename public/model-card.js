@@ -183,7 +183,8 @@ function formatElapsed(createdAt) {
  * like every other run view), so nothing new is fetched to render this.
  */
 function calibrationRunRow(run) {
-  const isActive = run.status === 'running' || run.status === 'paused';
+  const isResumable = ['pending', 'paused', 'budget_exhausted', 'failed'].includes(run.status);
+  const isActive = run.status === 'running' || isResumable;
   const totalCells = run.totalCells ?? 0;
   const done = run.done ?? 0;
   const usage = run.usage || {};
@@ -204,6 +205,10 @@ function calibrationRunRow(run) {
     ? `<button type="button" class="btn btn-danger btn-sm" data-action="stop" data-run="${escapeHtml(run.id)}"
          aria-label="Kalibráció leállítása: ${escapeHtml(run.name)}">Leállítás</button>`
     : '';
+  const resumeButton = isResumable
+    ? `<button type="button" class="btn btn-secondary btn-sm" data-action="resume" data-run="${escapeHtml(run.id)}"
+         aria-label="Kalibráció folytatása: ${escapeHtml(run.name)}">Folytatás</button>`
+    : '';
 
   return `
     <div class="list-item list-item-clickable" data-cal-run="${escapeHtml(run.id)}"
@@ -213,7 +218,7 @@ function calibrationRunRow(run) {
         <div class="list-item-meta">${escapeHtml(formatDateTime(run.created_at))}</div>
         ${progress}
       </div>
-      <div class="list-item-actions">${stopButton}${statusBadge(run.status)}</div>
+      <div class="list-item-actions">${resumeButton}${stopButton}${statusBadge(run.status)}</div>
     </div>
   `;
 }
@@ -240,7 +245,9 @@ function renderCalibrationWorkflow(entry, context) {
   // risk. Scoped to THIS model's own runs only — a different model's launch
   // control must stay enabled, since calibrationRunsFor (model-view.js)
   // already filters calRuns down to one model before this ever sees them.
-  const runningCalibration = calRuns.find((r) => r.status === 'running');
+  const activeCalibration = calRuns.find((r) =>
+    ['pending', 'running', 'paused', 'budget_exhausted', 'failed'].includes(r.status)
+  );
   const heading = entry.status === 'missing' ? 'Kalibráció lépésről lépésre' : 'Újrakalibrálás lépésről lépésre';
 
   const step1 =
@@ -251,8 +258,8 @@ function renderCalibrationWorkflow(entry, context) {
       : `<p class="detail-note">A próba-kérdőív közönséges kérdőív: te választod meg, melyik mérje a modell
            perszóna nélküli válaszait.</p>`;
 
-  const runningNotice = runningCalibration
-    ? `<p class="detail-note detail-note-warning">Már fut kalibráció ehhez a modellhez — előbb fejeződjön be, vagy állítsd le lent, mielőtt újat indítanál.</p>`
+  const runningNotice = activeCalibration
+    ? `<p class="detail-note detail-note-warning">Már van aktív kalibráció ehhez a modellhez — előbb folytasd vagy állítsd le lent, mielőtt újat indítanál.</p>`
     : '';
 
   const launchForm =
@@ -261,7 +268,7 @@ function renderCalibrationWorkflow(entry, context) {
       : `${runningNotice}<form class="model-card-calibrate-form form-grid" data-model="${escapeHtml(entry.model)}">
           <div class="form-group">
             <label>Próba-kérdőív
-              <select class="model-card-probe-select" required ${runningCalibration ? 'disabled' : ''}>
+              <select class="model-card-probe-select" required ${activeCalibration ? 'disabled' : ''}>
                 <option value="">-- Válassz próba-kérdőívet --</option>
                 ${probes.map((q) => `<option value="${escapeHtml(q.id)}">${escapeHtml(q.name)}</option>`).join('')}
               </select>
@@ -269,13 +276,13 @@ function renderCalibrationWorkflow(entry, context) {
           </div>
           <div class="form-group">
             <label title="Szolgáltató rögzítése nélkül a profil nem egyetlen kiszolgálót ír le, és a szolgáltató-váltás azonnal elavulttá teszi.">Szolgáltató rögzítése (ajánlott)
-              <select class="model-card-provider-select" ${runningCalibration ? 'disabled' : ''}>
+              <select class="model-card-provider-select" ${activeCalibration ? 'disabled' : ''}>
                 ${renderProviderSelectOptions((context && context.providerOptions) || [], '')}
               </select>
             </label>
             <p class="form-note">${escapeHtml(PROVIDER_FIELD_NOTE)}</p>
           </div>
-          <button type="submit" class="btn btn-primary" ${runningCalibration ? 'disabled' : ''}>Kalibrációs futtatás indítása</button>
+          <button type="submit" class="btn btn-primary" ${activeCalibration ? 'disabled' : ''}>Kalibrációs futtatás indítása</button>
         </form>`;
 
   const runsList =

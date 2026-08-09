@@ -55,6 +55,62 @@ export function isCalibrationRun(config: RunConfig): boolean {
   return config.calibration === true
 }
 
+/** Minimal runtime shape needed before a stored config can drive execution. */
+export function parseStoredRunConfig(value: string): RunConfig | null {
+  try {
+    const parsed = JSON.parse(value) as unknown
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null
+    const candidate = parsed as Partial<RunConfig>
+    if (
+      typeof candidate.model !== 'string' || candidate.model.length === 0 ||
+      typeof candidate.temperature !== 'number' || !Number.isFinite(candidate.temperature) ||
+      !Array.isArray(candidate.seeds) || !candidate.seeds.every(Number.isInteger)
+    ) return null
+    return candidate as RunConfig
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Marker-era rows use `calibration:true`. Before that marker existed, the
+ * launcher wrote one exact, model-derived name; accept only that exact legacy
+ * provenance, never a merely similar researcher-authored name.
+ */
+export function isCalibrationRunRecord(config: RunConfig, name: string): boolean {
+  return isCalibrationRun(config) ||
+    (config.calibration === undefined && name === `Kalibráció — ${config.model}`)
+}
+
+/**
+ * A calibration that can still consume work or be resumed blocks launching a
+ * second calibration for the same model. Completed/stopped runs are history,
+ * not locks. Kept on the backend because two tabs can bypass any disabled UI.
+ */
+export const ACTIVE_CALIBRATION_STATUSES = ['pending', 'running', 'paused', 'budget_exhausted', 'failed'] as const
+
+export function activeCalibrationForModel(
+  db: Db,
+  model: string,
+  excludeRunIds: readonly string[] = []
+): { id: string; status: string } | null {
+  const excluded = new Set(excludeRunIds)
+  const rows = db
+    .prepare(`SELECT id, name, status, config_json FROM runs WHERE status IN (${ACTIVE_CALIBRATION_STATUSES.map(() => '?').join(',')})`)
+    .all(...ACTIVE_CALIBRATION_STATUSES) as unknown as { id: string; name: string; status: string; config_json: string }[]
+  for (const row of rows) {
+    if (excluded.has(row.id)) continue
+    const config = parseStoredRunConfig(row.config_json)
+    // Exact legacy launcher provenance is enough to fail closed even when its
+    // old config is corrupt: silently launching would risk a second paid run.
+    if (!config && row.name === `Kalibráció — ${model}`) return { id: row.id, status: row.status }
+    if (config && config.model === model && isCalibrationRunRecord(config, row.name)) {
+      return { id: row.id, status: row.status }
+    }
+  }
+  return null
+}
+
 function toStoredProfile(row: ProfileRow): StoredProfile {
   return {
     id: row.id,
@@ -507,6 +563,14 @@ export function registerModelProfileRoutes(app: FastifyInstance, deps: ProfileDe
       .prepare('SELECT id, name, language FROM questionnaires WHERE id = ?')
       .get(body.data.questionnaireId) as { id: string; name: string; language: string } | undefined
     if (!questionnaire) return reply.code(400).send({ success: false, error: 'A kérdőív nem található' })
+
+    const blocking = activeCalibrationForModel(db, model)
+    if (blocking) {
+      return reply.code(409).send({
+        success: false,
+        error: `Már van aktív kalibráció ehhez a modellhez (${blocking.status}); előbb folytasd vagy állítsd le.`
+      })
+    }
 
     const config: RunConfig = {
       model,

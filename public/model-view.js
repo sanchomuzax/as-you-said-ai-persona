@@ -37,12 +37,19 @@ async function refreshModelList() {
   window.renderContextSidebarCalibration?.();
 }
 
-/** The run's config, or {} — a malformed row must not take the whole list down. */
+/** The minimally valid stored run config, or null. Mirrors the backend guard. */
 function parsedRunConfig(run) {
   try {
-    return JSON.parse(run.config_json || '{}') || {};
+    const config = JSON.parse(run.config_json || 'null');
+    if (
+      !config || typeof config !== 'object' || Array.isArray(config) ||
+      typeof config.model !== 'string' || !config.model ||
+      typeof config.temperature !== 'number' || !Number.isFinite(config.temperature) ||
+      !Array.isArray(config.seeds) || !config.seeds.every(Number.isInteger)
+    ) return null;
+    return config;
   } catch {
-    return {};
+    return null;
   }
 }
 
@@ -61,8 +68,14 @@ function calibrationRunsFor(modelId) {
   return (state.runs || [])
     .filter((run) => {
       const config = parsedRunConfig(run);
+      const exactLegacyName = run.name === `Kalibráció — ${modelId}`;
+      // An exact old launcher name fails closed when its config is corrupt,
+      // matching the backend's double-spend guard. A valid explicit false is
+      // ordinary even if a researcher chose that exact human-facing name.
+      if (!config) return exactLegacyName;
       if (config.model !== modelId) return false;
-      return config.calibration === true || run.name === `Kalibráció — ${modelId}`;
+      return config.calibration === true ||
+        (config.calibration === undefined && exactLegacyName);
     })
     .map((run) => {
       const fallback = runProgressFromRow(run);
@@ -219,11 +232,13 @@ async function openModelDetail(modelId, updateHash = true) {
  * pull the keyboard out of the probe select or the provider select mid-choice)
  * and when nothing changed (same diff-guard as the sidebar's running section).
  */
-function rerenderModelDetailBody() {
+function rerenderModelDetailBody(force = false) {
   const view = document.getElementById('modelDetailView');
   const body = document.getElementById('modelDetailBody');
   if (!view || !body || view.style.display === 'none' || !state.currentModelId) return;
-  if (body.contains(document.activeElement) && document.activeElement !== body) return;
+  const activeElement = document.activeElement;
+  const runActionHasFocus = activeElement?.matches?.('[data-action="stop"], [data-action="resume"]');
+  if (!force && body.contains(activeElement) && activeElement !== body && !runActionHasFocus) return;
   const entry =
     (state.modelProfiles || []).find((m) => m.model === state.currentModelId) ||
     { model: state.currentModelId, label: state.currentModelId };
@@ -250,10 +265,19 @@ function closeModelDetail(updateHash = true) {
  * the Futtatások tab on their own.
  */
 async function launchCalibration(model, questionnaireId, provider) {
-  const created = await apiCall('POST', `/api/models/${encodeURIComponent(model)}/calibrate`, {
-    questionnaireId,
-    provider: provider || undefined
-  });
+  let created;
+  try {
+    created = await apiCall('POST', `/api/models/${encodeURIComponent(model)}/calibrate`, {
+      questionnaireId,
+      provider: provider || undefined
+    });
+  } catch (err) {
+    if (err.status === 409) {
+      await refreshRunsList();
+      if (state.currentModelId === model) rerenderModelDetailBody(true);
+    }
+    throw err;
+  }
   await refreshRunsList();
   await openModelDetail(model);
   return created;

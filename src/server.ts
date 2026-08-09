@@ -15,7 +15,14 @@ import { buildEvaluationPrompt } from './lib/evaluate.js'
 import { toCsv } from './lib/csv.js'
 import { registerInterviewRoutes } from './interviews.js'
 import { registerCatalogRoutes } from './catalog.js'
-import { registerModelProfileRoutes, findProfileForRun, isCalibrationRun } from './model-profiles.js'
+import {
+  registerModelProfileRoutes,
+  findProfileForRun,
+  isCalibrationRun,
+  isCalibrationRunRecord,
+  parseStoredRunConfig,
+  activeCalibrationForModel
+} from './model-profiles.js'
 import { buildProviderOptions } from './lib/provider-options.js'
 import {
   checkCredentials,
@@ -200,7 +207,21 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
     void runEvaluation(runId).catch(() => undefined)
   })
 
+  const interruptedIds = interrupted.map(({ id }) => id)
+  const autoResumedCalibrationModels = new Set<string>()
   for (const { id } of interrupted) {
+    const row = db.prepare('SELECT name, config_json FROM runs WHERE id = ?').get(id) as
+      | { name: string; config_json: string }
+      | undefined
+    const runConfig = row ? parseStoredRunConfig(row.config_json) : null
+    // Corrupt interrupted configs remain paused: auto-resuming an unidentified
+    // paid run is less safe than leaving it visibly resumable for diagnosis.
+    if (!runConfig || !row) continue
+    if (isCalibrationRunRecord(runConfig, row.name)) {
+      const blockedByPreExisting = activeCalibrationForModel(db, runConfig.model, interruptedIds)
+      if (blockedByPreExisting || autoResumedCalibrationModels.has(runConfig.model)) continue
+      autoResumedCalibrationModels.add(runConfig.model)
+    }
     void runner.execute(id).catch(() => undefined)
   }
 
@@ -561,9 +582,24 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
 
   app.post('/api/runs/:id/resume', async (req, reply) => {
     const { id } = req.params as { id: string }
-    const run = db.prepare('SELECT status FROM runs WHERE id = ?').get(id) as { status: string } | undefined
+    const run = db.prepare('SELECT name, status, config_json FROM runs WHERE id = ?').get(id) as
+      | { name: string; status: string; config_json: string }
+      | undefined
     if (!run) return reply.code(404).send({ success: false, error: 'A futtatás nem található' })
     if (!isResumable(run.status)) return reply.code(400).send({ success: false, error: `Cannot resume a ${run.status} run` })
+    const runConfig = parseStoredRunConfig(run.config_json)
+    if (!runConfig) {
+      return reply.code(400).send({ success: false, error: 'A futtatás konfigurációja hibás' })
+    }
+    if (isCalibrationRunRecord(runConfig, run.name)) {
+      const blocking = activeCalibrationForModel(db, runConfig.model, [id])
+      if (blocking) {
+        return reply.code(409).send({
+          success: false,
+          error: `Már van aktív kalibráció ehhez a modellhez (${blocking.status}); ezt most nem lehet folytatni.`
+        })
+      }
+    }
     void runner.execute(id).catch(() => undefined)
     return { success: true }
   })
