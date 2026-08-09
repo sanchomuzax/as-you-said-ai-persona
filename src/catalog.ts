@@ -155,7 +155,11 @@ export function registerCatalogRoutes(app: FastifyInstance, deps: CatalogDeps): 
       .min(1)
   })
 
-  const LATEST_QUESTIONNAIRES = `SELECT q.* FROM questionnaires q
+  const LATEST_QUESTIONNAIRES = `SELECT q.*,
+       CASE WHEN q.is_calibration_probe = 1 OR EXISTS (
+         SELECT 1 FROM projects p WHERE p.id = q.project_id AND p.name = 'Modell-baseline próba'
+       ) THEN 1 ELSE 0 END AS effective_calibration_probe
+     FROM questionnaires q
      WHERE q.version = (SELECT MAX(q2.version) FROM questionnaires q2 WHERE q2.lineage_id = q.lineage_id)`
 
   app.get('/api/questionnaires', async (req) => {
@@ -167,6 +171,8 @@ export function registerCatalogRoutes(app: FastifyInstance, deps: CatalogDeps): 
       name: string
       project_id: string | null
       language: string
+      version: number
+      effective_calibration_probe: number
     }[]
     // Scoped to the questionnaires actually being returned: this used to scan
     // the whole questions table on every call and filter in memory.
@@ -191,6 +197,8 @@ export function registerCatalogRoutes(app: FastifyInstance, deps: CatalogDeps): 
         projectId: q.project_id,
         name: q.name,
         language: q.language,
+        version: q.version,
+        isCalibrationProbe: q.effective_calibration_probe === 1,
         questions: questions
           .filter((x) => x.questionnaire_id === q.id)
           .map((x) => ({
@@ -366,8 +374,9 @@ export function registerCatalogRoutes(app: FastifyInstance, deps: CatalogDeps): 
     const language = body.data.language ?? (source['language'] as string | undefined) ?? 'hu'
     db.exec('BEGIN')
     try {
-      db.prepare('INSERT INTO questionnaires (id, project_id, lineage_id, name, version, language) VALUES (?,?,?,?,?,?)').run(
-        newId, (source['project_id'] as string | null) ?? null, lineageId, body.data.name, nextVersion, language
+      db.prepare('INSERT INTO questionnaires (id, project_id, lineage_id, name, version, language, is_calibration_probe) VALUES (?,?,?,?,?,?,?)').run(
+        newId, (source['project_id'] as string | null) ?? null, lineageId, body.data.name, nextVersion, language,
+        Number(source['is_calibration_probe'] ?? 0)
       )
       body.data.questions.forEach((q, ord) => {
         db.prepare(
@@ -393,10 +402,14 @@ export function registerCatalogRoutes(app: FastifyInstance, deps: CatalogDeps): 
       const project = db.prepare('SELECT id FROM projects WHERE id = ?').get(body.data.projectId)
       if (!project) return reply.code(400).send({ success: false, error: 'Ismeretlen projekt' })
     }
+    const project = body.data.projectId
+      ? db.prepare('SELECT name FROM projects WHERE id = ?').get(body.data.projectId) as { name: string } | undefined
+      : undefined
+    const isCalibrationProbe = project?.name === 'Modell-baseline próba' ? 1 : 0
     db.exec('BEGIN')
     try {
-      db.prepare('INSERT INTO questionnaires (id, project_id, lineage_id, name, language) VALUES (?,?,?,?,?)').run(
-        id, body.data.projectId ?? null, id, body.data.name, body.data.language
+      db.prepare('INSERT INTO questionnaires (id, project_id, lineage_id, name, language, is_calibration_probe) VALUES (?,?,?,?,?,?)').run(
+        id, body.data.projectId ?? null, id, body.data.name, body.data.language, isCalibrationProbe
       )
       body.data.questions.forEach((q, ord) => {
         db.prepare(

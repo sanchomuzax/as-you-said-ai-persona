@@ -216,6 +216,7 @@ function calibrationRunRow(run) {
       <div>
         <div class="list-item-title">${escapeHtml(run.name)}</div>
         <div class="list-item-meta">${escapeHtml(formatDateTime(run.created_at))}</div>
+        ${run.probeName ? `<div class="list-item-meta">Próba: ${escapeHtml(run.probeName)}${run.probeVersion ? ` — v${escapeHtml(run.probeVersion)}` : ''}</div>` : ''}
         ${progress}
       </div>
       <div class="list-item-actions">${resumeButton}${stopButton}${statusBadge(run.status)}</div>
@@ -255,8 +256,11 @@ function renderCalibrationWorkflow(entry, context) {
       ? `<p class="detail-note">Még nincs kérdőív, amit próbaként használhatnál. Előbb hozz létre egyet a
            Kérdőívek fülön (a demó-seed is tartalmaz egyet), aztán gyere vissza ide.</p>
          <button type="button" class="btn btn-secondary" data-action="goto-questionnaires">Ugrás a Kérdőívek fülre</button>`
-      : `<p class="detail-note">A próba-kérdőív közönséges kérdőív: te választod meg, melyik mérje a modell
-           perszóna nélküli válaszait.</p>`;
+      : `<p class="detail-note">A választó csak kalibrációs célra kijelölt, verziózott próba-kérdőíveket mutat.</p>`;
+
+  const ordinaryProbeWarning = probes.some((q) => q.isCalibrationProbe === false)
+    ? '<p class="methodology-warning">Ez a kérdőív nem kalibrációs célra tervezett — az eredmény korlátozottan értelmezhető.</p>'
+    : '';
 
   const runningNotice = activeCalibration
     ? `<p class="detail-note detail-note-warning">Már van aktív kalibráció ehhez a modellhez — előbb folytasd vagy állítsd le lent, mielőtt újat indítanál.</p>`
@@ -265,12 +269,12 @@ function renderCalibrationWorkflow(entry, context) {
   const launchForm =
     probes.length === 0
       ? ''
-      : `${runningNotice}<form class="model-card-calibrate-form form-grid" data-model="${escapeHtml(entry.model)}">
+      : `${ordinaryProbeWarning}${runningNotice}<form class="model-card-calibrate-form form-grid" data-model="${escapeHtml(entry.model)}">
           <div class="form-group">
             <label>Próba-kérdőív
               <select class="model-card-probe-select" required ${activeCalibration ? 'disabled' : ''}>
                 <option value="">-- Válassz próba-kérdőívet --</option>
-                ${probes.map((q) => `<option value="${escapeHtml(q.id)}">${escapeHtml(q.name)}</option>`).join('')}
+                ${probes.map((q) => `<option value="${escapeHtml(q.id)}">${escapeHtml(q.name)} — v${escapeHtml(q.version)}</option>`).join('')}
               </select>
             </label>
           </div>

@@ -489,6 +489,35 @@ describe('POST /api/models/:model/calibrate', () => {
     expect(rows.every((r) => r.persona_id === null && r.condition === 'baseline')).toBe(true)
   })
 
+  it('records limited interpretability when the API explicitly launches an ordinary questionnaire', async () => {
+    seedCalibrationRun('ordinary-history')
+    db.prepare('INSERT INTO projects (id, name) VALUES (?,?)').run('research-project', 'Üzleti kutatás')
+    db.prepare('UPDATE questionnaires SET project_id = ? WHERE id = ?').run('research-project', 'probe')
+
+    const response = await app.inject({
+      method: 'POST', url: '/api/models/m1/calibrate', cookies: cookie,
+      payload: { questionnaireId: 'probe', seeds: [0] }
+    })
+    expect(response.statusCode).toBe(200)
+    const runId = response.json().data.runId as string
+    const row = db.prepare('SELECT config_json FROM runs WHERE id = ?').get(runId) as { config_json: string }
+
+    expect(row.config_json).toMatch(/limited|korlátozott/i)
+  })
+
+  it('carries an ordinary probe limitation into the stored profile metrics audit payload', async () => {
+    seedCalibrationRun('ordinary-profile-run')
+    db.prepare('INSERT INTO projects (id, name) VALUES (?,?)').run('research-project', 'Üzleti kutatás')
+    db.prepare('UPDATE questionnaires SET project_id = ? WHERE id = ?').run('research-project', 'probe')
+
+    const profileId = await createProfile(['ordinary-profile-run'])
+    const profile = (
+      await app.inject({ method: 'GET', url: `/api/model-profiles/${profileId}`, cookies: cookie })
+    ).json().data as { metrics: unknown }
+
+    expect(JSON.stringify(profile.metrics)).toMatch(/limited|korlátozott/i)
+  })
+
   it('rejects an unknown model', async () => {
     const res = await app.inject({
       method: 'POST', url: '/api/models/nope/calibrate', cookies: cookie, payload: { questionnaireId: 'probe' }

@@ -163,6 +163,18 @@ describe('GET /api/runs?project=', () => {
 })
 
 describe('GET /api/questionnaires', () => {
+  it('exposes a durable calibration-probe designation and questionnaire version', async () => {
+    db.prepare("UPDATE projects SET name = 'Modell-baseline próba' WHERE id = 'p2'").run()
+    const data = (await get('/api/questionnaires')).json().data as {
+      id: string
+      version?: number
+      isCalibrationProbe?: boolean
+    }[]
+
+    expect(data.find((q) => q.id === 'qn2')).toMatchObject({ version: 1, isCalibrationProbe: true })
+    expect(data.find((q) => q.id === 'qn1')).toMatchObject({ version: 1, isCalibrationProbe: false })
+  })
+
   it('carries the questions of each returned questionnaire, and no others', async () => {
     const data = (await get('/api/questionnaires?project=p1')).json().data as {
       id: string

@@ -29,6 +29,9 @@ function migrate(db: DatabaseSync): void {
   if (!questionnaireCols.some((c) => c.name === 'language')) {
     db.exec("ALTER TABLE questionnaires ADD COLUMN language TEXT NOT NULL DEFAULT 'hu'")
   }
+  if (!questionnaireCols.some((c) => c.name === 'is_calibration_probe')) {
+    db.exec('ALTER TABLE questionnaires ADD COLUMN is_calibration_probe INTEGER NOT NULL DEFAULT 0')
+  }
   // Existing rows are each their own lineage root: they were the only version.
   if (!personaCols.some((c) => c.name === 'lineage_id')) {
     db.exec('ALTER TABLE personas ADD COLUMN lineage_id TEXT')
@@ -47,6 +50,8 @@ function migrate(db: DatabaseSync): void {
   // is executing, and an unconditional UPDATE would take a write lock for nothing.
   db.exec('UPDATE personas SET lineage_id = id WHERE lineage_id IS NULL')
   db.exec('UPDATE questionnaires SET lineage_id = id WHERE lineage_id IS NULL')
+  db.exec(`UPDATE questionnaires SET is_calibration_probe = 1
+    WHERE project_id IN (SELECT id FROM projects WHERE name = 'Modell-baseline próba')`)
   // One version number per lineage, enforced by the schema rather than by every
   // query site: a duplicate version would make two rows "latest" at once.
   db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_personas_lineage_version ON personas(lineage_id, version)')
@@ -320,6 +325,8 @@ CREATE TABLE IF NOT EXISTS questionnaires (
   -- existed, not a guess. Drives the elicitation TEMPLATE's default language
   -- for runs against this questionnaire (src/server.ts, POST /api/runs).
   language TEXT NOT NULL DEFAULT 'hu',
+  -- Durable designation used by calibration selectors and profile audits.
+  is_calibration_probe INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 

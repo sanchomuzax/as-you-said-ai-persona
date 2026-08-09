@@ -481,9 +481,14 @@ export function registerModelProfileRoutes(app: FastifyInstance, deps: ProfileDe
 
     const questionnaires = db
       .prepare(
-        `SELECT DISTINCT questionnaire_id FROM runs WHERE id IN (${placeholders})`
+        `SELECT DISTINCT r.questionnaire_id,
+           CASE WHEN q.is_calibration_probe = 1 OR EXISTS (
+             SELECT 1 FROM projects p WHERE p.id = q.project_id AND p.name = 'Modell-baseline próba'
+           ) THEN 1 ELSE 0 END AS is_calibration_probe
+         FROM runs r JOIN questionnaires q ON q.id = r.questionnaire_id
+         WHERE r.id IN (${placeholders})`
       )
-      .all(...body.data.runIds) as unknown as { questionnaire_id: string }[]
+      .all(...body.data.runIds) as unknown as { questionnaire_id: string; is_calibration_probe: number }[]
     if (questionnaires.length !== 1) {
       return reply
         .code(400)
@@ -509,7 +514,14 @@ export function registerModelProfileRoutes(app: FastifyInstance, deps: ProfileDe
     }
     const templateLanguage = [...templateLanguages][0] ?? LEGACY_TEMPLATE_LANGUAGE
 
-    const metrics = computeProfileMetrics(db, body.data.runIds)
+    const computedMetrics = computeProfileMetrics(db, body.data.runIds)
+    const limitedByRun = runConfigs.some((r) =>
+      parseStoredRunConfig(r.config_json)?.calibrationProbeInterpretability === 'limited'
+    )
+    const metrics: ProfileMetrics = {
+      ...computedMetrics,
+      probeInterpretability: questionnaires[0]!.is_calibration_probe === 1 && !limitedByRun ? 'standard' : 'limited'
+    }
     // A profile with nothing usable behind it would still be dated, stored and
     // shown as "érvényes" — a measurement-shaped record of a failed measurement.
     const usable = metrics.perQuestion.reduce((sum, q) => sum + q.aggregatedResponseCount, 0)
@@ -560,8 +572,14 @@ export function registerModelProfileRoutes(app: FastifyInstance, deps: ProfileDe
     const body = calibrateSchema.safeParse(req.body)
     if (!body.success) return reply.code(400).send({ success: false, error: body.error.issues[0]?.message })
     const questionnaire = db
-      .prepare('SELECT id, name, language FROM questionnaires WHERE id = ?')
-      .get(body.data.questionnaireId) as { id: string; name: string; language: string } | undefined
+      .prepare(`SELECT q.id, q.name, q.language,
+         CASE WHEN q.is_calibration_probe = 1 OR EXISTS (
+           SELECT 1 FROM projects p WHERE p.id = q.project_id AND p.name = 'Modell-baseline próba'
+         ) THEN 1 ELSE 0 END AS is_calibration_probe
+       FROM questionnaires q WHERE q.id = ?`)
+      .get(body.data.questionnaireId) as
+        | { id: string; name: string; language: string; is_calibration_probe: number }
+        | undefined
     if (!questionnaire) return reply.code(400).send({ success: false, error: 'A kérdőív nem található' })
 
     const blocking = activeCalibrationForModel(db, model)
@@ -581,6 +599,7 @@ export function registerModelProfileRoutes(app: FastifyInstance, deps: ProfileDe
       // Marks the run as a calibration launch so the model card can list this
       // model's calibration runs without parsing the human-facing run name.
       calibration: true,
+      calibrationProbeInterpretability: questionnaire.is_calibration_probe === 1 ? 'standard' : 'limited',
       templateLanguage: body.data.templateLanguage ?? (questionnaire.language === 'en' ? 'en' : 'hu'),
       ...(body.data.provider ? { provider: body.data.provider } : {})
     }

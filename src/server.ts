@@ -503,6 +503,8 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
       .prepare(
         `WITH scoped_runs AS (SELECT r.* FROM runs r ${scope})
          SELECT sr.*,
+           (SELECT name FROM questionnaires WHERE id = sr.questionnaire_id) AS questionnaire_name,
+           (SELECT version FROM questionnaires WHERE id = sr.questionnaire_id) AS questionnaire_version,
            (SELECT COUNT(*) FROM responses WHERE run_id = sr.id) AS response_count,
            (SELECT COUNT(*) FROM responses WHERE run_id = sr.id AND is_valid = 0) AS invalid_count,
            (SELECT COALESCE(SUM(abstained), 0) FROM responses WHERE run_id = sr.id) AS abstained_count,
