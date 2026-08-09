@@ -76,8 +76,30 @@ through the whole interface**:
   read together.
 
 This is the right direction: it connects the finding to the methodology instead of
-leaving abstention as a footnote. **The visual system is approved; the placeholder
-copy inside it is not — see §7.**
+leaving abstention as a footnote. **The visual system is approved.**
+
+### Topic-coverage badge (2026-08-09, approved)
+
+Screenshot: [`docs/mockups/topic-coverage-badge.png`](mockups/topic-coverage-badge.png)
+
+The green "grounded" shield is replaced by a badge that states coverage **for the
+question being asked**, because grounding is per topic, not per persona. Three
+mutually exclusive states:
+
+| State | Visual | Text |
+|---|---|---|
+| Grounded for this topic | green shield | "Megalapozott ehhez a témához" + source |
+| Not grounded | **amber, broken shield** | "Nem megalapozott ehhez a témához" |
+| Undocumented | neutral grey | "A lefedettség nincs dokumentálva" |
+
+Below it, a **Coverage** section lists which topics the persona *is* and *is not*
+grounded for — this is what makes the badge useful rather than merely honest.
+
+The abstention reason is generated from recorded run data only (which persona
+attributes were available, the measured abstention and invalid counts for this
+model and question, and the calibration profile's validity). The earlier
+placeholder figure and the "forced abstention" wording are gone. §7.5 and §7.6
+are resolved by this revision.
 
 ## 7. Where the mockup contradicts our methodology (must not be copied)
 
