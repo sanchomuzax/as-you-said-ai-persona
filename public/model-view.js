@@ -78,6 +78,7 @@ function calibrationRunsFor(modelId) {
         (config.calibration === undefined && exactLegacyName);
     })
     .map((run) => {
+      const config = parsedRunConfig(run);
       const fallback = runProgressFromRow(run);
       const live = state.runProgress[run.id] || {};
       return {
@@ -89,7 +90,8 @@ function calibrationRunsFor(modelId) {
         done: live.done ?? fallback.done,
         usage: live.usage || fallback.usage,
         probeName: run.questionnaire_name || null,
-        probeVersion: run.questionnaire_version ?? null
+        probeVersion: run.questionnaire_version ?? null,
+        probeInterpretability: config?.calibrationProbeInterpretability || null
       };
     })
     .sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)));

@@ -352,7 +352,8 @@ export function registerModelProfileRoutes(app: FastifyInstance, deps: ProfileDe
       abstainRate: metrics?.abstainRate ?? null,
       questionCount: metrics?.perQuestion?.length ?? 0,
       cellCount: metrics?.provenance?.cellCount ?? 0,
-      costUsd: metrics?.provenance?.costUsd ?? null
+      costUsd: metrics?.provenance?.costUsd ?? null,
+      probeInterpretability: metrics?.probeInterpretability ?? null
     }
   }
 
@@ -481,10 +482,7 @@ export function registerModelProfileRoutes(app: FastifyInstance, deps: ProfileDe
 
     const questionnaires = db
       .prepare(
-        `SELECT DISTINCT r.questionnaire_id,
-           CASE WHEN q.is_calibration_probe = 1 OR EXISTS (
-             SELECT 1 FROM projects p WHERE p.id = q.project_id AND p.name = 'Modell-baseline próba'
-           ) THEN 1 ELSE 0 END AS is_calibration_probe
+        `SELECT DISTINCT r.questionnaire_id, q.is_calibration_probe
          FROM runs r JOIN questionnaires q ON q.id = r.questionnaire_id
          WHERE r.id IN (${placeholders})`
       )
@@ -572,10 +570,7 @@ export function registerModelProfileRoutes(app: FastifyInstance, deps: ProfileDe
     const body = calibrateSchema.safeParse(req.body)
     if (!body.success) return reply.code(400).send({ success: false, error: body.error.issues[0]?.message })
     const questionnaire = db
-      .prepare(`SELECT q.id, q.name, q.language,
-         CASE WHEN q.is_calibration_probe = 1 OR EXISTS (
-           SELECT 1 FROM projects p WHERE p.id = q.project_id AND p.name = 'Modell-baseline próba'
-         ) THEN 1 ELSE 0 END AS is_calibration_probe
+      .prepare(`SELECT q.id, q.name, q.language, q.is_calibration_probe
        FROM questionnaires q WHERE q.id = ?`)
       .get(body.data.questionnaireId) as
         | { id: string; name: string; language: string; is_calibration_probe: number }

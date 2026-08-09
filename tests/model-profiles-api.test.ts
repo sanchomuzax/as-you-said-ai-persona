@@ -516,6 +516,11 @@ describe('POST /api/models/:model/calibrate', () => {
     ).json().data as { metrics: unknown }
 
     expect(JSON.stringify(profile.metrics)).toMatch(/limited|korlátozott/i)
+    const list = (
+      await app.inject({ method: 'GET', url: '/api/model-profiles', cookies: cookie })
+    ).json().data as { model: string; summary: { probeInterpretability?: string } | null }[]
+    expect(list.find((entry) => entry.model === 'm1')?.summary)
+      .toMatchObject({ probeInterpretability: 'limited' })
   })
 
   it('rejects an unknown model', async () => {

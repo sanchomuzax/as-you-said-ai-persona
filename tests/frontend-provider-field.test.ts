@@ -162,7 +162,9 @@ describe('on-card calibration launch provider select', () => {
         'GET /api/model-profiles': [
           { model: 'm1', label: 'Modell 1', status: 'missing', reasons: [], summary: null, profile: null }
         ],
-        'GET /api/questionnaires': [{ id: 'probe', name: 'Próba-kérdőív', questions: [] }]
+        'GET /api/questionnaires': [{
+          id: 'probe', name: 'Próba-kérdőív', version: 1, isCalibrationProbe: true, questions: []
+        }]
       })
     })
     await dom.boot()

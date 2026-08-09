@@ -93,13 +93,18 @@ process.stdout.write(`Personas: ${created} created, ${seed.personas.length - cre
 
 let qCreated = 0
 for (const questionnaire of seed.questionnaires) {
-  const isCalibrationProbe = questionnaire.isCalibrationProbe ?? seed.project.name === 'Modell-baseline próba'
+  const explicitCalibrationProbe = questionnaire.isCalibrationProbe
+  const isCalibrationProbe = explicitCalibrationProbe ?? seed.project.name === 'Modell-baseline próba'
   const exists = db
     .prepare('SELECT id FROM questionnaires WHERE project_id = ? AND name = ?')
     .get(projectId, questionnaire.name) as { id: string } | undefined
   if (exists) {
-    if (isCalibrationProbe) {
-      db.prepare('UPDATE questionnaires SET is_calibration_probe = 1 WHERE id = ?').run(exists.id)
+    // A legacy ordinary seed with no flag must not erase a durable designation
+    // made later through the API. The legacy baseline project remains an
+    // opt-in bridge; an explicit boolean is authoritative in either direction.
+    if (explicitCalibrationProbe !== undefined || isCalibrationProbe) {
+      db.prepare('UPDATE questionnaires SET is_calibration_probe = ? WHERE id = ?')
+        .run(isCalibrationProbe ? 1 : 0, exists.id)
     }
     continue
   }

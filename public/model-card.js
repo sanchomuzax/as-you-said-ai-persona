@@ -129,12 +129,16 @@ function modelListItem(entry) {
            aria-label="${entry.status === 'stale' ? 'Újrakalibrálás' : 'Kalibrálás'}: ${escapeHtml(entry.label)}">${
            entry.status === 'stale' ? 'Újrakalibrálás' : 'Kalibrálás'
          }</button>`;
+  const limitedWarning = summary?.probeInterpretability === 'limited'
+    ? '<p class="methodology-warning">Nem kalibrációs célra tervezett kérdőív — a profil korlátozottan értelmezhető.</p>'
+    : '';
   return `
     <div class="list-item list-item-clickable" data-model="${escapeHtml(entry.model)}"
          role="button" tabindex="0" aria-label="Modell kalibrációjának megnyitása: ${escapeHtml(entry.label)}">
       <div>
         <div class="list-item-title">${escapeHtml(entry.label)}</div>
         <div class="list-item-meta">${escapeHtml(meta)}</div>
+        ${limitedWarning}
       </div>
       <div class="list-item-actions">${action}${calibrationStatusChip(entry.status)}</div>
     </div>
@@ -209,6 +213,9 @@ function calibrationRunRow(run) {
     ? `<button type="button" class="btn btn-secondary btn-sm" data-action="resume" data-run="${escapeHtml(run.id)}"
          aria-label="Kalibráció folytatása: ${escapeHtml(run.name)}">Folytatás</button>`
     : '';
+  const limitedWarning = run.probeInterpretability === 'limited'
+    ? '<p class="methodology-warning">Nem kalibrációs célra tervezett kérdőív — a profil korlátozottan értelmezhető.</p>'
+    : '';
 
   return `
     <div class="list-item list-item-clickable" data-cal-run="${escapeHtml(run.id)}"
@@ -217,6 +224,7 @@ function calibrationRunRow(run) {
         <div class="list-item-title">${escapeHtml(run.name)}</div>
         <div class="list-item-meta">${escapeHtml(formatDateTime(run.created_at))}</div>
         ${run.probeName ? `<div class="list-item-meta">Próba: ${escapeHtml(run.probeName)}${run.probeVersion ? ` — v${escapeHtml(run.probeVersion)}` : ''}</div>` : ''}
+        ${limitedWarning}
         ${progress}
       </div>
       <div class="list-item-actions">${resumeButton}${stopButton}${statusBadge(run.status)}</div>
@@ -383,6 +391,9 @@ function renderModelCard(entry, profile, context) {
   const metrics = profile.metrics || {};
   const priorBias = metrics.priorBias || {};
   const provenance = metrics.provenance || {};
+  const limitedWarning = metrics.probeInterpretability === 'limited'
+    ? '<p class="methodology-warning">Nem kalibrációs célra tervezett kérdőív — a profil korlátozottan értelmezhető.</p>'
+    : '';
 
   const positionBars =
     Array.isArray(priorBias.byPosition) && priorBias.byPosition.length > 0
@@ -425,6 +436,7 @@ function renderModelCard(entry, profile, context) {
 
   return `
     ${renderStalenessReasons(profile.reasons)}
+    ${limitedWarning}
     <p class="methodology-warning">A profil viszonyítási pont, nem korrekció: a nyers válasznaplóhoz soha nem nyúlunk hozzá.
       Azt mondja meg, mit válaszol ez a modell perszóna nélkül — enélkül nem választható el a perszóna hatása a modell alapértelmezésétől.</p>
     ${detailSection(

@@ -47,6 +47,57 @@ afterEach(async () => {
 })
 
 describe('calibration probe seed compatibility (issue #27)', () => {
+  it('preserves an existing ordinary explicit true unless the seed explicitly says false', () => {
+    tempDir = mkdtempSync(path.join(tmpdir(), 'asys-calibration-probe-existing-'))
+    const dbPath = path.join(tempDir, 'seed.sqlite')
+    const ordinarySeedPath = path.join(tempDir, 'ordinary.json')
+    const baselineSeedPath = path.join(tempDir, 'baseline.json')
+    const initial = createDb(dbPath)
+    initial.prepare('INSERT INTO projects (id, name) VALUES (?,?)').run('ordinary', 'Általános kutatás')
+    initial.prepare('INSERT INTO projects (id, name) VALUES (?,?)').run('baseline', 'Modell-baseline próba')
+    initial.prepare(
+      'INSERT INTO questionnaires (id, project_id, lineage_id, name, is_calibration_probe) VALUES (?,?,?,?,?)'
+    ).run('ordinary-kept', 'ordinary', 'ordinary-kept', 'Kézzel kijelölt próba', 1)
+    initial.prepare(
+      'INSERT INTO questionnaires (id, project_id, lineage_id, name, is_calibration_probe) VALUES (?,?,?,?,?)'
+    ).run('baseline-raised', 'baseline', 'baseline-raised', 'Implicit baseline próba', 0)
+    initial.prepare(
+      'INSERT INTO questionnaires (id, project_id, lineage_id, name, is_calibration_probe) VALUES (?,?,?,?,?)'
+    ).run('baseline-optout', 'baseline', 'baseline-optout', 'Explicit ordinary kontroll', 1)
+    initial.close()
+
+    const question = { text: 'Kérdés?', options: ['Igen', 'Nem'], scaleType: 'single_choice' }
+    writeFileSync(ordinarySeedPath, JSON.stringify({
+      project: { name: 'Általános kutatás' },
+      questionnaires: [{ name: 'Kézzel kijelölt próba', questions: [question] }]
+    }))
+    writeFileSync(baselineSeedPath, JSON.stringify({
+      project: { name: 'Modell-baseline próba' },
+      questionnaires: [
+        { name: 'Implicit baseline próba', questions: [question] },
+        { name: 'Explicit ordinary kontroll', isCalibrationProbe: false, questions: [question] }
+      ]
+    }))
+
+    for (const seedPath of [ordinarySeedPath, baselineSeedPath]) {
+      execFileSync(tsxBin, [seedScript, seedPath], {
+        cwd: repoRoot,
+        env: { ...process.env, DATABASE_PATH: dbPath },
+        stdio: 'pipe'
+      })
+    }
+
+    db = createDb(dbPath)
+    const flags = db.prepare(
+      'SELECT name, is_calibration_probe FROM questionnaires ORDER BY name'
+    ).all() as unknown as { name: string; is_calibration_probe: number }[]
+    expect(Object.fromEntries(flags.map((row) => [row.name, row.is_calibration_probe]))).toEqual({
+      'Explicit ordinary kontroll': 0,
+      'Implicit baseline próba': 1,
+      'Kézzel kijelölt próba': 1
+    })
+  })
+
   it('exposes every current Modell-baseline probe as designated and an ordinary seed as ordinary', async () => {
     tempDir = mkdtempSync(path.join(tmpdir(), 'asys-calibration-probe-seed-'))
     const dbPath = path.join(tempDir, 'seed.sqlite')

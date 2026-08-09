@@ -29,8 +29,20 @@ function migrate(db: DatabaseSync): void {
   if (!questionnaireCols.some((c) => c.name === 'language')) {
     db.exec("ALTER TABLE questionnaires ADD COLUMN language TEXT NOT NULL DEFAULT 'hu'")
   }
-  if (!questionnaireCols.some((c) => c.name === 'is_calibration_probe')) {
-    db.exec('ALTER TABLE questionnaires ADD COLUMN is_calibration_probe INTEGER NOT NULL DEFAULT 0')
+  const needsCalibrationProbeBackfill = !questionnaireCols.some((c) => c.name === 'is_calibration_probe')
+  if (needsCalibrationProbeBackfill) {
+    db.exec('BEGIN')
+    try {
+      db.exec('ALTER TABLE questionnaires ADD COLUMN is_calibration_probe INTEGER NOT NULL DEFAULT 0')
+      // One-time compatibility bridge for databases created before #27. Once
+      // committed, the durable flag is authoritative, including explicit false.
+      db.exec(`UPDATE questionnaires SET is_calibration_probe = 1
+        WHERE project_id IN (SELECT id FROM projects WHERE name = 'Modell-baseline próba')`)
+      db.exec('COMMIT')
+    } catch (error) {
+      db.exec('ROLLBACK')
+      throw error
+    }
   }
   // Existing rows are each their own lineage root: they were the only version.
   if (!personaCols.some((c) => c.name === 'lineage_id')) {
@@ -50,8 +62,6 @@ function migrate(db: DatabaseSync): void {
   // is executing, and an unconditional UPDATE would take a write lock for nothing.
   db.exec('UPDATE personas SET lineage_id = id WHERE lineage_id IS NULL')
   db.exec('UPDATE questionnaires SET lineage_id = id WHERE lineage_id IS NULL')
-  db.exec(`UPDATE questionnaires SET is_calibration_probe = 1
-    WHERE project_id IN (SELECT id FROM projects WHERE name = 'Modell-baseline próba')`)
   // One version number per lineage, enforced by the schema rather than by every
   // query site: a duplicate version would make two rows "latest" at once.
   db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_personas_lineage_version ON personas(lineage_id, version)')

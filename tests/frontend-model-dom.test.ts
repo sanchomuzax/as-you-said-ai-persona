@@ -359,6 +359,42 @@ describe('Modellek tab controller', () => {
     expect(dom.document.getElementById('modelDetailBody')!.textContent).toContain('m1-2026-05')
   })
 
+  it('shows a visible methodology warning on a limited profile in the model list', async () => {
+    dom = loadAppDom({
+      routes: modelRoutes({
+        'GET /api/model-profiles': [{
+          model: 'm1', label: 'Modell 1', status: 'valid', reasons: [],
+          summary: {
+            positivityOffset: 0.267, priorBiasMaxDeviation: 0, invalidRate: 0,
+            abstainRate: 0, cellCount: 8, costUsd: 0.008, probeInterpretability: 'limited'
+          },
+          profile: { id: 'prof-1' }
+        }]
+      })
+    })
+    await dom.boot()
+
+    expect(dom.document.getElementById('modelsList')!.textContent)
+      .toMatch(/nem kalibrációs célra tervezett.*korlátozottan értelmezhető/is)
+  })
+
+  it('shows a visible methodology warning from limited profile-detail metrics', async () => {
+    dom = loadAppDom({
+      routes: modelRoutes({
+        'GET /api/model-profiles/prof-1': {
+          ...PROFILE,
+          metrics: { ...PROFILE.metrics, probeInterpretability: 'limited' }
+        }
+      })
+    })
+    await dom.boot()
+    dom.document.querySelector('[data-model="m1"]')!.click()
+    await dom.settle()
+
+    expect(dom.document.getElementById('modelDetailBody')!.textContent)
+      .toMatch(/nem kalibrációs célra tervezett.*korlátozottan értelmezhető/is)
+  })
+
   it('shows the uncalibrated explanation without fetching a profile', async () => {
     dom = loadAppDom({ routes: modelRoutes() })
     await dom.boot()
@@ -462,6 +498,28 @@ describe('Modellek tab controller', () => {
     total_cells: 4,
     stale_versions: 0
   }
+
+  it('shows a visible methodology warning from a limited GET /api/runs marker', async () => {
+    dom = loadAppDom({
+      routes: modelRoutes({
+        'GET /api/runs': [{
+          ...CAL_RUN,
+          config_json: JSON.stringify({
+            model: 'm2', temperature: 1, seeds: [0, 1], baselineArm: true, calibration: true,
+            calibrationProbeInterpretability: 'limited'
+          })
+        }]
+      })
+    })
+    await dom.boot()
+    dom.document.querySelector('[data-model="m2"]')!.click()
+    await dom.settle()
+
+    const runRow = dom.document.querySelector('[data-cal-run="cal-run-1"]')
+    expect(runRow).not.toBeNull()
+    expect(runRow!.textContent)
+      .toMatch(/nem kalibrációs célra tervezett.*korlátozottan értelmezhető/is)
+  })
 
   it('launches a calibration straight from the model card', async () => {
     let posted: unknown = null

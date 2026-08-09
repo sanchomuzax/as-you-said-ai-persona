@@ -17,8 +17,11 @@ default — never as absolute truth.
 
 - **Probe**: the versioned calibration questionnaire (30 items: implicit
   self-image, WVS values, GSS trust/attitudes, BFI-10, Pollyanna trap, cognitive
-  style). Lives as a normal questionnaire in a dedicated system project; versioned
-  like any questionnaire (lineage + version).
+  style). It carries the durable `is_calibration_probe` designation and is
+  versioned like any questionnaire (lineage + version). The calibration UI offers
+  designated probes by default. An ordinary questionnaire can still be launched
+  explicitly through the API, but both the run and the resulting profile record
+  `limited` interpretability and show a visible methodological warning.
 - **Model profile**: the stored result of running the probe against one exact
   (model_version, provider, prompt-template, probe-version, language) combination.
 - **Control arm**: persona-free cells fired inside a normal research run, one per
