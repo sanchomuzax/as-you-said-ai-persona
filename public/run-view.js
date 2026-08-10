@@ -651,11 +651,17 @@ function setViewMode(mode) {
     b.classList.toggle('active', active);
     b.setAttribute('aria-pressed', String(active));
   });
-  // Re-render from the cached fetch (no network round-trip) so flipping the
-  // toggle takes effect immediately rather than on the next subtab visit.
+  // Re-render so flipping the toggle takes effect immediately rather than on
+  // the next subtab visit. The cache is preferred (no network round-trip), but
+  // it is NOT a precondition: it can belong to a previously opened run, and
+  // silently skipping the re-render in that case left Mérnök mode looking
+  // identical to Elemző — the toggle moved, nothing else did.
   const cardsView = document.getElementById('responseCardsView');
-  if (cardsView && state.currentRunId && state.runResponsesCache && state.runResponsesCache.runId === state.currentRunId) {
+  if (!cardsView || !state.currentRunId) return;
+  if (state.runResponsesCache && state.runResponsesCache.runId === state.currentRunId) {
     renderResponseCardsInto(cardsView, state.runResponsesCache.data.responses || [], state.currentRunId);
+  } else if (state.currentSubtab === 'responses') {
+    void loadResponsesTab(state.currentRunId);
   }
 }
 
@@ -935,9 +941,23 @@ async function fillVersionChips(container) {
   });
 }
 
+/** Engineer mode fetches one request per card; a run can hold well over a
+ *  thousand, so the automatic fill is capped and the rest is stated openly. */
+const XRAY_AUTOLOAD_LIMIT = 30;
+
 async function fillXrayBlocks(container, responses, runId) {
   const byId = new Map(responses.map((r) => [r.id, r]));
-  const shells = [...container.querySelectorAll('.response-card-xray[data-xray-for]')];
+  const allShells = [...container.querySelectorAll('.response-card-xray[data-xray-for]')];
+  // A large run has over a thousand response cards; firing one X-Ray request
+  // per card froze a browser tab during review. Only a bounded first batch is
+  // fetched automatically, and the rest SAYS so instead of sitting on
+  // "Betöltés..." forever — a silent stall would read as a broken panel.
+  const shells = allShells.slice(0, XRAY_AUTOLOAD_LIMIT);
+  allShells.slice(XRAY_AUTOLOAD_LIMIT).forEach((shell) => {
+    shell.innerHTML =
+      `<p class="placeholder-inline" style="color:#94a3b8;">A gépezet-nézet az első ${XRAY_AUTOLOAD_LIMIT} válaszra töltődik be automatikusan. ` +
+      `Ez a futtatás ${allShells.length} választ tartalmaz — a többi a válasz saját proveniencia-paneljén nézhető meg (kattints a kártyára).</p>`;
+  });
   await runWithConcurrency(shells, 3, async (shell) => {
     const responseId = shell.dataset.xrayFor;
     try {
