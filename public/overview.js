@@ -210,6 +210,12 @@ function overviewQuickJump(tabName, formId) {
 document.getElementById('overviewQuickRun')?.addEventListener('click', () => overviewQuickJump('runs', 'runForm'));
 document.getElementById('overviewQuickInterview')?.addEventListener('click', () => overviewQuickJump('interviews', 'interviewForm'));
 document.getElementById('overviewQuickCalibration')?.addEventListener('click', () => overviewQuickJump('models', 'calibrationForm'));
+// Projektek/Kérdőívek (coordinator correction 2026-08-10): plain entry
+// points into the tab, not "create new" shortcuts — no formId, so
+// overviewQuickJump's `if (form && toggle)` guard just skips the auto-expand
+// step, unlike the three buttons above.
+document.getElementById('overviewQuickProjects')?.addEventListener('click', () => overviewQuickJump('projects', null));
+document.getElementById('overviewQuickQuestionnaires')?.addEventListener('click', () => overviewQuickJump('questionnaires', null));
 
 // Running/stalled cards reuse runs-list.js's own markup and actions (pause /
 // resume / stop / details) rather than duplicating them — same delegated

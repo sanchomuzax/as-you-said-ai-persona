@@ -27,6 +27,21 @@
      light surface never touches. See the two `var(--color-ink)` usages below.
   */
   --color-ink: #0f172a;
+  /* Text drawn ON the accent fill specifically (.btn-primary, .distribution-
+     segment) — defaults to --color-ink (dark ink reads fine on the bright
+     dark-theme teal accent). The light workspace surface below overrides
+     this to white, because it ALSO overrides --color-accent to a darker
+     indigo there — dark ink on indigo-600 would be dark-on-dark. Kept
+     distinct from --color-ink itself so other --color-ink users (that do NOT
+     sit on an accent fill) are unaffected by the accent-fill's own colour. */
+  --color-on-accent: var(--color-ink);
+  /* RGB triplet (no `#`) so any hardcoded `rgba(20, 184, 166, X)` tint/glow
+     can be rewritten as `rgba(var(--color-accent-rgb), X)` and follow the
+     accent colour into the light workspace surface too — see the
+     --color-accent-rgb override there and the rgba(var(...)) call sites this
+     replaces (previously literal teal rgba() values that stayed teal even
+     inside the now-indigo-accented workspace). */
+  --color-accent-rgb: 20, 184, 166;
   /* "-text" variants of the five status colors plus the accent color (docs/
      UI-DESIGN.md §0): every one of --color-success/-warning/-error/-info/
      -pending/-accent is ALSO used as a background fill or a border somewhere
@@ -140,7 +155,7 @@ body {
 .form-group textarea:focus {
   outline: none;
   border-color: var(--color-accent);
-  box-shadow: 0 0 0 2px rgba(20, 184, 166, 0.1);
+  box-shadow: 0 0 0 2px rgba(var(--color-accent-rgb), 0.1);
 }
 
 .error-message {
@@ -164,7 +179,7 @@ body {
 
 .btn-primary {
   background-color: var(--color-accent);
-  color: var(--color-ink);
+  color: var(--color-on-accent);
 }
 
 .btn-primary:hover {
@@ -323,11 +338,54 @@ body {
      phone screen ~119px for the workspace, unusable). */
   width: 256px;
   flex-shrink: 0;
-  padding: 20px 16px;
+  padding: 0 16px 20px;
   background: var(--color-nav-bg);
   color: var(--color-nav-text);
   border-right: 1px solid var(--color-border);
   overflow-y: auto;
+  /* flex column so .context-sidebar-budget-section's margin-top:auto can pin
+     the token-budget card to the bottom of the rail (mockup: logo/menu at
+     top, budget card anchored to the bottom edge), regardless of how many
+     other (possibly hidden) sections sit between them. */
+  display: flex;
+  flex-direction: column;
+}
+
+/* Logo block (docs/UI-DESIGN.md §0, coordinator correction 2026-08-10): a
+   clickable brand header at the very top of the rail, bleeding to its edges
+   (hence the negative-margin-equivalent 0 side-padding above + its own
+   horizontal padding here) with a bottom border separating it from the menu
+   below, exactly like the mockup's top block. Also a `.tab-btn` (see
+   index.html) so it reuses the app's existing tab click-wiring — this rule
+   only styles it, .sidebar-logo.active below stops it from ALSO picking up
+   the generic indigo "active pill" look, which would misread as a second
+   nav item rather than a static logo. */
+.sidebar-logo {
+  display: block;
+  width: calc(100% + 32px);
+  margin: 0 -16px 12px;
+  padding: 18px 16px;
+  border: none;
+  border-bottom: 1px solid var(--color-border);
+  background: transparent;
+  color: #ffffff;
+  font-size: 16px;
+  font-weight: 700;
+  text-align: left;
+  cursor: pointer;
+  border-radius: 0;
+}
+
+.sidebar-logo:hover,
+.sidebar-logo.active {
+  background: var(--color-nav-hover-bg);
+  color: #ffffff;
+}
+
+.context-sidebar-budget-section {
+  margin-top: auto;
+  padding-top: 16px;
+  border-top: 1px solid var(--color-border);
 }
 
 .context-sidebar-section {
@@ -371,6 +429,13 @@ body {
   display: flex;
   flex-direction: column;
   gap: 2px;
+}
+
+/* An author `display` rule outranks the UA stylesheet's `[hidden] {display:none}`,
+   so a group marked `hidden` in the markup would still render. Anything hidden
+   in the rail must actually disappear — a half-hidden menu is worse than none. */
+[hidden] {
+  display: none !important;
 }
 
 .tabs-group-secondary {
@@ -731,7 +796,7 @@ body {
   border-radius: 3px;
   min-width: 20px;
   font-size: 11px;
-  color: var(--color-ink);
+  color: var(--color-on-accent);
   font-weight: 600;
   transition: opacity 0.2s;
 }
@@ -811,6 +876,18 @@ body {
   --color-paused-text: #b45309;
   --color-stopped-text: #334155;
   --color-accent-text: #4f46e5;
+  /* docs/UI-DESIGN.md §0: "Accent (fő sáv, aktív kapcsoló, link) #4f46e5" —
+     the workspace's accent FILL/BORDER colour (buttons, focus rings,
+     distribution bar), not just its text variant above. Replaces the old
+     teal here (root/dark theme keeps teal — login screen, nav rail). Text
+     drawn on top of this fill (.btn-primary, .distribution-segment) reads
+     --color-on-accent, overridden to white right below for the same reason
+     --color-ink is deliberately NOT touched by this block (see its
+     definition at the top of the file). */
+  --color-accent: #4f46e5;
+  --color-accent-light: #818cf8;
+  --color-on-accent: #ffffff;
+  --color-accent-rgb: 79, 70, 229;
   /* Muted text (docs/UI-DESIGN.md §0's third text tier, #94a3b8) — not part
      of the shared dark-theme token set, so it is only reachable inside this
      light scope, e.g. for the Inspector's meta lines. */
@@ -993,6 +1070,19 @@ body {
   align-items: center;
   gap: var(--space-3);
   flex-wrap: wrap;
+  /* docs/UI-DESIGN.md §0: "Workspace header, fixed 64px". This is that
+     header — a full-bleed white bar with a bottom border, achieved by
+     bleeding OUT of .run-detail-header's own padded/bordered card via
+     negative margins so it reads as the page's own header strip rather
+     than a row inside the info card. The back button/controls/progress/
+     stats stay exactly where they were, in the card below — nothing was
+     removed, only the title row's OWN box model changed. */
+  height: 64px;
+  margin: calc(-1 * var(--space-5)) calc(-1 * var(--space-5)) var(--space-5);
+  padding: 0 var(--space-5);
+  background: #ffffff;
+  border-bottom: 1px solid var(--color-border);
+  border-radius: 8px 8px 0 0;
 }
 
 .run-detail-title-row h2 {
@@ -1364,6 +1454,11 @@ body {
     flex-direction: column;
     align-items: flex-start;
     gap: 8px;
+    /* Stacking (name / status / toggle each own their line) does not fit a
+       fixed 64px on a narrow screen — auto height here, the 64px bar is a
+       desktop-width guarantee only. */
+    height: auto;
+    padding: 12px 16px;
   }
 
   .option-bar-row {
@@ -1545,7 +1640,7 @@ body {
 
 /* Entity kind badge (Projekt / Perszóna / Kérdőív) — a label, not a run status */
 .badge-kind {
-  background-color: rgba(20, 184, 166, 0.12);
+  background-color: rgba(var(--color-accent-rgb), 0.12);
   color: var(--color-accent-text);
 }
 
@@ -2017,7 +2112,7 @@ body {
 .scale-picker-control select:focus {
   outline: none;
   border-color: var(--color-accent);
-  box-shadow: 0 0 0 2px rgba(20, 184, 166, 0.1);
+  box-shadow: 0 0 0 2px rgba(var(--color-accent-rgb), 0.1);
 }
 
 .scale-explanation {
@@ -2025,7 +2120,7 @@ body {
   line-height: 1.6;
   color: var(--color-text-secondary);
   padding: var(--space-2);
-  background: rgba(20, 184, 166, 0.05);
+  background: rgba(var(--color-accent-rgb), 0.05);
   border-left: 3px solid var(--color-accent);
   border-radius: 4px;
 }
@@ -2076,7 +2171,7 @@ body {
 .q-option-row .q-option-text:focus {
   outline: none;
   border-color: var(--color-accent);
-  box-shadow: 0 0 0 2px rgba(20, 184, 166, 0.1);
+  box-shadow: 0 0 0 2px rgba(var(--color-accent-rgb), 0.1);
 }
 
 .q-block {
@@ -2142,7 +2237,7 @@ body {
   font-size: 12px;
   color: var(--color-text-secondary);
   padding: var(--space-2);
-  background: rgba(20, 184, 166, 0.05);
+  background: rgba(var(--color-accent-rgb), 0.05);
   border-left: 3px solid var(--color-accent);
   border-radius: 4px;
 }

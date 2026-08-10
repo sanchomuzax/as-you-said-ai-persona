@@ -53,7 +53,16 @@
            Built by context-sidebar.js from state/endpoints the app already
            fetches; see app.js (selectProjectEverywhere, updateProjectDropdowns)
            and runs-list.js (pollRunningProgress) for the data it rides on. -->
-      <aside id="contextSidebar" class="context-sidebar" aria-label="Kontextus: aktív projekt, navigáció, perszónák, futó mérés, token-keret">
+      <aside id="contextSidebar" class="context-sidebar" aria-label="Kontextus: aktív projekt, navigáció, token-keret">
+        <!-- Logo block (docs/UI-DESIGN.md §0/coordinator correction 2026-08-10):
+             the top-of-rail brand block from the mockup, clickable, routing to
+             Áttekintés — reuses the existing data-tab="overview" wiring
+             (public/app.js's generic `.tab-btn` click listener + setActiveTab),
+             not a new navigation path. -->
+        <button type="button" class="sidebar-logo tab-btn" data-tab="overview" aria-label="as-you-said — Áttekintés megnyitása">
+          as-you-said
+        </button>
+
         <div class="context-sidebar-section">
           <label for="contextSidebarProjectSelect">Aktív projekt</label>
           <select id="contextSidebarProjectSelect">
@@ -61,12 +70,15 @@
           </select>
         </div>
 
-        <!-- Tabs (issue #46): relocated here from above main.tab-content, so
-             navigation lives with the project/context it scopes. The four
-             work-focused items (docs/UI-DESIGN.md §2) come first, emphasized;
-             Áttekintés/Projektek/Kérdőívek stay available in a visually
-             secondary group below — dropping them would remove the landing
-             view and the only way to reach project/questionnaire setup. -->
+        <!-- Tabs (issue #46, narrowed 2026-08-10 per the coordinator's visual
+             correction): the left rail shows ONLY the four work-focused items
+             below — docs/UI-DESIGN.md §2/§0. Áttekintés is now the logo above;
+             Projektek/Kérdőívek moved to the Áttekintés tab's "Gyors belépés"
+             (see #tab-overview .overview-quick-actions further down). The old
+             three buttons stay in the DOM, `hidden`, so the existing hash
+             routing (data-tab="overview"/"projects"/"questionnaires") and the
+             tests pinned to them keep working unchanged — nothing was
+             rebuilt, only what is VISIBLE narrowed. -->
         <nav class="tabs" aria-label="Fő navigáció">
           <div class="tabs-group tabs-group-primary" role="group" aria-label="Fő menüpontok">
             <button class="tab-btn" data-tab="runs">Futtatások</button>
@@ -74,21 +86,34 @@
             <button class="tab-btn" data-tab="interviews">Interjúk</button>
             <button class="tab-btn" data-tab="models">Modellek</button>
           </div>
-          <div class="tabs-group tabs-group-secondary" role="group" aria-label="További nézetek">
+          <div class="tabs-group tabs-group-secondary" role="group" aria-label="További nézetek" hidden>
             <button class="tab-btn active" data-tab="overview">Áttekintés</button>
             <button class="tab-btn" data-tab="projects">Projektek</button>
             <button class="tab-btn" data-tab="questionnaires">Kérdőívek</button>
           </div>
         </nav>
 
-        <div class="context-sidebar-section">
+        <!-- Perszónák / Futó mérés / Modell-kalibráció summaries: kept in the
+             DOM (`hidden`, not removed) — tests/frontend-context-sidebar.test.ts
+             and tests/frontend-model-dom.test.ts pin #contextSidebarPersonas /
+             #contextSidebarRunning / #contextSidebarCalibration, including the
+             focus-return interplay with the real Perszónák/Futtatások/Modellek
+             tab lists (tests/frontend-context-sidebar.test.ts's "focus return
+             is not hijacked by a duplicate row" tests) — removing these nodes
+             would fail pinned tests. Visually the coordinator's correction
+             (2026-08-10) is clear: the left rail shows only the logo, the
+             project selector, the four menu items and the budget widget: these
+             list-shaped summaries duplicate what their own tabs already show
+             in full in the workspace, so they are hidden, not rebuilt
+             elsewhere. -->
+        <div class="context-sidebar-section" hidden>
           <h3>Perszónák</h3>
           <div id="contextSidebarPersonas" class="context-sidebar-list">
             <p class="placeholder">Válassz projektet.</p>
           </div>
         </div>
 
-        <div class="context-sidebar-section">
+        <div class="context-sidebar-section" hidden>
           <h3>Futó mérés</h3>
           <!-- Status and progress change while the researcher is on another tab;
                a screen reader is otherwise never told that anything moved. -->
@@ -97,7 +122,7 @@
           </div>
         </div>
 
-        <div class="context-sidebar-section">
+        <div class="context-sidebar-section" hidden>
           <h3>Modell-kalibráció</h3>
           <!-- The sidebar used to say nothing about the Modellek tab: on that
                tab every section of it was about something else. One row per
@@ -107,7 +132,7 @@
           </div>
         </div>
 
-        <div class="context-sidebar-section">
+        <div class="context-sidebar-section context-sidebar-budget-section">
           <h3>Token-keret</h3>
           <!-- Global budget widget (relocated from .app-header, issue #46):
                same ids, same behaviour — only its position moved, so it
@@ -159,6 +184,13 @@
             <button type="button" id="overviewQuickRun" class="btn btn-primary">+ Új futtatás</button>
             <button type="button" id="overviewQuickInterview" class="btn btn-primary">+ Új interjú</button>
             <button type="button" id="overviewQuickCalibration" class="btn btn-secondary">Kalibráció</button>
+            <!-- Entry points for Projektek/Kérdőívek (coordinator correction
+                 2026-08-10): those two tabs no longer have their own left-rail
+                 button (see #contextSidebar above) — this is where the plan
+                 puts them instead, reusing overviewQuickJump (public/overview.js)
+                 exactly like the three buttons above. -->
+            <button type="button" id="overviewQuickProjects" class="btn btn-secondary">Projektek</button>
+            <button type="button" id="overviewQuickQuestionnaires" class="btn btn-secondary">Kérdőívek</button>
           </div>
         </div>
       </div>
