@@ -126,7 +126,11 @@ evaluation is auditable against the calibration it used.
   staleness triggers (provider drift detection already possible via
   `responses.provider`). ✅ v0.15.0 — with two documented gaps, see §7.
 - **M3**: evaluation integration (judge prompt section + profile reference on
-  the evaluation record).
+  the evaluation record). ✅ v0.18.0 — the judge prompt carries a
+  `MODELL-KALIBRÁCIÓ` section computed in code, and `run_evaluations` records the
+  cited profile's id, status, model version, provider, measured-at and staleness
+  reasons, so an evaluation stays auditable even after the profile it used has
+  gone stale or been replaced.
 - **M4**: repeat-for-distribution + bootstrap CIs; PriDe-style prior correction
   offered as an *optional, clearly labelled* re-scoring view (never silently
   applied to raw data — the append-only log stays untouched).
@@ -162,9 +166,20 @@ Two deliberate departures from §2, both visible in the UI rather than hidden:
   (id + version) it used. A profile measured on one probe is stale against
   another, which is what the key already enforces.
 
-Not in M2 (unchanged): the prior-bias vector is *reported*, never applied as a
-correction (that is M4, and even then only as a clearly labelled re-scoring view);
-the evaluation prompt does not yet cite the profile (M3).
+Still true after M3: the prior-bias vector is *reported*, never applied as a
+correction. That is M4, and even then only as a clearly labelled re-scoring view.
+
+The other two gaps above have since closed. The evaluation prompt cites the
+profile as of M3 (v0.18.0). The "any questionnaire is a probe" departure ended
+with the durable `is_calibration_probe` designation described in §2 — the
+calibration selector now offers designated probes by default, so a profile's
+probe is a deliberate choice rather than whatever questionnaire was at hand.
+
+What remains open belongs to M4 and is tracked in three slices: **M4a**
+repeat-for-distribution with paired bootstrap CIs, **M4b** the question-level
+trap `role` field and positivity weighting (both need a probe redesign, so they
+are blocked on the preregistered probe stop), and **M4c** the optional
+PriDe-style correction, which depends on M4a.
 
 ## 8. UI rework: the workflow lives on the model card (post-M2)
 
