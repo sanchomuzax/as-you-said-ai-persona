@@ -683,36 +683,61 @@
 
     <!-- Run Detail View -->
     <section id="runDetailView" class="run-detail-view" style="display: none;">
-      <div class="run-detail-header">
-        <button id="runDetailBackBtn" class="btn btn-secondary back-btn">&larr; Vissza</button>
+      <div class="run-detail-header" id="runDetailHeader">
         <div class="run-detail-title-row">
-          <h2 id="runDetailTitle">Futtatás részletei</h2>
-          <span id="runDetailStatus" class="badge"></span>
-          <!-- Analyst/Engineer (X-Ray) toggle (docs/UI-DESIGN.md §0/§3). Analyst
-               is the default (clean result, no machinery); Engineer reveals the
-               per-response prompt/raw-output/model/token/permutation block —
-               see public/run-view.js's viewMode handling. state.viewMode is a
-               single global flag, so the choice survives subtab and run
-               switches, as required. -->
-          <div class="view-mode-toggle" id="viewModeToggle" role="group" aria-label="Nézet: Elemző vagy Mérnök (X-Ray)">
-            <button type="button" class="view-mode-btn active" data-view-mode="analyst" aria-pressed="true">Elemző</button>
-            <button type="button" class="view-mode-btn" data-view-mode="engineer" aria-pressed="false">Mérnök (X-Ray)</button>
+          <div class="run-detail-title-left">
+            <!-- Compact, in-line back link (docs/UI-DESIGN.md §0 header
+                 compactness) — used to be a full-width secondary button on
+                 its own row above the title; same id/click target, only the
+                 visual weight changed. -->
+            <button id="runDetailBackBtn" class="run-detail-back-link">&larr; Vissza</button>
+            <h2 id="runDetailTitle">Futtatás részletei</h2>
+            <span id="runDetailStatus" class="badge"></span>
+          </div>
+          <div class="run-detail-title-right">
+            <!-- Analyst/Engineer (X-Ray) toggle (docs/UI-DESIGN.md §0/§3). Analyst
+                 is the default (clean result, no machinery); Engineer reveals the
+                 per-response prompt/raw-output/model/token/permutation block —
+                 see public/run-view.js's viewMode handling. state.viewMode is a
+                 single global flag, so the choice survives subtab and run
+                 switches, as required. -->
+            <div class="view-mode-toggle" id="viewModeToggle" role="group" aria-label="Nézet: Elemző vagy Mérnök (X-Ray)">
+              <button type="button" class="view-mode-btn active" data-view-mode="analyst" aria-pressed="true">Elemző</button>
+              <button type="button" class="view-mode-btn" data-view-mode="engineer" aria-pressed="false">Mérnök (X-Ray)</button>
+            </div>
+            <!-- Details drawer toggle: controls, token/cost/latency chips,
+                 stale-version notice and CSV export all move behind this —
+                 closed by default so the question and answers start right
+                 under the header instead of the middle of the screen. -->
+            <button type="button" id="runDetailDetailsToggle" class="run-detail-details-toggle" aria-expanded="false" aria-controls="runDetailDetails">
+              Részletek
+            </button>
           </div>
         </div>
-        <div class="run-detail-controls" id="runDetailControls"></div>
+
+        <!-- Live progress (docs/UI-DESIGN.md §6 "Live progress"): stays
+             visible while the run is actually running — via
+             #runDetailHeader.is-running in public/style.css — even with the
+             details drawer closed, so live feedback is never hidden. Also
+             shown while the drawer itself is open. -->
         <div class="run-detail-progress">
           <div class="progress-bar">
             <div id="runDetailProgressFill" class="progress-fill" style="width: 0%"></div>
           </div>
         </div>
-        <div class="run-detail-stats" id="runDetailStats"></div>
+
+        <div class="run-detail-details" id="runDetailDetails" hidden>
+          <div class="run-detail-controls" id="runDetailControls"></div>
+          <div class="run-detail-stats" id="runDetailStats"></div>
+          <div id="runStaleVersions"></div>
+          <div class="run-detail-export">
+            <a id="runExportLink" href="" download class="btn btn-secondary">CSV letöltés</a>
+          </div>
+        </div>
+
         <!-- Status and progress change while the researcher reads the page; a
              screen reader is otherwise never told that anything moved. -->
         <p id="runStatusLive" class="sr-only" aria-live="polite" role="status"></p>
-        <div id="runStaleVersions"></div>
-        <div class="run-detail-export">
-          <a id="runExportLink" href="" download class="btn btn-secondary">CSV letöltés</a>
-        </div>
       </div>
 
       <nav class="subtabs">

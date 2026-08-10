@@ -1216,9 +1216,29 @@ body {
   align-self: flex-start;
 }
 
+/* Run detail header only (docs/UI-DESIGN.md §0): a compact in-line "← Vissza"
+   link instead of the old full-width secondary button on its own row. Scoped
+   to the id, not .back-btn, so the entity-detail view's own back button (a
+   different view, out of this task's scope) is untouched. */
+#runDetailBackBtn {
+  flex-shrink: 0;
+  background: none;
+  border: none;
+  padding: 4px 0;
+  color: var(--color-text-secondary);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+#runDetailBackBtn:hover {
+  color: var(--color-accent-text);
+}
+
 .run-detail-title-row {
   display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: var(--space-3);
   flex-wrap: wrap;
   /* docs/UI-DESIGN.md §0: "Workspace header, fixed 64px". This is that
@@ -1229,11 +1249,31 @@ body {
      stats stay exactly where they were, in the card below — nothing was
      removed, only the title row's OWN box model changed. */
   height: 64px;
-  margin: calc(-1 * var(--space-5)) calc(-1 * var(--space-5)) var(--space-5);
+  margin: calc(-1 * var(--space-5)) calc(-1 * var(--space-5)) 0;
   padding: 0 var(--space-5);
   background: #ffffff;
   border-bottom: 1px solid var(--color-border);
   border-radius: 8px 8px 0 0;
+}
+
+.run-detail-title-left {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.run-detail-title-left h2 {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.run-detail-title-right {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-shrink: 0;
 }
 
 .run-detail-title-row h2 {
@@ -1242,6 +1282,61 @@ body {
   font-size: 18px;
   font-weight: 600;
   color: var(--color-text);
+}
+
+/* Details drawer toggle — the compact header's escape hatch back to the
+   controls/stats/export that used to sit in the open by default. */
+.run-detail-details-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: 6px;
+  border: 1px solid var(--color-border);
+  background: #ffffff;
+  color: var(--color-text-secondary);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.run-detail-details-toggle:hover {
+  color: var(--color-text);
+  border-color: #a5b4fc;
+}
+
+.run-detail-details-toggle.active {
+  background: #eef2ff;
+  color: #4f46e5;
+  border-color: #c7d2fe;
+}
+
+/* Live progress bar: hidden by default (it now lives in the compact header,
+   outside the collapsible drawer) so it doesn't take space from the question
+   below — except while a run is actually running (#runDetailHeader.is-running,
+   set in public/run-view.js) or while the details drawer is open, per
+   docs/UI-DESIGN.md §6 "Live progress" — that feedback must never be hidden
+   while a run is in flight. */
+.run-detail-progress {
+  display: none;
+  padding-top: var(--space-3);
+}
+
+#runDetailHeader.is-running .run-detail-progress,
+#runDetailHeader.details-open .run-detail-progress {
+  display: block;
+}
+
+.run-detail-details {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding-top: var(--space-3);
+}
+
+.run-detail-details[hidden] {
+  display: none;
 }
 
 .run-detail-controls {

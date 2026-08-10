@@ -32,6 +32,17 @@ async function openRunDetail(runId, updateHash) {
   document.querySelector('.tab-content').style.display = 'none';
   document.getElementById('runDetailView').style.display = 'block';
   if (updateHash) setHash('runs', runId);
+  // Details drawer defaults to closed on every run open (docs/UI-DESIGN.md
+  // §0), so it never carries an "open" state over from a previously
+  // inspected run.
+  const details = document.getElementById('runDetailDetails');
+  const toggleBtn = document.getElementById('runDetailDetailsToggle');
+  if (details && !details.hidden) {
+    details.hidden = true;
+    toggleBtn?.setAttribute('aria-expanded', 'false');
+    toggleBtn?.classList.remove('active');
+    document.getElementById('runDetailHeader')?.classList.remove('details-open');
+  }
 
   await refreshRunDetailHeader(runId);
   await loadSubtab(subtabPickedByUser ? (state.currentSubtab || 'responses') : 'responses');
@@ -59,6 +70,24 @@ document.getElementById('runDetailBackBtn')?.addEventListener('click', () => {
   void refreshRunsList().then(restoreDetailFocus);
 });
 
+// Details drawer (docs/UI-DESIGN.md §0): controls, stat chips, the
+// stale-version notice and CSV export live behind this toggle, closed by
+// default so the question and response cards start right under the compact
+// header instead of the middle of the screen. See #runDetailHeader's
+// .details-open rule in public/style.css for why the progress bar reappears
+// while this is open too.
+document.getElementById('runDetailDetailsToggle')?.addEventListener('click', () => {
+  const details = document.getElementById('runDetailDetails');
+  const toggleBtn = document.getElementById('runDetailDetailsToggle');
+  const header = document.getElementById('runDetailHeader');
+  if (!details || !toggleBtn) return;
+  const willOpen = details.hidden;
+  details.hidden = !willOpen;
+  toggleBtn.setAttribute('aria-expanded', String(willOpen));
+  toggleBtn.classList.toggle('active', willOpen);
+  header?.classList.toggle('details-open', willOpen);
+});
+
 function renderRunDetailHeaderFromCache(runId) {
   const run = findRunById(runId);
   if (!run) return;
@@ -71,6 +100,11 @@ function renderRunDetailHeaderFromCache(runId) {
 
 function renderRunDetailHeader(run, progress) {
   const status = progress.status || run.status;
+  // docs/UI-DESIGN.md §6 "Live progress": the progress bar must stay visible
+  // while a run is actually running even though it now lives outside the
+  // (closed-by-default) details drawer — see .run-detail-progress's display
+  // rule in public/style.css, keyed off this class.
+  document.getElementById('runDetailHeader')?.classList.toggle('is-running', status === 'running');
   document.getElementById('runDetailTitle').textContent = run.name || '';
   const statusEl = document.getElementById('runDetailStatus');
   statusEl.className = badgeClassForStatus(status);
