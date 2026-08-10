@@ -273,7 +273,6 @@ body {
    translucent overlay, since the nav background under it never changes. */
 .budget-widget {
   background: var(--color-token-widget-bg);
-  border: 1px solid var(--color-border);
   border-radius: 6px;
   padding: 8px 12px;
 }
@@ -329,16 +328,11 @@ body {
    width-by-percentage fill would either read as "0% used" (misleadingly
    empty) or, if arbitrarily set to 100%, as "budget exhausted"
    (misleadingly full) — both wrong, since neither is true. A full-width bar
-   in a distinct muted, striped fill instead reads as "tracked, not capped",
-   which is what app.js sets it to (see updateBudgetBar). */
+   in a muted, FLAT fill reads as "tracked, not capped" without looking
+   broken — the previous striped/hazard-tape treatment read as an error
+   state, which is what app.js sets it to (see updateBudgetBar). */
 .budget-widget .progress-fill.budget-progress-unlimited {
-  background: repeating-linear-gradient(
-    45deg,
-    #334155,
-    #334155 6px,
-    #475569 6px,
-    #475569 12px
-  );
+  background: #334155;
 }
 
 /* Context sidebar (issue #19): active project, personas, running measurement,
@@ -483,7 +477,9 @@ body {
   margin-bottom: 24px;
 }
 
-.context-sidebar-section h3 {
+.context-sidebar-section h3,
+.context-sidebar-section > label {
+  display: block;
   font-size: 12px;
   font-weight: 600;
   text-transform: uppercase;
@@ -494,6 +490,39 @@ body {
 
 .context-sidebar-section select {
   width: 100%;
+}
+
+/* Active-project picker (docs/UI-DESIGN.md §0 / coordinator correction
+   2026-08-10): the live UI showed a bare native `<select>` in its OS-default
+   white skin, sitting on the dark nav rail like a hole punched in the panel.
+   Styled to match the rail's own palette instead — dark field, light text,
+   visible border and focus ring — so it reads as part of the sidebar, not a
+   foreign control dropped onto it. `appearance: none` only affects the
+   closed box; the open options list stays OS-rendered (no cross-browser way
+   to restyle it), which is expected and fine here. */
+#contextSidebarProjectSelect {
+  width: 100%;
+  background: #1e293b;
+  color: #e2e8f0;
+  border: 1px solid #334155;
+  border-radius: 6px;
+  padding: 9px 10px;
+  font-family: inherit;
+  font-size: 13px;
+  appearance: none;
+  -webkit-appearance: none;
+  cursor: pointer;
+  transition: border-color 0.15s;
+}
+
+#contextSidebarProjectSelect:hover {
+  border-color: #475569;
+}
+
+#contextSidebarProjectSelect:focus {
+  outline: none;
+  border-color: var(--color-accent);
+  box-shadow: 0 0 0 2px rgba(var(--color-accent-rgb), 0.25);
 }
 
 .context-sidebar-list .list-item {
@@ -2561,6 +2590,101 @@ body {
 .response-distribution-segment-neutral {
   background: #94a3b8;
   color: #1e293b;
+}
+
+/* Per-option distribution rows (docs/UI-DESIGN.md §0 / #46): one row per
+   option, its own track, instead of a single bar cut into segments. Emitted
+   by run-view.js as:
+     <div class="dist-rows">
+       <div class="dist-row">
+         <div class="dist-track">
+           <div class="dist-fill dist-fill-1" style="width: 70%"></div>
+           <span class="dist-label">React (70%)</span>
+         </div>
+       </div>
+     </div> */
+.dist-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.dist-row {
+  width: 100%;
+}
+
+.dist-track {
+  position: relative;
+  width: 100%;
+  height: 24px;
+  background: #f1f5f9;
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.dist-fill {
+  position: absolute;
+  top: 0;
+  left: 0;
+  height: 100%;
+  border-radius: 6px;
+}
+
+.dist-fill-1 {
+  background: #4f46e5;
+}
+
+.dist-fill-2 {
+  background: #818cf8;
+}
+
+.dist-fill-3 {
+  background: #94a3b8;
+}
+
+/* The label sits inside the track, left-aligned, on top of the fill —
+   positioned independently of the fill's width (not a child of .dist-fill),
+   because a low-percentage fill is often narrower than its own label text.
+   Hard requirement (project rule): illegible text is a bug, in every case —
+   including when the label overflows past its own fill onto the empty
+   track. A flat color switch per fill tone is not enough on its own (white
+   text spilling onto the light empty track would vanish), so each variant
+   also carries a same-hue outline (text-shadow "halo") that keeps the glyph
+   edges defined against whatever is directly underneath — dark fill, light
+   fill, or bare track. */
+.dist-label {
+  position: absolute;
+  top: 50%;
+  left: 8px;
+  transform: translateY(-50%);
+  z-index: 1;
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+/* Default (over the empty track) and over the lighter fills: dark ink with
+   a white halo, per docs/UI-DESIGN.md §0. */
+.dist-label {
+  color: #0f172a;
+  text-shadow:
+    -1px -1px 0 rgba(255, 255, 255, 0.85),
+    1px -1px 0 rgba(255, 255, 255, 0.85),
+    -1px 1px 0 rgba(255, 255, 255, 0.85),
+    1px 1px 0 rgba(255, 255, 255, 0.85);
+}
+
+/* Over the dark indigo fill: white ink with a dark halo — the halo is what
+   keeps it readable if the label text runs past the fill's own width onto
+   the light track beyond it. */
+.dist-fill-1 + .dist-label {
+  color: #ffffff;
+  text-shadow:
+    -1px -1px 0 rgba(15, 23, 42, 0.65),
+    1px -1px 0 rgba(15, 23, 42, 0.65),
+    -1px 1px 0 rgba(15, 23, 42, 0.65),
+    1px 1px 0 rgba(15, 23, 42, 0.65);
 }
 
 .response-card-xray-toggle {

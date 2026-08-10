@@ -284,6 +284,10 @@ describe('run detail view', () => {
     await dom.boot()
     ;(dom.document.querySelector('[data-run-card="r1"]')!).click()
     await dom.settle()
+    // A futtatás megnyitásakor mostantól a Válaszok alfül az alapértelmezett (#46):
+    // ez a teszt az Áttekintés alfül tartalmát vizsgálja, ezért oda kell lépni.
+    ;(dom.document.querySelector('[data-subtab="overview"]')!).click()
+    await dom.settle()
 
     const cards = dom.document.querySelectorAll('.question-card')
     expect(cards).toHaveLength(2)
@@ -336,6 +340,10 @@ describe('run detail view', () => {
     })
     await dom.boot()
     ;(dom.document.querySelector('[data-run-card="r1"]')!).click()
+    await dom.settle()
+    // A futtatás megnyitásakor mostantól a Válaszok alfül az alapértelmezett (#46):
+    // ez a teszt az Áttekintés alfül tartalmát vizsgálja, ezért oda kell lépni.
+    ;(dom.document.querySelector('[data-subtab="overview"]')!).click()
     await dom.settle()
 
     const cards = dom.document.querySelectorAll('.question-card')
@@ -557,6 +565,10 @@ describe('run detail view', () => {
       await dom.boot()
       ;(dom.document.querySelector('[data-run-card="r1"]')!).click()
       await dom.settle()
+      // A futtatás megnyitásakor mostantól a Válaszok alfül az alapértelmezett (#46):
+      // ez a teszt az Áttekintés alfül tartalmát vizsgálja, ezért oda kell lépni.
+      ;(dom.document.querySelector('[data-subtab="overview"]')!).click()
+      await dom.settle()
 
       const chips = dom.document.querySelector('.question-card .metric-chips')!
       expect(chips.textContent).toContain('PC 0.85')
@@ -576,6 +588,10 @@ describe('run detail view', () => {
       dom = loadAppDom({ routes: runRoutes({ 'GET /api/runs/r1/results': results }) })
       await dom.boot()
       ;(dom.document.querySelector('[data-run-card="r1"]')!).click()
+      await dom.settle()
+      // A futtatás megnyitásakor mostantól a Válaszok alfül az alapértelmezett (#46):
+      // ez a teszt az Áttekintés alfül tartalmát vizsgálja, ezért oda kell lépni.
+      ;(dom.document.querySelector('[data-subtab="overview"]')!).click()
       await dom.settle()
 
       const chips = dom.document.querySelector('.question-card .metric-chips')!
@@ -638,6 +654,10 @@ describe('run detail view', () => {
       dom = loadAppDom({ routes: runRoutes({ 'GET /api/runs/r1/results': resultsWithMovesModelCases() }) })
       await dom.boot()
       ;(dom.document.querySelector('[data-run-card="r1"]')!).click()
+      await dom.settle()
+      // A futtatás megnyitásakor mostantól a Válaszok alfül az alapértelmezett (#46):
+      // ez a teszt az Áttekintés alfül tartalmát vizsgálja, ezért oda kell lépni.
+      ;(dom.document.querySelector('[data-subtab="overview"]')!).click()
       await dom.settle()
 
       const table = dom.document.querySelector('.persona-breakdown-table')!

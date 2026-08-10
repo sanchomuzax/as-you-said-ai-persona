@@ -6,6 +6,19 @@ function findRunById(runId) {
   return state.runs.find(r => r.id === runId);
 }
 
+/**
+ * Issue #46: a freshly opened run must land on "Válaszok" — the tab with the
+ * per-option row cards from the final mockup — not "Áttekintés", which is the
+ * old thin-bar layout and used to be everyone's first (and often only) view.
+ * `state.currentSubtab` (public/app.js) is initialized to 'overview' and this
+ * file cannot touch app.js, so the default can't just be flipped there.
+ * Instead: only the FIRST run open of the session (before the researcher has
+ * ever clicked a subtab button themselves) is forced to 'responses'; once
+ * they pick a subtab explicitly, that choice — already tracked via
+ * state.currentSubtab — sticks for every later run open, exactly as before.
+ */
+let subtabPickedByUser = false;
+
 async function openRunDetail(runId, updateHash) {
   // Issue #30 root cause: this used to close only the entity detail view
   // (closeEntityDetail(false)), so a run opened from the model card (or from
@@ -21,7 +34,7 @@ async function openRunDetail(runId, updateHash) {
   if (updateHash) setHash('runs', runId);
 
   await refreshRunDetailHeader(runId);
-  await loadSubtab(state.currentSubtab || 'overview');
+  await loadSubtab(subtabPickedByUser ? (state.currentSubtab || 'responses') : 'responses');
 }
 
 function closeRunDetail(updateHash) {
@@ -121,6 +134,7 @@ async function refreshRunDetailHeader(runId) {
 
 document.querySelectorAll('.subtab-btn').forEach(btn => {
   btn.addEventListener('click', () => {
+    subtabPickedByUser = true;
     loadSubtab(btn.dataset.subtab);
   });
 });
@@ -673,10 +687,13 @@ function groupResponsesByQuestion(responses) {
 }
 
 /**
- * The response's own distribution as a segmented bar (docs/UI-DESIGN.md §0:
- * 24px tall). Segment COLOUR is picked by rank (largest share, second,
- * rest) — segment ORDER on the bar stays the original option order, so the
- * bar never leaks which position in the permutation was largest.
+ * The response's own distribution as one row per option (issue #46 final
+ * mockup, docs/mockups/inspector-final.png): a light track spans the full
+ * card width, a filled portion shows the option's own share, and the option
+ * name + rounded percentage sit inside the track as one label. Row ORDER
+ * stays the original option order, so the layout never leaks which position
+ * in the permutation was largest — only the fill's SHADE is picked by rank
+ * (largest share, second, rest).
  */
 function renderResponseDistributionBar(parsedJson, isMultiChoice) {
   if (!parsedJson) return '<p class="placeholder-inline">Nincs eloszlás-adat.</p>';
@@ -696,18 +713,24 @@ function renderResponseDistributionBar(parsedJson, isMultiChoice) {
   const ranked = [...entries].sort((a, b) => b[1] - a[1]);
   const tierByKey = new Map();
   ranked.forEach(([key], i) => {
-    tierByKey.set(key, i === 0 ? 'primary' : i === 1 ? 'secondary' : 'neutral');
+    tierByKey.set(key, i === 0 ? 'dist-fill-1' : i === 1 ? 'dist-fill-2' : 'dist-fill-3');
   });
 
-  const segments = entries
+  const rows = entries
     .map(([key, value]) => {
       const pct = Math.round((isMultiChoice ? value : total > 0 ? value / total : 0) * 100);
-      if (pct <= 0) return '';
-      const tier = tierByKey.get(key);
-      return `<div class="response-distribution-segment response-distribution-segment-${tier}" style="width:${Math.max(pct, 6)}%" title="${escapeHtml(key)}: ${pct}%">${pct}%</div>`;
+      const tierClass = tierByKey.get(key);
+      return `
+        <div class="dist-row">
+          <div class="dist-track">
+            <div class="dist-fill ${tierClass}" style="width: ${pct}%"></div>
+            <span class="dist-label">${escapeHtml(key)} (${pct}%)</span>
+          </div>
+        </div>
+      `;
     })
     .join('');
-  return `<div class="response-distribution-bar" title="${escapeHtml(isMultiChoice ? TOOLTIPS.support : TOOLTIPS.distribution)}">${segments}</div>`;
+  return `<div class="dist-rows" title="${escapeHtml(isMultiChoice ? TOOLTIPS.support : TOOLTIPS.distribution)}">${rows}</div>`;
 }
 
 function renderXrayShell(responseId) {
