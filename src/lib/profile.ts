@@ -2,6 +2,15 @@ import { createHash } from 'node:crypto'
 import type { Db } from '../db.js'
 import { buildStyleCPrompt, type TemplateLanguage } from './prompt.js'
 import { elicitationModeFor } from './parse.js'
+import { percentileBootstrapCI, type BootstrapResult } from './bootstrap.js'
+
+/**
+ * Re-exported so existing call sites and tests keep importing the bootstrap
+ * primitive from `profile.js` — the PRNG/percentile machinery itself moved to
+ * `bootstrap.ts` (code review suggestion: a natural boundary, and this file
+ * was already past the "many small files" guideline's typical size).
+ */
+export { percentileBootstrapCI, type BootstrapResult }
 
 /**
  * Model profiles (docs/MODEL-CALIBRATION.md, M2). A profile is the measured
@@ -86,6 +95,21 @@ export interface QuestionProfile {
 export interface ProfileMetrics {
   /** Audit label for an ordinary questionnaire used as a calibration override. */
   probeInterpretability?: 'standard' | 'limited'
+  /**
+   * Present only on a `metrics_json` written from #47 (M4a) onward. Absence
+   * (not a `1`) is how a reader recognises the pre-#47 shape — no migration
+   * ever stamps this onto an old record, so `'schemaVersion' in metrics`
+   * staying `false` for those rows is a load-bearing part of the contract,
+   * not an oversight.
+   */
+  schemaVersion?: 2
+  /**
+   * Repeated-run distribution + bootstrap CI (issue #47, M4a), stored
+   * ALONGSIDE the scalar fields below, never replacing them: `summarize()`
+   * (src/model-profiles.ts) and public/model-card.js's older rendering keep
+   * reading those scalars as plain numbers, unaware this field exists.
+   */
+  repeated?: RepeatedProfileMetrics
   perQuestion: QuestionProfile[]
   /**
    * PriDe-style prior bias: how often the model picks each POSITION, once the
@@ -386,4 +410,134 @@ function positivityOffset(byQuestion: Map<string, ProfileRow[]>): number | null 
   }
   if (perQuestion.length === 0) return null
   return perQuestion.reduce((a, b) => a + b, 0) / perQuestion.length
+}
+
+/**
+ * Run-level metric with CI (issue #47, M4a). Parallel to `ProfileMetrics`'s
+ * scalars, never a replacement for them (see the #47 comment thread): those
+ * existing point-value fields keep their type unchanged, so `summarize()`
+ * (src/model-profiles.ts:349) and public/model-card.js keep reading a plain
+ * number from `ProfileMetrics`, unaware anything changed. This structure is
+ * only ever stored ALONGSIDE those fields, never in place of them.
+ */
+export interface MetricWithCI {
+  perRun: { runId: string; value: number }[]
+  pointEstimate: number | null
+  ci: { low: number; high: number } | null
+  ciUnavailableReason: string | null
+  /** Runs (from the completed set) where THIS metric specifically could not be computed. */
+  excludedRunIds: string[]
+}
+
+export interface RepeatedProfileMetrics {
+  schemaVersion: 2
+  /** Completed runs actually used. */
+  runCount: number
+  /** Runs dropped because they were not `completed`. */
+  excludedRunIds: string[]
+  positivityOffset: MetricWithCI
+  priorBiasMaxDeviation: MetricWithCI
+  invalidRate: MetricWithCI
+  abstainRate: MetricWithCI
+}
+
+/**
+ * The repeated-run counterpart to `computeProfileMetrics`: the RUN is the
+ * sampling unit (spec: "A mintavételi egység a FUTÁS"), so each of the four
+ * `ProfileMetrics` scalars in scope for M4a — priorBias.maxDeviation,
+ * positivityOffset, invalidRate, abstainRate — is computed ONCE PER RUN by
+ * delegating to `computeProfileMetrics` scoped to that single run (reusing
+ * its already-tested per-question/per-cell logic instead of duplicating it),
+ * then bootstrapped ACROSS runs with the question set held fixed. The point
+ * estimate is the MEAN of those N per-run values — a different number than
+ * the pooled, cell-count-weighted value `computeProfileMetrics(db, runIds)`
+ * reports whenever runs carry unequal response counts.
+ *
+ * Only `completed` runs count: a partial run breaks the balanced-rotation
+ * invariant `priorBias` depends on, and would skew every other metric with
+ * incomplete question coverage too. A completed run that nonetheless produced
+ * zero usable persona-free cells cannot support `invalidRate`/`abstainRate`
+ * either — without the explicit check below they would silently read back as
+ * `0` from `computeProfileMetrics`'s own empty-input default, repeating the
+ * exact #40 confusion ("could not measure" read as "measured, and it's zero")
+ * this milestone exists to close.
+ *
+ * Deduplicates a repeated run id (code-review MEDIUM): the same id listed
+ * twice is the exact same run, not a second independent measurement — the
+ * existing pooled `computeProfileMetrics` already tolerates this for free (an
+ * SQL `IN (...)` cannot match a row twice), so a duplicate here is treated the
+ * same tolerant way rather than rejected, keeping the two functions'
+ * contracts consistent for the same input.
+ *
+ * Every array on the result — `perRun`/`excludedRunIds` on each metric, and
+ * the top-level `excludedRunIds` — is sorted into a CANONICAL (by runId)
+ * order rather than kept in the caller's original order (code-review HIGH):
+ * the whole point of seeding the bootstrap from the SORTED run ids is that
+ * `run_ids_json` being re-serialized in a different order (a query plan
+ * change, a migration, a manual re-store) must never change a stored
+ * profile's reported result. That guarantee only holds end-to-end if every
+ * order-sensitive array the caller can observe is also order-independent.
+ */
+export function computeRepeatedProfileMetrics(db: Db, runIds: readonly string[]): RepeatedProfileMetrics {
+  const uniqueRunIds = [...new Set(runIds)]
+  const { completedRunIds, excludedRunIds } = partitionByCompletedStatus(db, uniqueRunIds)
+  const sortedCompletedRunIds = [...completedRunIds].sort()
+  const perRun = sortedCompletedRunIds.map((runId) => ({ runId, metrics: computeProfileMetrics(db, [runId]) }))
+  const seedBase = sortedCompletedRunIds.join(',')
+
+  return {
+    schemaVersion: 2,
+    runCount: sortedCompletedRunIds.length,
+    excludedRunIds: [...excludedRunIds].sort(),
+    positivityOffset: metricWithCI(perRun, seedBase, 'positivityOffset', (m) => m.positivityOffset),
+    priorBiasMaxDeviation: metricWithCI(perRun, seedBase, 'priorBiasMaxDeviation', (m) => m.priorBias.maxDeviation),
+    invalidRate: metricWithCI(
+      perRun, seedBase, 'invalidRate', (m) => (m.provenance.cellCount === 0 ? null : m.invalidRate)
+    ),
+    abstainRate: metricWithCI(
+      perRun, seedBase, 'abstainRate', (m) => (m.provenance.cellCount === 0 ? null : m.abstainRate)
+    )
+  }
+}
+
+function metricWithCI(
+  perRun: { runId: string; metrics: ProfileMetrics }[],
+  seedBase: string,
+  metricName: string,
+  extract: (metrics: ProfileMetrics) => number | null
+): MetricWithCI {
+  const usable: { runId: string; value: number }[] = []
+  const excludedRunIds: string[] = []
+  // `perRun` is already canonically (runId-)sorted by the caller, so both
+  // arrays built by iterating it stay in that same canonical order.
+  for (const { runId, metrics } of perRun) {
+    const value = extract(metrics)
+    if (value === null) excludedRunIds.push(runId)
+    else usable.push({ runId, value })
+  }
+  const { pointEstimate, ci, ciUnavailableReason } = percentileBootstrapCI(
+    usable.map((u) => u.value),
+    `${seedBase}|${metricName}`,
+    500
+  )
+  return { perRun: usable, pointEstimate, ci, ciUnavailableReason, excludedRunIds }
+}
+
+/** Only a `completed` run satisfies the balanced-rotation invariant these metrics assume. */
+function partitionByCompletedStatus(
+  db: Db,
+  runIds: readonly string[]
+): { completedRunIds: string[]; excludedRunIds: string[] } {
+  if (runIds.length === 0) return { completedRunIds: [], excludedRunIds: [] }
+  const rows = db
+    .prepare(`SELECT id, status FROM runs WHERE id IN (${runIds.map(() => '?').join(',')})`)
+    .all(...runIds) as unknown as { id: string; status: string }[]
+  const statusById = new Map(rows.map((r) => [r.id, r.status]))
+  const completedRunIds: string[] = []
+  const excludedRunIds: string[] = []
+  for (const runId of runIds) {
+    if (statusById.get(runId) === 'completed') completedRunIds.push(runId)
+    else excludedRunIds.push(runId)
+  }
+  return { completedRunIds, excludedRunIds }
 }

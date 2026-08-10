@@ -6,6 +6,7 @@ import type { ModelsConfig } from './config.js'
 import type { SurveyRunner, RunConfig } from './runner.js'
 import {
   computeProfileMetrics,
+  computeRepeatedProfileMetrics,
   profileStatus,
   promptTemplateHash,
   sqliteToIso,
@@ -430,7 +431,14 @@ export function registerModelProfileRoutes(app: FastifyInstance, deps: ProfileDe
     const body = createSchema.safeParse(req.body)
     if (!body.success) return reply.code(400).send({ success: false, error: body.error.issues[0]?.message })
 
-    const placeholders = body.data.runIds.map(() => '?').join(',')
+    // One canonical run list for the whole handler. A repeated id is a plumbing
+    // accident, not a research-integrity breach — `computeProfileMetrics` already
+    // absorbs it silently via SQL `IN`, so rejecting it here would make two layers
+    // disagree about the same input. What must NOT happen is the audit trail and
+    // the measurement disagreeing: `run_ids_json` records what the numbers were
+    // actually computed from, so it is deduplicated at the same point they are.
+    const runIds = [...new Set(body.data.runIds)]
+    const placeholders = runIds.map(() => '?').join(',')
 
     // The whole position-bias metric rests on the balanced-rotation invariant:
     // every option appears in every position exactly as often. A run stopped
@@ -438,7 +446,7 @@ export function registerModelProfileRoutes(app: FastifyInstance, deps: ProfileDe
     // content-driven model as position-driven with nothing marking the gap.
     const unfinished = db
       .prepare(`SELECT id, status FROM runs WHERE id IN (${placeholders}) AND status != 'completed'`)
-      .all(...body.data.runIds) as unknown as { id: string; status: string }[]
+      .all(...runIds) as unknown as { id: string; status: string }[]
     if (unfinished.length > 0) {
       return reply.code(400).send({
         success: false,
@@ -452,7 +460,7 @@ export function registerModelProfileRoutes(app: FastifyInstance, deps: ProfileDe
            FROM responses
           WHERE run_id IN (${placeholders}) AND persona_id IS NULL AND model_version IS NOT NULL`
       )
-      .all(...body.data.runIds) as unknown as {
+      .all(...runIds) as unknown as {
       model_requested: string
       model_version: string
       provider: string | null
@@ -486,7 +494,7 @@ export function registerModelProfileRoutes(app: FastifyInstance, deps: ProfileDe
          FROM runs r JOIN questionnaires q ON q.id = r.questionnaire_id
          WHERE r.id IN (${placeholders})`
       )
-      .all(...body.data.runIds) as unknown as { questionnaire_id: string; is_calibration_probe: number }[]
+      .all(...runIds) as unknown as { questionnaire_id: string; is_calibration_probe: number }[]
     if (questionnaires.length !== 1) {
       return reply
         .code(400)
@@ -499,7 +507,7 @@ export function registerModelProfileRoutes(app: FastifyInstance, deps: ProfileDe
     // this field existed reads as the legacy sentinel, never as a guess.
     const runConfigs = db
       .prepare(`SELECT config_json FROM runs WHERE id IN (${placeholders})`)
-      .all(...body.data.runIds) as unknown as { config_json: string }[]
+      .all(...runIds) as unknown as { config_json: string }[]
     const templateLanguages = new Set(
       runConfigs.map((r) => (JSON.parse(r.config_json) as RunConfig).templateLanguage ?? LEGACY_TEMPLATE_LANGUAGE)
     )
@@ -512,22 +520,27 @@ export function registerModelProfileRoutes(app: FastifyInstance, deps: ProfileDe
     }
     const templateLanguage = [...templateLanguages][0] ?? LEGACY_TEMPLATE_LANGUAGE
 
-    const computedMetrics = computeProfileMetrics(db, body.data.runIds)
+    const computedMetrics = computeProfileMetrics(db, runIds)
     const limitedByRun = runConfigs.some((r) =>
       parseStoredRunConfig(r.config_json)?.calibrationProbeInterpretability === 'limited'
     )
-    const metrics: ProfileMetrics = {
-      ...computedMetrics,
-      probeInterpretability: questionnaires[0]!.is_calibration_probe === 1 && !limitedByRun ? 'standard' : 'limited'
-    }
     // A profile with nothing usable behind it would still be dated, stored and
     // shown as "érvényes" — a measurement-shaped record of a failed measurement.
-    const usable = metrics.perQuestion.reduce((sum, q) => sum + q.aggregatedResponseCount, 0)
+    const usable = computedMetrics.perQuestion.reduce((sum, q) => sum + q.aggregatedResponseCount, 0)
     if (usable === 0) {
       return reply.code(400).send({
         success: false,
         error: 'A megadott futtatásokban nincs értékelhető válasz (minden cella érvénytelen vagy tartózkodás).'
       })
+    }
+    // Repeated-run distribution + bootstrap CI (issue #47, M4a) — computed
+    // ALONGSIDE the pooled scalars above, in a new `repeated` field, never
+    // replacing them (see the ProfileMetrics.repeated doc comment).
+    const metrics: ProfileMetrics = {
+      ...computedMetrics,
+      probeInterpretability: questionnaires[0]!.is_calibration_probe === 1 && !limitedByRun ? 'standard' : 'limited',
+      schemaVersion: 2,
+      repeated: computeRepeatedProfileMetrics(db, runIds)
     }
     const createdAt = now()
     const validUntil = new Date(createdAt.getTime() + PROFILE_VALIDITY_DAYS * 24 * 60 * 60 * 1000)
@@ -540,7 +553,7 @@ export function registerModelProfileRoutes(app: FastifyInstance, deps: ProfileDe
     ).run(
       id, stack.model_requested, stack.model_version, stack.provider, promptTemplateHash(),
       questionnaires[0]!.questionnaire_id, body.data.language, templateLanguage,
-      JSON.stringify(body.data.runIds), JSON.stringify(metrics),
+      JSON.stringify(runIds), JSON.stringify(metrics),
       toSqliteUtc(createdAt), toSqliteUtc(validUntil)
     )
     return { success: true, data: { id } }

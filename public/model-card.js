@@ -108,6 +108,72 @@ function formatSigned(value) {
   return (rounded > 0 ? '+' : '') + rounded.toFixed(3);
 }
 
+/** Same rounding the plain (non-repeated) invalidRate/abstainRate fields already use, kept identical on purpose. */
+function formatPercentValue(value) {
+  return Math.round(value * 100) + '%';
+}
+
+/**
+ * Issue #47 (M4a): each of the four scalar mutatók (positivityOffset,
+ * priorBias.maxDeviation, invalidRate, abstainRate) also carries a repeated-run
+ * bootstrap confidence interval (`metrics.repeated.<mutató>`). "Konfidencia-
+ * intervallum" is jargon on its own, so this tooltip spells out what it means
+ * for a media professional reading the card, not just a developer.
+ */
+const REPEATED_CI_TOOLTIP =
+  'A megbízhatósági intervallum (más néven konfidencia-intervallum) azt mutatja meg, mennyire ingadozna ez az ' +
+  'érték, ha a kalibrációs futtatásokat sokszor megismételnénk. A sáv nem szimmetrikus a középérték körül, ezért ' +
+  'az alsó és a felső határ mindig külön szerepel, nem egyetlen plusz-mínusz értékként.';
+
+/**
+ * Renders one `MetricWithCI`-shaped value (src/lib/profile.ts) as plain text
+ * for a `detailField`. Three cases, and they must stay visually distinct
+ * (issue #40's lesson, repeated for M4a):
+ *   - CI present, non-zero-width: point estimate + the low/high bounds, each
+ *     formatted and signed separately — NEVER collapsed into "± x", since the
+ *     bootstrap interval is not symmetric.
+ *   - CI present but zero-width (low === high): a genuine measurement that
+ *     happens not to vary — still a real range, shown the same way as above.
+ *   - CI absent (`ci: null`, fewer than 3 usable runs): the point estimate is
+ *     still shown, but paired with `ciUnavailableReason` verbatim instead of a
+ *     range, so "could not measure" is never mistaken for "measured as zero".
+ */
+function renderRepeatedMetricValue(metric, formatter) {
+  if (!metric) return null;
+  const point = calibrationValue(metric.pointEstimate, formatter);
+  if (metric.ci) {
+    const runCount = Array.isArray(metric.perRun) ? metric.perRun.length : 0;
+    return `${point} (95%-os intervallum: ${formatter(metric.ci.low)} – ${formatter(metric.ci.high)}, ${runCount} futásból)`;
+  }
+  const reason = metric.ciUnavailableReason || 'A megbízhatósági intervallum nem számítható ki.';
+  return `${point} (nincs megbízhatósági intervallum — ${reason})`;
+}
+
+/**
+ * The repeated-run section of the model card. Absent entirely (returns '')
+ * when the profile predates issue #47 (`metrics.repeated` missing) — no CI is
+ * fabricated for an old record, it simply has none to show.
+ */
+function renderRepeatedMetricsSection(metrics) {
+  const repeated = metrics.repeated;
+  if (!repeated) return '';
+  const excludedNote =
+    Array.isArray(repeated.excludedRunIds) && repeated.excludedRunIds.length > 0
+      ? ` ${repeated.excludedRunIds.length} futás kimaradt belőle, mert nem fejeződött be.`
+      : '';
+  return detailSection(
+    'Ismétléses mérés bizonytalansága',
+    `<p class="detail-note">A lenti négy mutató ${escapeHtml(String(repeated.runCount))} futásból készült.${escapeHtml(excludedNote)}</p>
+     <div class="detail-grid">
+       ${detailField('Alap-pozitivitás — futásonkénti', renderRepeatedMetricValue(repeated.positivityOffset, formatSigned), REPEATED_CI_TOOLTIP)}
+       ${detailField('Pozíció-torzítás — futásonkénti', renderRepeatedMetricValue(repeated.priorBiasMaxDeviation, formatSigned), REPEATED_CI_TOOLTIP)}
+       ${detailField('Érvénytelen válaszok — futásonkénti', renderRepeatedMetricValue(repeated.invalidRate, formatPercentValue), REPEATED_CI_TOOLTIP)}
+       ${detailField('Tartózkodás — futásonkénti', renderRepeatedMetricValue(repeated.abstainRate, formatPercentValue), REPEATED_CI_TOOLTIP)}
+     </div>`,
+    REPEATED_CI_TOOLTIP
+  );
+}
+
 function modelListItem(entry) {
   const summary = entry.summary;
   const meta = summary
@@ -464,6 +530,7 @@ function renderModelCard(entry, profile, context) {
         ${detailField('Mérés költsége (USD)', calibrationValue(provenance.costUsd, formatCost))}
       </div>`
     )}
+    ${renderRepeatedMetricsSection(metrics)}
     ${detailSection('Pozíció-preferencia', positionBars, CALIBRATION_TOOLTIPS.priorBias)}
     ${detailSection('Alapértelmezett válaszok kérdésenként', `<div class="detail-grid">${questions}</div>`)}
     ${renderCalibrationWorkflow({ ...entry, status: profile.status || entry.status }, context)}
