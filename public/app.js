@@ -356,12 +356,18 @@ async function updateBudgetBar() {
   const limit = data.limits.globalBudget;
   // limit 0 = a hard stop ki van kapcsolva
   const unlimited = !limit;
-  const pct = unlimited ? 0 : Math.min((used / limit) * 100, 100);
+  const pct = unlimited ? 100 : Math.min((used / limit) * 100, 100);
 
   document.getElementById('budgetTokens').textContent = formatNumber(used);
   document.getElementById('budgetLimit').textContent = unlimited ? '∞' : formatNumber(limit);
   document.getElementById('budgetCost').textContent = formatCost(data.global.costUsd || 0);
-  document.getElementById('budgetProgress').style.width = pct + '%';
+  const progressEl = document.getElementById('budgetProgress');
+  progressEl.style.width = pct + '%';
+  // Unlimited (limit=0) has no denominator to take a percentage of — a plain
+  // width-by-percentage fill would misread as either "0% used" or "budget
+  // exhausted". A distinct striped fill (see .budget-progress-unlimited)
+  // reads as "tracked, not capped" instead of either misleading state.
+  progressEl.classList.toggle('budget-progress-unlimited', unlimited);
   document.querySelector('.budget-widget').title = unlimited
     ? TOOLTIPS.budgetBar + ' A keret-korlát jelenleg KI van kapcsolva (limit=0); a fogyás: ' + formatNumber(used) + ' token.'
     : TOOLTIPS.budgetBar + ' Jelenleg: ' + formatMetric(pct) + '% (' + formatNumber(used) + ' / ' + formatNumber(limit) + ' token).';

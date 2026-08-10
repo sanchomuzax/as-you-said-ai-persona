@@ -215,35 +215,57 @@ body {
   overflow: hidden;
 }
 
-/* Header */
-.app-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 16px 24px;
-  background: var(--color-bg-secondary);
-  border-bottom: 1px solid var(--color-border);
-  gap: 20px;
+/* Workspace top strip (coordinator correction 2026-08-10, replaces the old
+   full-width dark .app-header — docs/mockups/inspector-final.png). Thin,
+   LIGHT (not dark like the nav rail), runs only above .app-main (the nav
+   rail is a sibling, now full viewport height — see .context-sidebar
+   below) — centred, muted platform-name text, no button. Hardcoded colours
+   here rather than the shared --color-* tokens: this strip sits OUTSIDE the
+   `.tab-content, #runDetailView, ...` light-theme re-scope block further
+   down, and is never shown on the dark login screen, so it has no reason to
+   track the root (dark) tokens the way the nav rail intentionally does. */
+.workspace-topbar {
+  height: 40px;
   flex-shrink: 0;
-}
-
-.header-left {
+  position: relative;
   display: flex;
   align-items: center;
-  gap: 12px;
+  justify-content: center;
+  background: #ffffff;
+  border-bottom: 1px solid #e2e8f0;
+  padding: 0 16px;
 }
 
-.header-left h1 {
-  font-size: 20px;
-  font-weight: 600;
-  color: var(--color-accent);
+.workspace-topbar-title {
+  font-size: 12px;
+  font-weight: 400;
+  color: #94a3b8;
+  letter-spacing: 0.02em;
+  text-align: center;
 }
 
 /* Mobile nav toggle (issue #46): hidden on desktop, where #contextSidebar is
    always visible — shown only inside the @media(max-width: 768px) block
-   below, next to the .context-sidebar-collapsed rule it controls. */
+   below. Lives inside .workspace-topbar now (coordinator correction
+   2026-08-10: it lost its home when .app-header was removed) — absolutely
+   positioned against the strip so the title above can stay centred
+   regardless of whether the button is present. */
 .context-sidebar-toggle {
   display: none;
+  position: absolute;
+  left: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  background: none;
+  border: none;
+  padding: 6px;
+  border-radius: 6px;
+  color: #0f172a;
+  cursor: pointer;
+}
+
+.context-sidebar-toggle:hover {
+  background: #f1f5f9;
 }
 
 /* Token Budget card (docs/UI-DESIGN.md §0): its own background token, "50%
@@ -256,19 +278,22 @@ body {
   padding: 8px 12px;
 }
 
-.budget-info {
-  font-size: 12px;
-  color: var(--color-nav-text);
-  margin-bottom: 6px;
-  display: flex;
-  justify-content: space-between;
+/* The single visible spend line (coordinator correction 2026-08-10 —
+   docs/UI-DESIGN.md §0: "nagy félkövér összeg"). Replaces the old
+   `.budget-info` row, which duplicated the token counts also shown by
+   #contextSidebarBudget right below it — those are still in the DOM
+   (id'd spans, .sr-only now) for the tooltip and for the tests that read
+   them, just not painted twice. */
+.budget-widget-amount {
+  font-size: 16px;
+  font-weight: 700;
+  margin-bottom: 8px;
+  font-variant-numeric: tabular-nums;
 }
 
-/* The spend figure ("12.45 USD" style) reads as a live measurement, in the
-   spec's emerald tone — distinct from the plain token counts beside it. */
+/* The spend figure reads as a live measurement, in the spec's emerald tone. */
 #budgetCost {
   color: #34d399;
-  font-variant-numeric: tabular-nums;
 }
 
 .progress-bar {
@@ -299,9 +324,21 @@ body {
   background: #6366f1;
 }
 
-.header-right {
-  display: flex;
-  gap: 12px;
+/* Budget bar, unlimited case (limit=0, "0 = unlimited" — feat commit
+   e7a1c6a). There is no denominator to take a percentage of, so a plain
+   width-by-percentage fill would either read as "0% used" (misleadingly
+   empty) or, if arbitrarily set to 100%, as "budget exhausted"
+   (misleadingly full) — both wrong, since neither is true. A full-width bar
+   in a distinct muted, striped fill instead reads as "tracked, not capped",
+   which is what app.js sets it to (see updateBudgetBar). */
+.budget-widget .progress-fill.budget-progress-unlimited {
+  background: repeating-linear-gradient(
+    45deg,
+    #334155,
+    #334155 6px,
+    #475569 6px,
+    #475569 12px
+  );
 }
 
 /* Context sidebar (issue #19): active project, personas, running measurement,
@@ -352,40 +389,94 @@ body {
 }
 
 /* Logo block (docs/UI-DESIGN.md §0, coordinator correction 2026-08-10): a
-   clickable brand header at the very top of the rail, bleeding to its edges
-   (hence the negative-margin-equivalent 0 side-padding above + its own
-   horizontal padding here) with a bottom border separating it from the menu
-   below, exactly like the mockup's top block. Also a `.tab-btn` (see
+   clickable brand header, bleeding to the rail's edges (hence the negative-
+   margin-equivalent 0 side-padding above + its own horizontal padding here)
+   with a bottom border separating it from the menu below, exactly like the
+   mockup's top block: a small rounded indigo icon square + the wordmark in
+   white/bold — see .sidebar-logo-icon/-text below. `order: -1` pins it to
+   the visual top of the flex column regardless of where it sits in the
+   DOM — it is placed AFTER <nav class="tabs"> in index.html on purpose (see
+   the comment there) so the real [data-tab="overview"] menu item, not this
+   logo, is the first DOM match for that selector. Also a `.tab-btn` (see
    index.html) so it reuses the app's existing tab click-wiring — this rule
-   only styles it, .sidebar-logo.active below stops it from ALSO picking up
-   the generic indigo "active pill" look, which would misread as a second
-   nav item rather than a static logo. */
+   only styles it, and the `.context-sidebar .sidebar-logo.active` override
+   further down stops it from ALSO picking up the generic indigo "active
+   pill" look (higher specificity than `.tab-btn.active`, so it wins
+   regardless of the two rules' order in this file) — a filled pill here
+   would misread as a second nav item rather than a static logo. In normal
+   operation the logo never actually receives `.active` any more (the DOM
+   reorder above already prevents that); this is defence in depth, not the
+   fix itself. */
 .sidebar-logo {
-  display: block;
+  order: -1;
+  display: flex;
+  align-items: center;
+  gap: 10px;
   width: calc(100% + 32px);
   margin: 0 -16px 12px;
   padding: 18px 16px;
   border: none;
   border-bottom: 1px solid var(--color-border);
   background: transparent;
-  color: #ffffff;
-  font-size: 16px;
-  font-weight: 700;
   text-align: left;
   cursor: pointer;
   border-radius: 0;
 }
 
-.sidebar-logo:hover,
-.sidebar-logo.active {
-  background: var(--color-nav-hover-bg);
+.sidebar-logo-icon {
+  flex-shrink: 0;
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--color-nav-active-bg);
+  border-radius: 6px;
+}
+
+.sidebar-logo-text {
   color: #ffffff;
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.sidebar-logo:hover {
+  background: var(--color-nav-hover-bg);
+}
+
+.context-sidebar .sidebar-logo.active {
+  background: var(--color-nav-hover-bg);
 }
 
 .context-sidebar-budget-section {
   margin-top: auto;
   padding-top: 16px;
   border-top: 1px solid var(--color-border);
+}
+
+/* Kijelentkezés (coordinator correction 2026-08-10): relocated from the
+   removed .app-header to the very bottom of the rail — a quiet text row
+   below the budget widget, not a button competing with the menu above it.
+   Sits after .context-sidebar-budget-section in the DOM; that section's own
+   margin-top: auto already pushes the pair of them down together, so this
+   ends up flush with the rail's bottom edge without needing its own
+   auto-margin. */
+.sidebar-logout-btn {
+  margin-top: 12px;
+  width: 100%;
+  text-align: left;
+  padding: 8px 4px;
+  background: none;
+  border: none;
+  border-radius: 6px;
+  color: var(--color-nav-text);
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.sidebar-logout-btn:hover {
+  background: var(--color-nav-hover-bg);
+  color: #ffffff;
 }
 
 .context-sidebar-section {
@@ -444,8 +535,16 @@ body {
   border-top: 1px solid var(--color-border);
 }
 
+/* display:flex (not the old block) so each item can carry an icon in front
+   of its label (coordinator correction 2026-08-10 — docs/mockups/
+   inspector-final.png: every menu item has a small leading icon). The icons
+   themselves are inline SVG (no icon library — CLAUDE.md forbids one in
+   this stack), currentColor, so they pick up the same hover/active text
+   colour as the label for free. */
 .tab-btn {
-  display: block;
+  display: flex;
+  align-items: center;
+  gap: 10px;
   width: 100%;
   text-align: left;
   padding: 8px 12px;
@@ -457,6 +556,10 @@ body {
   font-size: 14px;
   font-weight: 500;
   transition: background-color 0.2s, color 0.2s;
+}
+
+.tab-btn-icon {
+  flex-shrink: 0;
 }
 
 .tabs-group-secondary .tab-btn {
@@ -493,8 +596,25 @@ body {
   display: none;
 }
 
+/* Content column, centred (docs/UI-DESIGN.md §0, coordinator correction
+   2026-08-10: "MINDEN fülön, nem csak a válaszkártya-nézetben" — every tab
+   pane, not only the run detail's response-card view, which already had
+   this via .response-cards-view). .tab-content keeps its own full-bleed
+   #f8fafc background and 24px padding; this only constrains and centres the
+   READING column inside that padded area — the classic max-width + auto-
+   margin block pattern, deliberately not applied to .tab-content itself
+   (that would shrink its light background to a 896px island instead of
+   filling the workspace). None of the app's tab panes contain a wide
+   `<table>` that would break at this width — the app has exactly two
+   `<table>` elements total, and both live outside .tab-content (the
+   5-column persona-breakdown-table and the always-hidden #responsesTable,
+   both inside the run detail view, not a tab pane) — so no table became
+   unusable here; card/list grids (.runs-grid etc.) just reflow to fewer
+   columns, same as .response-cards-view already did. */
 .tab-pane.active {
   display: block;
+  max-width: 896px;
+  margin: 0 auto;
 }
 
 .tab-section {
@@ -851,11 +971,13 @@ body {
    (--color-ink, the "-text" variants) needing a second look.
 
    Selector list = every container the app actually shows text in outside the
-   nav rail and the global (still-dark) .app-header: .tab-content is the tab
-   workspace itself; the four #...View sections are the full-page detail
-   views (run / entity / model / interview); #provenancePanel is the
-   Inspector. .app-header, .login-screen and .context-sidebar are NOT listed
-   — they keep the root (dark) tokens on purpose. */
+   nav rail: .tab-content is the tab workspace itself; the four #...View
+   sections are the full-page detail views (run / entity / model /
+   interview); #provenancePanel is the Inspector. .login-screen and
+   .context-sidebar are NOT listed — they keep the root (dark) tokens on
+   purpose. The .workspace-topbar strip above .tab-content is ALSO light but
+   is styled with hardcoded hex further up (search "Workspace top strip") —
+   it sits outside this scope and never needed the shared tokens. */
 .tab-content,
 #runDetailView,
 #entityDetailView,
@@ -1399,25 +1521,14 @@ body {
     gap: 6px;
   }
 
-  .app-header {
-    flex-direction: column;
-    gap: 12px;
+  /* The strip's centred title would otherwise sit under/behind the toggle
+     button on a narrow screen — left padding clears it. */
+  .workspace-topbar {
+    padding-left: 44px;
   }
 
-  .header-left {
-    width: 100%;
-  }
-
-  .header-left h1 {
-    font-size: 18px;
-  }
-
-  .header-right {
-    width: 100%;
-  }
-
-  .header-right .btn {
-    flex: 1;
+  .workspace-topbar-title {
+    font-size: 11px;
   }
 
   .tab-content {
@@ -1711,7 +1822,11 @@ body {
 /* ---- Response provenance panel ---- */
 .provenance-panel {
   position: fixed;
-  top: 0;
+  /* Starts below .workspace-topbar (40px), not the viewport top — the
+     coordinator's mockup (docs/mockups/inspector-final.png) shows the thin
+     light strip running above BOTH the workspace and the Inspector, which
+     only holds if the Inspector doesn't extend up under it. */
+  top: 40px;
   right: 0;
   /* docs/UI-DESIGN.md §0: Inspector fixed width 320px. The Response
      Provenance content this panel also renders (raw prompt/output blocks,
@@ -1719,7 +1834,7 @@ body {
      at 320px those blocks scroll within their own max-height instead of
      widening the panel; see .provenance-pre. */
   width: min(320px, 100%);
-  height: 100vh;
+  height: calc(100vh - 40px);
   overflow-y: auto;
   background: var(--color-bg);
   border-left: 1px solid var(--color-border);
@@ -2299,11 +2414,11 @@ body {
 }
 
 /* ----- Response cards (Válaszok tab) ----- */
-/* docs/UI-DESIGN.md §0: content column centred, 896px max width. Scoped to
-   this specific container (not to .tab-content generally) — the app's other
-   tabs are dashboards/grids that need the full workspace width; only the
-   per-question response list matches the mockup's single-column reading
-   layout. */
+/* docs/UI-DESIGN.md §0: content column centred, 896px max width. This lives
+   inside #runDetailView (a full-page detail view, opened by clicking into a
+   run — not one of the .tab-pane elements .tab-content holds, see that
+   rule's own comment for the equivalent treatment there), so it needs its
+   own max-width + auto-margin rather than inheriting one. */
 .response-cards-view {
   max-width: 896px;
   margin: 0 auto;

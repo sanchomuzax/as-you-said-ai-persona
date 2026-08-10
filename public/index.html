@@ -29,24 +29,6 @@
 
   <!-- Main App -->
   <div id="appContainer" class="app-container" style="display: none;">
-    <!-- Header -->
-    <header class="app-header">
-      <div class="header-left">
-        <!-- Mobile nav toggle (issue #46): shows/hides #contextSidebar on
-             narrow screens, following the same aria-expanded/aria-controls
-             pattern as public/collapsible.js. Hidden on desktop, where the
-             sidebar is always visible — see public/style.css. -->
-        <button type="button" id="contextSidebarToggle" class="btn btn-secondary context-sidebar-toggle"
-                aria-controls="contextSidebar" aria-expanded="true">
-          <span aria-hidden="true">&#9776;</span> Menü
-        </button>
-        <h1>as-you-said — AI persona kutatás</h1>
-      </div>
-      <div class="header-right">
-        <button id="logoutBtn" class="btn btn-secondary">Kijelentkezés</button>
-      </div>
-    </header>
-
     <div class="app-body">
       <!-- Context sidebar (issue #19): active project, its personas, the one
            running measurement and the token budget — visible on every tab.
@@ -54,15 +36,6 @@
            fetches; see app.js (selectProjectEverywhere, updateProjectDropdowns)
            and runs-list.js (pollRunningProgress) for the data it rides on. -->
       <aside id="contextSidebar" class="context-sidebar" aria-label="Kontextus: aktív projekt, navigáció, token-keret">
-        <!-- Logo block (docs/UI-DESIGN.md §0/coordinator correction 2026-08-10):
-             the top-of-rail brand block from the mockup, clickable, routing to
-             Áttekintés — reuses the existing data-tab="overview" wiring
-             (public/app.js's generic `.tab-btn` click listener + setActiveTab),
-             not a new navigation path. -->
-        <button type="button" class="sidebar-logo tab-btn" data-tab="overview" aria-label="as-you-said — Áttekintés megnyitása">
-          as-you-said
-        </button>
-
         <div class="context-sidebar-section">
           <label for="contextSidebarProjectSelect">Aktív projekt</label>
           <select id="contextSidebarProjectSelect">
@@ -72,19 +45,33 @@
 
         <!-- Tabs (issue #46, narrowed 2026-08-10 per the coordinator's visual
              correction): the left rail shows ONLY the four work-focused items
-             below — docs/UI-DESIGN.md §2/§0. Áttekintés is now the logo above;
+             below — docs/UI-DESIGN.md §2/§0. Áttekintés is now the logo below;
              Projektek/Kérdőívek moved to the Áttekintés tab's "Gyors belépés"
              (see #tab-overview .overview-quick-actions further down). The old
              three buttons stay in the DOM, `hidden`, so the existing hash
              routing (data-tab="overview"/"projects"/"questionnaires") and the
              tests pinned to them keep working unchanged — nothing was
-             rebuilt, only what is VISIBLE narrowed. -->
+             rebuilt, only what is VISIBLE narrowed.
+             Icons (2026-08-10 visual correction): inline SVG, currentColor,
+             aria-hidden — no icon library allowed in this stack (CLAUDE.md). -->
         <nav class="tabs" aria-label="Fő navigáció">
           <div class="tabs-group tabs-group-primary" role="group" aria-label="Fő menüpontok">
-            <button class="tab-btn" data-tab="runs">Futtatások</button>
-            <button class="tab-btn" data-tab="personas">Perszónák</button>
-            <button class="tab-btn" data-tab="interviews">Interjúk</button>
-            <button class="tab-btn" data-tab="models">Modellek</button>
+            <button class="tab-btn" data-tab="runs">
+              <svg class="tab-btn-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M8 6h13M8 12h13M8 18h13"/><path d="M3 6h.01M3 12h.01M3 18h.01"/></svg>
+              <span>Futtatások</span>
+            </button>
+            <button class="tab-btn" data-tab="personas">
+              <svg class="tab-btn-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+              <span>Perszónák</span>
+            </button>
+            <button class="tab-btn" data-tab="interviews">
+              <svg class="tab-btn-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+              <span>Interjúk</span>
+            </button>
+            <button class="tab-btn" data-tab="models">
+              <svg class="tab-btn-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><rect x="6" y="6" width="12" height="12" rx="2"/><path d="M12 1v3M12 20v3M4.2 4.2l2.1 2.1M17.7 17.7l2.1 2.1M1 12h3M20 12h3M4.2 19.8l2.1-2.1M17.7 6.3l2.1-2.1"/></svg>
+              <span>Modellek</span>
+            </button>
           </div>
           <div class="tabs-group tabs-group-secondary" role="group" aria-label="További nézetek" hidden>
             <button class="tab-btn active" data-tab="overview">Áttekintés</button>
@@ -92,6 +79,29 @@
             <button class="tab-btn" data-tab="questionnaires">Kérdőívek</button>
           </div>
         </nav>
+
+        <!-- Logo block (docs/UI-DESIGN.md §0/coordinator correction 2026-08-10):
+             the brand block from the mockup, clickable, routing to Áttekintés —
+             reuses the existing data-tab="overview" wiring (public/app.js's
+             generic `.tab-btn` click listener + setActiveTab), not a new
+             navigation path. Placed here in SOURCE order (after the nav, whose
+             hidden secondary group already carries the real data-tab="overview"
+             menu item) and pinned to the visual top with `order: -1` in CSS —
+             so `document.querySelector('[data-tab="overview"]')` (used by
+             app.js's setActiveTab AND by tests/frontend-overview.test.ts) finds
+             the actual menu item first, not this logo. Before this reordering
+             the logo sat first in the DOM, silently absorbed setActiveTab's
+             .active class + aria-current, and rendered as a filled indigo
+             "active tab" pill — the exact bug the coordinator flagged ("a logó
+             ma indigó kitöltésű gombnak látszik"). It stays a `.tab-btn` (for
+             the click wiring) but never becomes the FIRST [data-tab="overview"]
+             match, so it never receives that state again. -->
+        <button type="button" class="sidebar-logo tab-btn" data-tab="overview" aria-label="as-you-said — Áttekintés megnyitása">
+          <span class="sidebar-logo-icon" aria-hidden="true">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#ffffff" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 18l5-7 4 4 7-10"/></svg>
+          </span>
+          <span class="sidebar-logo-text">as-you-said</span>
+        </button>
 
         <!-- Perszónák / Futó mérés / Modell-kalibráció summaries: kept in the
              DOM (`hidden`, not removed) — tests/frontend-context-sidebar.test.ts
@@ -134,25 +144,61 @@
 
         <div class="context-sidebar-section context-sidebar-budget-section">
           <h3>Token-keret</h3>
-          <!-- Global budget widget (relocated from .app-header, issue #46):
-               same ids, same behaviour — only its position moved, so it
-               stays the single live widget instead of a second copy. -->
+          <!-- Global budget widget (relocated from .app-header, issue #46).
+               Coordinator correction 2026-08-10: this used to be TWO stacked
+               blocks with near-duplicate content (this widget, plus
+               #contextSidebarBudget's own "used/limit token" line and its
+               "Mérés:"/"Interjú:" scope breakdown below it) — docs/UI-DESIGN.md
+               §0 calls for exactly one: a label, one big bold spend figure
+               (#budgetCost, the #34d399 accent), a thin 8px bar. Same ids,
+               same behaviour, ids and values unchanged — only what is VISIBLE
+               was cut down to one block. The raw token counts and the
+               per-scope breakdown are not deleted (tests/frontend-context-
+               sidebar.test.ts's "shows the global usage against the limit,
+               split by scope" and "degrades to a stated unknown..." tests
+               still read #contextSidebarBudget's text), just moved off-screen
+               with .sr-only — reachable in the tooltip below and by assistive
+               tech, not duplicated as a second visible card. -->
           <div class="budget-widget" title="Globális token-keret: az összes futtatás eddigi tokenfogyasztása a beállított kerethez képest.">
-            <div class="budget-info">
-              <span id="budgetTokens">-</span> / <span id="budgetLimit">-</span> token
+            <div class="budget-widget-amount">
               <span id="budgetCost">-</span> USD
             </div>
             <div class="progress-bar">
               <div id="budgetProgress" class="progress-fill" style="width: 0%"></div>
             </div>
+            <p class="sr-only">
+              <span id="budgetTokens">-</span> / <span id="budgetLimit">-</span> token
+            </p>
           </div>
-          <div id="contextSidebarBudget">
+          <div id="contextSidebarBudget" class="sr-only">
             <p class="placeholder">Betöltés...</p>
           </div>
         </div>
+
+        <!-- Kijelentkezés (relocated from the removed full-width .app-header,
+             coordinator correction 2026-08-10): pinned to the very bottom of
+             the rail, styled as a quiet text row, not a button competing with
+             the menu above it — same #logoutBtn id, same app.js listener. -->
+        <button type="button" id="logoutBtn" class="sidebar-logout-btn">Kijelentkezés</button>
       </aside>
 
       <div class="app-main">
+    <!-- Thin light strip above the workspace + Inspector (coordinator
+         correction 2026-08-10): replaces the old full-width dark
+         .app-header. Runs only over .app-main's width (the nav rail is not
+         under it, and is now full viewport height instead — see
+         .context-sidebar in public/style.css). No button lives here; the
+         mobile nav toggle is the one exception (docs/mockups/inspector-final.png
+         has no equivalent, but #contextSidebarToggle needs SOME home under
+         768px or the mobile menu disappears entirely). -->
+    <div class="workspace-topbar">
+      <button type="button" id="contextSidebarToggle" class="context-sidebar-toggle"
+              aria-controls="contextSidebar" aria-expanded="true">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M3 12h18M3 6h18M3 18h18"/></svg>
+        <span class="sr-only">Menü</span>
+      </button>
+      <h1 class="workspace-topbar-title">as-you-said — AI persona kutatás</h1>
+    </div>
     <!-- Tab Content -->
     <main class="tab-content">
       <!-- Overview Tab (issue #20): the default landing tab — running/stalled
