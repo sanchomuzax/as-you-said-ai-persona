@@ -695,7 +695,7 @@ function groupResponsesByQuestion(responses) {
  * in the permutation was largest — only the fill's SHADE is picked by rank
  * (largest share, second, rest).
  */
-function renderResponseDistributionBar(parsedJson, isMultiChoice) {
+function renderResponseDistributionBar(parsedJson, isMultiChoice, optionsJson) {
   if (!parsedJson) return '<p class="placeholder-inline">Nincs eloszlás-adat.</p>';
   let data;
   try {
@@ -716,6 +716,22 @@ function renderResponseDistributionBar(parsedJson, isMultiChoice) {
     tierByKey.set(key, i === 0 ? 'dist-fill-1' : i === 1 ? 'dist-fill-2' : 'dist-fill-3');
   });
 
+  // The distribution is keyed by option INDEX ("0", "1", …). Showing that index
+  // as the label is meaningless to a reader — the mockup shows the option's own
+  // wording inside the bar. Fall back to the raw key only if the option list is
+  // missing, so a data gap stays visible instead of silently blank.
+  let optionLabels = [];
+  try {
+    optionLabels = optionsJson ? (typeof optionsJson === 'string' ? JSON.parse(optionsJson) : optionsJson) : [];
+  } catch (e) {
+    optionLabels = [];
+  }
+  const labelFor = (key) => {
+    const idx = Number(key);
+    const named = Number.isInteger(idx) && Array.isArray(optionLabels) ? optionLabels[idx] : undefined;
+    return typeof named === 'string' && named.length > 0 ? named : key;
+  };
+
   const rows = entries
     .map(([key, value]) => {
       const pct = Math.round((isMultiChoice ? value : total > 0 ? value / total : 0) * 100);
@@ -724,7 +740,7 @@ function renderResponseDistributionBar(parsedJson, isMultiChoice) {
         <div class="dist-row">
           <div class="dist-track">
             <div class="dist-fill ${tierClass}" style="width: ${pct}%"></div>
-            <span class="dist-label">${escapeHtml(key)} (${pct}%)</span>
+            <span class="dist-label">${escapeHtml(labelFor(key))} (${pct}%)</span>
           </div>
         </div>
       `;
@@ -800,7 +816,7 @@ function renderResponseCard(resp, viewMode) {
   const isInvalid = resp.is_valid === 0;
   const bodyContent = isInvalid
     ? `<p class="placeholder-inline" title="${escapeHtml(TOOLTIPS.invalid)}">✗ Nem értelmezhető modellkimenet.</p>`
-    : renderResponseDistributionBar(resp.parsed_distribution_json, multi);
+    : renderResponseDistributionBar(resp.parsed_distribution_json, multi, resp.options_json);
 
   return `
     <div class="response-card" data-response-id="${escapeHtml(resp.id)}" data-persona-id="${escapeHtml(resp.persona_id || '')}" role="button" tabindex="0" title="Kattints a perszóna provenienciájáért.">
