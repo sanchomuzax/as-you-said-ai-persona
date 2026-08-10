@@ -32,18 +32,15 @@
     <!-- Header -->
     <header class="app-header">
       <div class="header-left">
+        <!-- Mobile nav toggle (issue #46): shows/hides #contextSidebar on
+             narrow screens, following the same aria-expanded/aria-controls
+             pattern as public/collapsible.js. Hidden on desktop, where the
+             sidebar is always visible — see public/style.css. -->
+        <button type="button" id="contextSidebarToggle" class="btn btn-secondary context-sidebar-toggle"
+                aria-controls="contextSidebar" aria-expanded="true">
+          <span aria-hidden="true">&#9776;</span> Menü
+        </button>
         <h1>as-you-said — AI persona kutatás</h1>
-      </div>
-      <div class="header-center">
-        <div class="budget-widget" title="Globális token-keret: az összes futtatás eddigi tokenfogyasztása a beállított kerethez képest.">
-          <div class="budget-info">
-            <span id="budgetTokens">-</span> / <span id="budgetLimit">-</span> token
-            <span id="budgetCost">-</span> USD
-          </div>
-          <div class="progress-bar">
-            <div id="budgetProgress" class="progress-fill" style="width: 0%"></div>
-          </div>
-        </div>
       </div>
       <div class="header-right">
         <button id="logoutBtn" class="btn btn-secondary">Kijelentkezés</button>
@@ -56,13 +53,33 @@
            Built by context-sidebar.js from state/endpoints the app already
            fetches; see app.js (selectProjectEverywhere, updateProjectDropdowns)
            and runs-list.js (pollRunningProgress) for the data it rides on. -->
-      <aside id="contextSidebar" class="context-sidebar" aria-label="Kontextus: aktív projekt, perszónák, futó mérés, token-keret">
+      <aside id="contextSidebar" class="context-sidebar" aria-label="Kontextus: aktív projekt, navigáció, perszónák, futó mérés, token-keret">
         <div class="context-sidebar-section">
           <label for="contextSidebarProjectSelect">Aktív projekt</label>
           <select id="contextSidebarProjectSelect">
             <option value="">-- Válassz projektet --</option>
           </select>
         </div>
+
+        <!-- Tabs (issue #46): relocated here from above main.tab-content, so
+             navigation lives with the project/context it scopes. The four
+             work-focused items (docs/UI-DESIGN.md §2) come first, emphasized;
+             Áttekintés/Projektek/Kérdőívek stay available in a visually
+             secondary group below — dropping them would remove the landing
+             view and the only way to reach project/questionnaire setup. -->
+        <nav class="tabs" aria-label="Fő navigáció">
+          <div class="tabs-group tabs-group-primary" role="group" aria-label="Fő menüpontok">
+            <button class="tab-btn" data-tab="runs">Futtatások</button>
+            <button class="tab-btn" data-tab="personas">Perszónák</button>
+            <button class="tab-btn" data-tab="interviews">Interjúk</button>
+            <button class="tab-btn" data-tab="models">Modellek</button>
+          </div>
+          <div class="tabs-group tabs-group-secondary" role="group" aria-label="További nézetek">
+            <button class="tab-btn active" data-tab="overview">Áttekintés</button>
+            <button class="tab-btn" data-tab="projects">Projektek</button>
+            <button class="tab-btn" data-tab="questionnaires">Kérdőívek</button>
+          </div>
+        </nav>
 
         <div class="context-sidebar-section">
           <h3>Perszónák</h3>
@@ -92,6 +109,18 @@
 
         <div class="context-sidebar-section">
           <h3>Token-keret</h3>
+          <!-- Global budget widget (relocated from .app-header, issue #46):
+               same ids, same behaviour — only its position moved, so it
+               stays the single live widget instead of a second copy. -->
+          <div class="budget-widget" title="Globális token-keret: az összes futtatás eddigi tokenfogyasztása a beállított kerethez képest.">
+            <div class="budget-info">
+              <span id="budgetTokens">-</span> / <span id="budgetLimit">-</span> token
+              <span id="budgetCost">-</span> USD
+            </div>
+            <div class="progress-bar">
+              <div id="budgetProgress" class="progress-fill" style="width: 0%"></div>
+            </div>
+          </div>
           <div id="contextSidebarBudget">
             <p class="placeholder">Betöltés...</p>
           </div>
@@ -99,17 +128,6 @@
       </aside>
 
       <div class="app-main">
-    <!-- Tabs -->
-    <nav class="tabs">
-      <button class="tab-btn active" data-tab="overview">Áttekintés</button>
-      <button class="tab-btn" data-tab="projects">Projektek</button>
-      <button class="tab-btn" data-tab="personas">Perszónák</button>
-      <button class="tab-btn" data-tab="questionnaires">Kérdőívek</button>
-      <button class="tab-btn" data-tab="runs">Futtatások</button>
-      <button class="tab-btn" data-tab="interviews">Interjúk</button>
-      <button class="tab-btn" data-tab="models">Modellek</button>
-    </nav>
-
     <!-- Tab Content -->
     <main class="tab-content">
       <!-- Overview Tab (issue #20): the default landing tab — running/stalled

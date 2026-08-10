@@ -202,3 +202,24 @@ document.getElementById('contextSidebar')?.addEventListener('keydown', (e) => {
   }
   void handleEntityClick(e.target, e.currentTarget);
 });
+
+// Mobile nav toggle (issue #46): shows/hides #contextSidebar on narrow
+// screens. Same aria-expanded/aria-controls + toggled-class idiom
+// public/collapsible.js already uses for the creator forms, reused here
+// rather than invented fresh — the class only does anything inside the
+// public/style.css @media(max-width: 768px) block; on desktop the sidebar
+// is always visible and the toggle button itself is hidden by CSS.
+const CONTEXT_SIDEBAR_COLLAPSED_CLASS = 'context-sidebar-collapsed';
+
+function setContextSidebarCollapsed(collapsed) {
+  const sidebar = document.getElementById('contextSidebar');
+  const toggle = document.getElementById('contextSidebarToggle');
+  if (!sidebar || !toggle) return;
+  sidebar.classList.toggle(CONTEXT_SIDEBAR_COLLAPSED_CLASS, collapsed);
+  toggle.setAttribute('aria-expanded', String(!collapsed));
+}
+
+document.getElementById('contextSidebarToggle')?.addEventListener('click', (e) => {
+  const wasExpanded = e.currentTarget.getAttribute('aria-expanded') === 'true';
+  setContextSidebarCollapsed(wasExpanded);
+});

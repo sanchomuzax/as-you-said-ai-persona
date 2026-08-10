@@ -141,10 +141,17 @@ body {
 }
 
 /* App Container */
+/* issue #46: a fixed (not min-) height plus overflow:hidden here is what
+   stops the whole PAGE from scrolling — every panel below already scrolls
+   internally (.context-sidebar, .tab-content, the detail-view sections all
+   carry their own overflow-y: auto), so once this outer box stops growing
+   past the viewport, that internal scrolling is what the user actually
+   reaches, instead of the browser scrollbar hiding it. */
 .app-container {
   display: flex;
   flex-direction: column;
-  min-height: 100vh;
+  height: 100vh;
+  overflow: hidden;
 }
 
 /* Header */
@@ -156,6 +163,13 @@ body {
   background: var(--color-bg-secondary);
   border-bottom: 1px solid var(--color-border);
   gap: 20px;
+  flex-shrink: 0;
+}
+
+.header-left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
 }
 
 .header-left h1 {
@@ -164,9 +178,11 @@ body {
   color: var(--color-accent);
 }
 
-.header-center {
-  flex: 1;
-  max-width: 300px;
+/* Mobile nav toggle (issue #46): hidden on desktop, where #contextSidebar is
+   always visible — shown only inside the @media(max-width: 768px) block
+   below, next to the .context-sidebar-collapsed rule it controls. */
+.context-sidebar-toggle {
+  display: none;
 }
 
 .budget-widget {
@@ -215,6 +231,12 @@ body {
 .app-main {
   flex: 1;
   min-width: 0;
+  /* min-height: 0 (not the flex-item default of auto) is what lets the
+     column below (main.tab-content, flex:1 + overflow-y:auto) actually
+     shrink to the available space and scroll internally, instead of
+     stretching this box past it — the standard nested-flex-scroll pattern
+     issue #46's "no global scroll" requirement depends on. */
+  min-height: 0;
   display: flex;
   flex-direction: column;
 }
@@ -253,34 +275,58 @@ body {
   margin: 6px 0;
 }
 
-/* Tabs */
+/* Tabs — a vertical menu inside .context-sidebar (issue #46). The four
+   work-focused items (docs/UI-DESIGN.md §2: Futtatások · Perszónák ·
+   Interjúk · Modellek) form the emphasized primary group; Áttekintés /
+   Projektek / Kérdőívek stay reachable in a visually secondary group below
+   a divider, not deleted — see index.html for why. */
 .tabs {
   display: flex;
-  gap: 12px;
-  padding: 12px 24px;
-  border-bottom: 1px solid var(--color-border);
-  background: var(--color-bg-secondary);
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 24px;
+}
+
+.tabs-group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.tabs-group-secondary {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--color-border);
 }
 
 .tab-btn {
-  padding: 8px 16px;
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 8px 12px;
   background: none;
   border: none;
-  border-bottom: 2px solid transparent;
+  border-radius: 6px;
   color: var(--color-text-secondary);
   cursor: pointer;
   font-size: 14px;
   font-weight: 500;
-  transition: all 0.2s;
+  transition: background-color 0.2s, color 0.2s;
+}
+
+.tabs-group-secondary .tab-btn {
+  font-size: 13px;
+  font-weight: 400;
 }
 
 .tab-btn:hover {
   color: var(--color-text);
+  background-color: var(--color-bg-tertiary);
 }
 
 .tab-btn.active {
   color: var(--color-accent);
-  border-bottom-color: var(--color-accent);
+  background-color: rgba(20, 184, 166, 0.12);
 }
 
 /* Tab Content */
@@ -1090,18 +1136,32 @@ body {
     max-height: 40vh;
   }
 
+  /* Collapsed by #contextSidebarToggle (issue #46): the panel leaves the
+     layout entirely so .app-main/the Inspector can use the full width —
+     "Inspector teljes felületet foglaljon" only matters once the sidebar
+     is out of the way. Desktop never applies this rule, so the toggle
+     being clicked there (it is display:none, but just in case) is a no-op. */
+  .context-sidebar.context-sidebar-collapsed {
+    display: none;
+  }
+
+  .context-sidebar-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+
   .app-header {
     flex-direction: column;
     gap: 12px;
   }
 
-  .header-left h1 {
-    font-size: 18px;
+  .header-left {
+    width: 100%;
   }
 
-  .header-center {
-    width: 100%;
-    max-width: none;
+  .header-left h1 {
+    font-size: 18px;
   }
 
   .header-right {
@@ -1110,10 +1170,6 @@ body {
 
   .header-right .btn {
     flex: 1;
-  }
-
-  .tabs {
-    flex-wrap: wrap;
   }
 
   .tab-content {

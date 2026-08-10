@@ -217,10 +217,15 @@ function setActiveTab(tabName) {
   if (modelView) modelView.style.display = 'none';
   document.querySelector('.tab-content').style.display = 'block';
   document.querySelectorAll('.tab-pane').forEach(p => p.classList.remove('active'));
-  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+  document.querySelectorAll('.tab-btn').forEach(b => {
+    b.classList.remove('active');
+    b.removeAttribute('aria-current');
+  });
 
   document.getElementById('tab-' + tabName)?.classList.add('active');
-  document.querySelector('[data-tab="' + tabName + '"]')?.classList.add('active');
+  const activeTabBtn = document.querySelector('[data-tab="' + tabName + '"]');
+  activeTabBtn?.classList.add('active');
+  activeTabBtn?.setAttribute('aria-current', 'page');
 }
 
 // List Rendering
