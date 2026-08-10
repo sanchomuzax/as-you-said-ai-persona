@@ -95,6 +95,27 @@ mutually exclusive states:
 Below it, a **Coverage** section lists which topics the persona *is* and *is not*
 grounded for — this is what makes the badge useful rather than merely honest.
 
+> **Which state our personas actually get today (2026-08-10, researcher's ruling).**
+> **Neutral grey — "A lefedettség nincs dokumentálva" — and that is final, not a
+> stopgap.** Grounding requires an empirical text corpus (customer feedback,
+> interviews, posts). Our personas have a demographic anchor core from external
+> statistics and nothing else. Life-history generation can spin that into a
+> coherent value system, but that is synthetic improvisation, not evidence: with
+> no empirical text behind it, a persona is grounded in *no* topic.
+>
+> So the green and amber states are unreachable for our current personas, and the
+> **Coverage lists do not render at all** — an empty or invented list is worse than
+> none, and the badge has already stated the correct thing.
+>
+> Do not "fix" this by adding a topic model. That would put the green shield back
+> by the side door, which §7.5 exists to forbid. The prerequisite is VoC-based
+> grounding (RAG) — tracked in issue #50, which also records the design frame the
+> researcher settled: a controlled taxonomy of **at most three levels**, coverage
+> computed **at run time** by vector search over an evidence store (not assigned by
+> hand — coverage is a live status, not a sticker), and versioned with the
+> Provenance Card against the **persona version**, together with the model version
+> and prompt template, to avoid version collapse.
+
 The abstention reason is generated from recorded run data only (which persona
 attributes were available, the measured abstention and invalid counts for this
 model and question, and the calibration profile's validity). The earlier
