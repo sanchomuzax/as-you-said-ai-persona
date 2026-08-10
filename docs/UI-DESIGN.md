@@ -8,6 +8,76 @@ Reference prototype: [`docs/mockups/three-panel-prototype.tsx`](mockups/three-pa
 The interface has to convey scientific rigour and stay usable by a media
 professional, not a developer. Everything below serves that pair of goals.
 
+## 0. Visual specification — AUTHORITATIVE, implement exactly
+
+Derived from [`docs/mockups/three-panel-prototype.tsx`](mockups/three-panel-prototype.tsx).
+The prototype's Tailwind classes are translated to concrete values below so a
+vanilla-CSS implementation is pixel-equivalent. **These are not suggestions.**
+If something here is impossible, say so before building something else.
+
+### Layout (fixed)
+
+| Element | Value |
+|---|---|
+| Page | `height: 100vh`, `display: flex`, no page scroll (`overflow: hidden`) |
+| Left nav | fixed width **256px**, never collapses, full height |
+| Workspace | `flex: 1`, min-width 0, own vertical scroll |
+| Workspace header | fixed height **64px** |
+| Workspace content | `max-width: 896px`, centred, padding **24px** |
+| Inspector | fixed width **320px**, right edge, own scroll, hidden by default |
+| Card radius | **8px** · Chip/button radius **6px** · Avatar `border-radius: 50%` |
+| Response avatar | **40×40px** · Inspector header avatar **80×80px** |
+| Distribution bar | height **24px** · Token budget bar height **8px** |
+
+### Colour (hex, exact)
+
+| Role | Hex |
+|---|---|
+| Nav background | `#0f172a` |
+| Nav text | `#cbd5e1` · active item text `#ffffff` |
+| Nav active item background | `#4f46e5` |
+| Nav hover background | `#1e293b` |
+| Token widget background | `#020617` (50% over nav) |
+| Workspace background | `#f8fafc` |
+| Card / header background | `#ffffff` |
+| Border (all light surfaces) | `#e2e8f0` |
+| Primary text | `#0f172a` · Secondary `#64748b` · Muted `#94a3b8` |
+| Accent (primary bar, active toggle text, links) | `#4f46e5` |
+| Accent secondary (second bar segment) | `#818cf8` |
+| Neutral bar segment | `#94a3b8` |
+| Budget bar fill | `#6366f1` on track `#1e293b` |
+| Spend figure | `#34d399` |
+| **Gap card background** | `#fffbeb` |
+| **Gap card border** | `#fde68a`, **left border 4px `#f59e0b`** |
+| Gap card text | `#92400e` |
+| Gap chip | text `#92400e` on `#fef3c7`, border `#fde68a` |
+| X-Ray panel | background `#0f172a`, text `#cbd5e1`, code block `#020617` on `#94a3b8` text |
+
+### Typography
+
+- System sans stack throughout; **X-Ray panel and all raw values in monospace**.
+- Workspace H1 **18px/600**, question H2 **20px/500**, card title **16px/600**,
+  body **14px**, meta and chips **12px**, X-Ray **12px mono**.
+- Nav section labels: **12px, uppercase, letter-spacing 0.05em**, colour `#94a3b8`.
+
+### The two components that must look right
+
+**Analyst/Engineer toggle** — a single pill, not two separate buttons:
+container `#f1f5f9` with 1px `#e2e8f0` border, 4px padding, 8px radius. The
+active half gets a white background, `shadow-sm`, and accent text `#4f46e5`;
+in Engineer mode the active half is `#0f172a` with white text. Inactive half is
+transparent with `#64748b` text.
+
+**Response card** — white, 1px `#e2e8f0`, 8px radius, `shadow-sm`, hover border
+`#a5b4fc`, clickable. Inside: 40px avatar, name, version chip on the right, then
+the distribution bar. In Engineer mode a **`#0f172a` block appears below the card
+body**, full-bleed to the card edges, containing a two-column metadata grid and
+the raw output in a `#020617` code box.
+
+**Gap card is the same card, restyled** — `#fffbeb` background, `#fde68a` border,
+**4px `#f59e0b` left border**, amber warning glyph in a white circle instead of
+the avatar. Never red, never a red icon.
+
 ## 1. App shell — three panels, one screen
 
 - **100vh, no global scrolling.** Panels scroll internally.
