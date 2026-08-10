@@ -121,6 +121,8 @@ async function openInterviewTurnProvenance(messageId) {
   if (!interviewId || !messageId) return;
   const panel = document.getElementById('provenancePanel');
   const body = document.getElementById('provenanceBody');
+  const title = document.getElementById('provenancePanelTitle');
+  if (title) title.textContent = 'Forduló proveniencia';
   panel.style.display = 'block';
   body.innerHTML = '<p class="placeholder">Betöltés...</p>';
   try {

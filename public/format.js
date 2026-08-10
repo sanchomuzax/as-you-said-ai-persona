@@ -55,6 +55,18 @@ function formatDateTime(value) {
 }
 
 /**
+ * Date only, no time-of-day — for a short parenthetical like "érvényes
+ * (2026-08-07)" (docs/UI-DESIGN.md's approved Inspector copy), where
+ * formatDateTime's full timestamp would be more precision than the sentence
+ * needs.
+ */
+function formatDateOnly(value) {
+  if (!value) return '—';
+  const date = parseUtcTimestamp(value);
+  return date ? date.toLocaleDateString('hu-HU') : String(value);
+}
+
+/**
  * Turns a stored answer into readable option text. Answers are stored as
  * original option indexes ("2"), and for multi-select as the whole selected set
  * ("0,2"); an empty string means the respondent would select none of them.

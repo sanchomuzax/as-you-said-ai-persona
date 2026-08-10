@@ -370,14 +370,19 @@ function renderStaleVersionNotice(stale) {
 
 async function loadResponsesTab(runId) {
   const tbody = document.getElementById('responsesTableBody');
+  const cardsView = document.getElementById('responseCardsView');
   tbody.innerHTML = '<tr><td colspan="7" class="placeholder">Betöltés...</td></tr>';
+  if (cardsView) cardsView.innerHTML = '<p class="placeholder">Betöltés...</p>';
   try {
-    const runData = await apiCall('GET', '/api/runs/' + runId);
+    // Shared with the Inspector's persona lookup (public/provenance.js) and
+    // reused on a view-mode flip so switching Elemző/Mérnök does not refetch.
+    const runData = await fetchRunResponsesCached(runId, true);
     const responses = runData.responses || [];
 
 
     if (responses.length === 0) {
       tbody.innerHTML = '<tr><td colspan="7" class="placeholder">Nincs válasz.</td></tr>';
+      if (cardsView) cardsView.innerHTML = '<p class="placeholder">Nincs válasz.</p>';
       return;
     }
 
@@ -402,8 +407,11 @@ async function loadResponsesTab(runId) {
         </tr>
       `;
     }).join('');
+
+    renderResponseCardsInto(cardsView, responses, runId);
   } catch (err) {
     tbody.innerHTML = `<tr><td colspan="7" class="error-message">Válaszok betöltése sikertelen: ${escapeHtml(err.message)}</td></tr>`;
+    if (cardsView) cardsView.innerHTML = `<p class="error-message">Válaszok betöltése sikertelen: ${escapeHtml(err.message)}</p>`;
   }
 }
 
@@ -422,6 +430,8 @@ async function loadTranscriptTab(runId) {
 async function openProvenancePanel(runId, responseId) {
   const panel = document.getElementById('provenancePanel');
   const body = document.getElementById('provenanceBody');
+  const title = document.getElementById('provenancePanelTitle');
+  if (title) title.textContent = 'Válasz proveniencia';
   panel.style.display = 'block';
   body.innerHTML = '<p class="placeholder">Betöltés...</p>';
   try {
@@ -569,3 +579,331 @@ document.getElementById('runEvaluateBtn')?.addEventListener('click', async () =>
     spinner.style.display = 'none';
   }
 });
+
+// ----- Analyst/Engineer (X-Ray) toggle + response cards -----
+// docs/UI-DESIGN.md §0/§3: a single global view mode (state.viewMode, app.js),
+// a segmented pill in the run detail header (#viewModeToggle, index.html),
+// and — for now — one consumer: the Válaszok subtab's response-card list
+// below. The Áttekintés tab's aggregate charts are "clean result, no
+// machinery" by construction already, so the toggle has no separate effect
+// there; the pinned #responsesTableBody table is unaffected either way (see
+// loadResponsesTab above and the display:none on .responses-table-wrapper).
+
+document.getElementById('viewModeToggle')?.addEventListener('click', (e) => {
+  const btn = e.target.closest('.view-mode-btn');
+  if (!btn || !btn.dataset.viewMode) return;
+  setViewMode(btn.dataset.viewMode);
+});
+
+function setViewMode(mode) {
+  if (mode !== 'analyst' && mode !== 'engineer') return;
+  state.viewMode = mode;
+  document.querySelectorAll('.view-mode-btn').forEach((b) => {
+    const active = b.dataset.viewMode === mode;
+    b.classList.toggle('active', active);
+    b.setAttribute('aria-pressed', String(active));
+  });
+  // Re-render from the cached fetch (no network round-trip) so flipping the
+  // toggle takes effect immediately rather than on the next subtab visit.
+  const cardsView = document.getElementById('responseCardsView');
+  if (cardsView && state.currentRunId && state.runResponsesCache && state.runResponsesCache.runId === state.currentRunId) {
+    renderResponseCardsInto(cardsView, state.runResponsesCache.data.responses || [], state.currentRunId);
+  }
+}
+
+/**
+ * The run's `GET /api/runs/:id` payload (run + all responses), shared by the
+ * response-card list, the Inspector's persona lookup and (indirectly) the
+ * legacy responses table — one fetch per run, not one per consumer.
+ * `force` re-fetches even if a cache for this exact run already exists,
+ * which loadResponsesTab uses since it is the one place that must reflect a
+ * freshly-completed/edited run rather than a possibly-stale earlier visit.
+ */
+async function fetchRunResponsesCached(runId, force) {
+  if (!force && state.runResponsesCache && state.runResponsesCache.runId === runId) {
+    return state.runResponsesCache.data;
+  }
+  const data = await apiCall('GET', '/api/runs/' + runId);
+  state.runResponsesCache = { runId, data };
+  return data;
+}
+
+/** GET /api/personas/:id, cached — the same persona is read by both a
+ *  response card's version chip and the Inspector's Persona Provenance Card. */
+async function fetchPersonaCached(personaId) {
+  if (!personaId) return null;
+  if (state.personaCache[personaId]) return state.personaCache[personaId];
+  const persona = await apiCall('GET', '/api/personas/' + encodeURIComponent(personaId));
+  state.personaCache[personaId] = persona;
+  return persona;
+}
+
+/** Avatar glyph: the first letter of each of the first two words in the
+ *  persona's name (e.g. "Anna Kovács" → "AK"). A purely cosmetic initials
+ *  guess — comma-joined descriptive names ("Béla, a szkeptikus...") can
+ *  pick up a short connector word as the second letter; that is a cosmetic
+ *  quirk, not a data-accuracy concern, since nothing downstream reads it. */
+function personaInitials(name) {
+  const words = String(name || '').trim().split(/\s+/).filter(Boolean);
+  if (words.length === 0) return '?';
+  const first = words[0][0] || '';
+  const second = words.length > 1 ? (words[1][0] || '') : (words[0][1] || '');
+  return (first + second).toUpperCase();
+}
+
+/** Always true for this platform (CLAUDE.md's methodology rules #1/#3) — a
+ *  constant, not a per-response measurement, so it is safe to state plainly. */
+function questionModeMeta(elicitationMode) {
+  const multi = elicitationMode === 'multi_choice';
+  return `Mód: Style C (eloszlás) • ${multi ? 'Többválaszos' : 'Egyválaszos'} • Memóriatörlés: aktív`;
+}
+
+function groupResponsesByQuestion(responses) {
+  const order = [];
+  const map = new Map();
+  responses.forEach((r) => {
+    const key = r.question_id || r.question_text || '—';
+    if (!map.has(key)) {
+      map.set(key, { text: r.question_text, elicitationMode: r.elicitation_mode, items: [] });
+      order.push(key);
+    }
+    map.get(key).items.push(r);
+  });
+  return order.map((k) => map.get(k));
+}
+
+/**
+ * The response's own distribution as a segmented bar (docs/UI-DESIGN.md §0:
+ * 24px tall). Segment COLOUR is picked by rank (largest share, second,
+ * rest) — segment ORDER on the bar stays the original option order, so the
+ * bar never leaks which position in the permutation was largest.
+ */
+function renderResponseDistributionBar(parsedJson, isMultiChoice) {
+  if (!parsedJson) return '<p class="placeholder-inline">Nincs eloszlás-adat.</p>';
+  let data;
+  try {
+    data = typeof parsedJson === 'string' ? JSON.parse(parsedJson) : parsedJson;
+  } catch (e) {
+    return '<p class="placeholder-inline">Nincs eloszlás-adat.</p>';
+  }
+  if (!data || typeof data !== 'object') return '<p class="placeholder-inline">Nincs eloszlás-adat.</p>';
+  const entries = Object.entries(data);
+  if (entries.length === 0) return '<p class="placeholder-inline">Nincs eloszlás-adat.</p>';
+  const total = entries.reduce((sum, [, v]) => sum + v, 0);
+  if (!isMultiChoice && total === 0) return '<p class="placeholder-inline">Nincs eloszlás-adat.</p>';
+  if (isMultiChoice && total === 0) return '<p class="placeholder-inline">Egyik sem.</p>';
+
+  const ranked = [...entries].sort((a, b) => b[1] - a[1]);
+  const tierByKey = new Map();
+  ranked.forEach(([key], i) => {
+    tierByKey.set(key, i === 0 ? 'primary' : i === 1 ? 'secondary' : 'neutral');
+  });
+
+  const segments = entries
+    .map(([key, value]) => {
+      const pct = Math.round((isMultiChoice ? value : total > 0 ? value / total : 0) * 100);
+      if (pct <= 0) return '';
+      const tier = tierByKey.get(key);
+      return `<div class="response-distribution-segment response-distribution-segment-${tier}" style="width:${Math.max(pct, 6)}%" title="${escapeHtml(key)}: ${pct}%">${pct}%</div>`;
+    })
+    .join('');
+  return `<div class="response-distribution-bar" title="${escapeHtml(isMultiChoice ? TOOLTIPS.support : TOOLTIPS.distribution)}">${segments}</div>`;
+}
+
+function renderXrayShell(responseId) {
+  return `<div class="response-card-xray" data-xray-for="${escapeHtml(responseId)}"><p class="placeholder-inline" style="color:#94a3b8;">Betöltés...</p></div>`;
+}
+
+/** Engineer mode's per-card block: the SAME data as the Response Provenance
+ *  panel (public/provenance.js), reused rather than re-derived. */
+function renderXrayContent(r) {
+  let permutation = [];
+  try {
+    permutation = r.permutation_json ? JSON.parse(r.permutation_json) : [];
+  } catch (e) {
+    permutation = [];
+  }
+  let options = [];
+  try {
+    options = r.options_json ? JSON.parse(r.options_json) : [];
+  } catch (e) {
+    options = [];
+  }
+  const permutationText = decodePermutation(permutation, options);
+  return `
+    <div class="response-card-xray-grid">
+      <div><span class="rc-xray-label">Modell:</span> ${escapeHtml(r.model_version || r.model_requested || '—')}</div>
+      <div><span class="rc-xray-label">Hőmérséklet:</span> ${escapeHtml(r.temperature === null || r.temperature === undefined ? '—' : r.temperature)}</div>
+      <div><span class="rc-xray-label">Tokenek:</span> ${escapeHtml(orDash(r.prompt_tokens, formatNumber))} in / ${escapeHtml(orDash(r.completion_tokens, formatNumber))} out</div>
+      <div><span class="rc-xray-label">Permutáció:</span> ${escapeHtml(permutationText)}</div>
+      <div><span class="rc-xray-label">Seed:</span> ${escapeHtml(r.seed === null || r.seed === undefined ? '—' : r.seed)}</div>
+      <div><span class="rc-xray-label">Szolgáltató:</span> ${escapeHtml(r.provider || '—')}</div>
+    </div>
+    <div class="response-card-xray-section-label">A modellnek elküldött prompt:</div>
+    <div class="response-card-xray-code">${escapeHtml(r.prompt_rendered || 'Nincs rögzített prompt.')}</div>
+    <div class="response-card-xray-section-label" style="margin-top:12px;">Nyers modellválasz:</div>
+    <div class="response-card-xray-code">${escapeHtml(r.raw_response || 'Nincs rögzített nyers válasz.')}</div>
+  `;
+}
+
+function renderResponseCard(resp, viewMode) {
+  const name = resp.persona_name || '—';
+  const isGap = !!resp.abstained;
+  const xrayShell = viewMode === 'engineer' ? renderXrayShell(resp.id) : '';
+
+  if (isGap) {
+    // Evidentiary gap card (docs/UI-DESIGN.md §0/§6): amber, 4px left border,
+    // white warning glyph instead of an avatar, a "Tartózkodás" chip — never
+    // a red error. The measured reason (abstain/invalid counts, calibration
+    // profile) lives in the Inspector, opened by clicking the card.
+    return `
+      <div class="response-card response-card-gap" data-response-id="${escapeHtml(resp.id)}" data-persona-id="${escapeHtml(resp.persona_id || '')}" role="button" tabindex="0" title="Kattints a perszóna provenienciájáért és a tartózkodás okáért.">
+        <div class="response-card-body">
+          <div class="response-card-gap-icon" aria-hidden="true">△</div>
+          <div class="response-card-main">
+            <div class="response-card-head">
+              <span class="response-card-name">${escapeHtml(name)}</span>
+              <span class="gap-chip">Tartózkodás</span>
+            </div>
+            <p class="response-card-gap-text">A perszóna tudáshatárt jelzett ehhez a kérdéshez — ez a lefedettségről szóló megállapítás, nem hiba. A mért ok a jobb oldali panelen (kattints a kártyára).</p>
+          </div>
+        </div>
+        ${xrayShell}
+      </div>
+    `;
+  }
+
+  const multi = resp.elicitation_mode === 'multi_choice';
+  const isInvalid = resp.is_valid === 0;
+  const bodyContent = isInvalid
+    ? `<p class="placeholder-inline" title="${escapeHtml(TOOLTIPS.invalid)}">✗ Nem értelmezhető modellkimenet.</p>`
+    : renderResponseDistributionBar(resp.parsed_distribution_json, multi);
+
+  return `
+    <div class="response-card" data-response-id="${escapeHtml(resp.id)}" data-persona-id="${escapeHtml(resp.persona_id || '')}" role="button" tabindex="0" title="Kattints a perszóna provenienciájáért.">
+      <div class="response-card-body">
+        <div class="response-avatar" aria-hidden="true">${escapeHtml(personaInitials(name))}</div>
+        <div class="response-card-main">
+          <div class="response-card-head">
+            <span class="response-card-name">${escapeHtml(name)}</span>
+            <span class="version-chip" data-version-for="${escapeHtml(resp.persona_id || '')}">…</span>
+          </div>
+          ${bodyContent}
+        </div>
+      </div>
+      ${xrayShell}
+    </div>
+  `;
+}
+
+function renderResponseCardsView(responses, viewMode) {
+  if (!responses || responses.length === 0) {
+    return '<p class="placeholder">Nincs válasz.</p>';
+  }
+  const groups = groupResponsesByQuestion(responses);
+  return groups
+    .map(
+      (g) => `
+    <div class="rc-question-block">
+      <h2 class="rc-question-title">${escapeHtml(g.text || '—')}</h2>
+      <p class="rc-question-meta">${escapeHtml(questionModeMeta(g.elicitationMode))}</p>
+      <div class="rc-card-list">
+        ${g.items.map((r) => renderResponseCard(r, viewMode)).join('')}
+      </div>
+    </div>
+  `
+    )
+    .join('');
+}
+
+/** Runs `worker` over `items` with at most `limit` in flight at once — used
+ *  so switching to Engineer mode on a run with many responses does not fire
+ *  one HTTP request per card simultaneously. */
+async function runWithConcurrency(items, limit, worker) {
+  let i = 0;
+  async function next() {
+    while (i < items.length) {
+      const idx = i++;
+      await worker(items[idx], idx);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, next));
+}
+
+function renderResponseCardsInto(container, responses, runId) {
+  if (!container) return;
+  const viewMode = state.viewMode || 'analyst';
+  container.innerHTML = renderResponseCardsView(responses, viewMode);
+  wirePersonaCardOpening(container, runId);
+  void fillVersionChips(container);
+  if (viewMode === 'engineer') void fillXrayBlocks(container, responses, runId);
+}
+
+/** Each card's version chip needs the persona's OWN version (not the
+ *  project's current one — issue-#46-adjacent staleness concern already
+ *  documented elsewhere in this file: a response can point at a superseded
+ *  persona version). Fetched lazily, once per unique persona, and patched in
+ *  — never fabricated synchronously. */
+async function fillVersionChips(container) {
+  const chips = [...container.querySelectorAll('.version-chip[data-version-for]')];
+  const personaIds = [...new Set(chips.map((c) => c.dataset.versionFor).filter(Boolean))];
+  await runWithConcurrency(personaIds, 4, async (personaId) => {
+    try {
+      const persona = await fetchPersonaCached(personaId);
+      const label = persona && persona.version ? 'v' + persona.version : '—';
+      container.querySelectorAll(`.version-chip[data-version-for="${CSS.escape(personaId)}"]`).forEach((el) => {
+        el.textContent = label;
+      });
+    } catch (e) {
+      container.querySelectorAll(`.version-chip[data-version-for="${CSS.escape(personaId)}"]`).forEach((el) => {
+        el.textContent = '—';
+      });
+    }
+  });
+}
+
+async function fillXrayBlocks(container, responses, runId) {
+  const byId = new Map(responses.map((r) => [r.id, r]));
+  const shells = [...container.querySelectorAll('.response-card-xray[data-xray-for]')];
+  await runWithConcurrency(shells, 3, async (shell) => {
+    const responseId = shell.dataset.xrayFor;
+    try {
+      const cached = state.responseXrayCache[responseId];
+      const full = cached || (await apiCall('GET', `/api/runs/${encodeURIComponent(runId)}/responses/${encodeURIComponent(responseId)}`));
+      state.responseXrayCache[responseId] = full;
+      shell.innerHTML = renderXrayContent(full);
+    } catch (err) {
+      shell.innerHTML = `<p class="error-message">X-Ray adat betöltése sikertelen: ${escapeHtml(err.message)}</p>`;
+    }
+    // The row this card's own list already carries (r.prompt_tokens etc.) is
+    // NOT enough — prompt_rendered/raw_response/permutation are deliberately
+    // excluded from the bulk fetch (src/server.ts's comment on the single-
+    // response endpoint), so this per-card request is the only source.
+    void byId; // documents the map's purpose; not otherwise needed here.
+  });
+}
+
+/**
+ * A response card opens the Inspector's Persona Provenance Card (docs/
+ * UI-DESIGN.md §"Becsúszó Inspector") — NOT the raw response provenance,
+ * which Engineer mode now shows inline instead (renderXrayContent above).
+ */
+function wirePersonaCardOpening(container, runId) {
+  const open = (target) => {
+    const card = target.closest('[data-response-id]');
+    if (card) void openPersonaProvenancePanel(runId, card.dataset.personaId, card.dataset.responseId);
+  };
+  container.addEventListener('click', (e) => {
+    // The Engineer-mode X-Ray block is informational, not a persona-card
+    // trigger — a click inside it must not also open the Inspector.
+    if (e.target.closest('.response-card-xray')) return;
+    open(e.target);
+  });
+  container.addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter' && e.key !== ' ') return;
+    if (e.target.closest('.response-card-xray')) return;
+    if (!e.target.closest('[data-response-id]')) return;
+    e.preventDefault();
+    open(e.target);
+  });
+}

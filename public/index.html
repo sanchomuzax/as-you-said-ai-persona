@@ -576,9 +576,16 @@
     </section>
 
     <!-- Response provenance panel -->
-    <aside id="provenancePanel" class="provenance-panel" style="display: none;" aria-label="Válasz proveniencia">
+    <!-- Inspector (docs/UI-DESIGN.md §4/§"Becsúszó Inspector"): the SAME panel
+         shows response provenance (raw prompt/output/settings) OR a Persona
+         Provenance Card, depending on what was clicked — #provenancePanelTitle
+         is set by whichever opener ran (public/run-view.js's
+         openProvenancePanel, public/provenance.js's openPersonaProvenancePanel,
+         public/interview-view.js's openInterviewTurnProvenance), so the
+         heading never claims the wrong kind of content. -->
+    <aside id="provenancePanel" class="provenance-panel" style="display: none;" aria-label="Proveniencia és perszóna-részletek">
       <div class="provenance-panel-header">
-        <h3>Válasz proveniencia</h3>
+        <h3 id="provenancePanelTitle">Válasz proveniencia</h3>
         <button id="provenanceCloseBtn" class="btn btn-secondary btn-sm">Bezárás</button>
       </div>
       <div id="provenanceBody"></div>
@@ -603,6 +610,16 @@
         <div class="run-detail-title-row">
           <h2 id="runDetailTitle">Futtatás részletei</h2>
           <span id="runDetailStatus" class="badge"></span>
+          <!-- Analyst/Engineer (X-Ray) toggle (docs/UI-DESIGN.md §0/§3). Analyst
+               is the default (clean result, no machinery); Engineer reveals the
+               per-response prompt/raw-output/model/token/permutation block —
+               see public/run-view.js's viewMode handling. state.viewMode is a
+               single global flag, so the choice survives subtab and run
+               switches, as required. -->
+          <div class="view-mode-toggle" id="viewModeToggle" role="group" aria-label="Nézet: Elemző vagy Mérnök (X-Ray)">
+            <button type="button" class="view-mode-btn active" data-view-mode="analyst" aria-pressed="true">Elemző</button>
+            <button type="button" class="view-mode-btn" data-view-mode="engineer" aria-pressed="false">Mérnök (X-Ray)</button>
+          </div>
         </div>
         <div class="run-detail-controls" id="runDetailControls"></div>
         <div class="run-detail-progress">
@@ -632,6 +649,16 @@
       </div>
 
       <div id="subtab-responses" class="subtab-pane">
+        <!-- Response cards (docs/UI-DESIGN.md §0's "Response card" component):
+             the actual visible UI, grouped by question, built by
+             public/run-view.js's renderResponseCardsView from the same
+             `runData.responses` the table below is populated from. -->
+        <div id="responseCardsView" class="response-cards-view"><p class="placeholder">Betöltés...</p></div>
+        <!-- The underlying table stays in the DOM (populated exactly as
+             before) but is visually hidden — tests/frontend-view-dom.test.ts
+             pins `#responsesTableBody tr` structure/content, so it could not
+             be removed without touching tests/, which is out of scope here.
+             See .responses-table-wrapper's display:none in public/style.css. -->
         <div class="responses-table-wrapper">
           <table id="responsesTable" class="responses-table">
             <thead>

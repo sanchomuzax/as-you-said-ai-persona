@@ -39,7 +39,25 @@ let state = {
   budgetData: null,
   // True after a FAILED /api/budget fetch — see modelProfilesError above for why
   // this is tracked separately from budgetData being merely null/unset.
-  budgetError: false
+  budgetError: false,
+  // Analyst/Engineer (X-Ray) toggle (issue #46 visual slice, docs/UI-DESIGN.md
+  // §0/§3) — a single global flag, not per-run/per-subtab state, so the
+  // researcher's choice survives switching subtabs and runs. Analyst is the
+  // default: a clean result, no machinery. See public/run-view.js.
+  viewMode: 'analyst',
+  // GET /api/personas/:id results, keyed by persona id — shared by the new
+  // response cards' version chip and the Inspector's Persona Provenance Card
+  // (public/run-view.js, public/provenance.js) so the same persona is never
+  // fetched twice while a run detail view is open.
+  personaCache: {},
+  // GET /api/runs/:runId/responses/:id results, keyed by response id — the
+  // Engineer-mode X-Ray block's per-card lazy fetch (public/run-view.js).
+  responseXrayCache: {},
+  // The last GET /api/runs/:id payload (run + responses), so the response
+  // cards, the Inspector's persona lookup and the legacy responses table can
+  // all read the SAME fetch instead of one each. Cleared implicitly by simply
+  // being overwritten the next time a different run's responses are loaded.
+  runResponsesCache: null
 };
 
 // API wrapper
